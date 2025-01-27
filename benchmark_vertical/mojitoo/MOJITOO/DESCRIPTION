@@ -1,0 +1,38 @@
+Package: MOJITOO
+Type: Package
+Title: MOJITOO: (M)ulti-m(O)dal (J)oint (I)ntegra(T)ion of c(O)mp(O)nents
+Version: 1.0
+Date: 2021-10-17
+Author: Mingbo Cheng
+Maintainer: Mingbo Cheng <chengmingbo@gmail.com>
+Description: Single cell simultaneous multi-modalities integration.
+Depends:
+    R (>= 4.0.0),
+    methods
+License: GPL (>= 2)
+Imports:
+  Rcpp (>= 1.0.7),
+  Seurat(>= 3.2.3),
+  Signac(>= 1.0.0),
+  reticulate,
+  corpcor,
+  S4Vectors,
+  ramify,
+  plyr,
+  rhdf5,
+  Matrix,
+  glue,
+  dplyr,
+  reshape2,
+  pbapply,
+  ggplot2,
+  ComplexHeatmap,
+  patchwork,
+  Gviz,
+  grid,
+  tidyr,
+  fda,
+  assertthat
+LinkingTo: Rcpp, RcppEigen, RcppProgress
+RoxygenNote: 7.2.3
+Encoding: UTF-8
