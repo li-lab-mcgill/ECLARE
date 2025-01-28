@@ -1,9 +1,6 @@
 #%%
 import sys
 import os
-CLARE_root = os.path.dirname(os.path.abspath(sys.argv[0]))
-os.environ['CLARE_root'] = CLARE_root
-print('CLARE_root:', CLARE_root)
 
 from argparse import ArgumentParser
 import numpy as np
@@ -13,35 +10,12 @@ import torch.nn.functional as F
 import pandas as pd
 from ot import solve as ot_solve
 from glob import glob
-from models import scTripletgrate
-from numpy import any as np_any
 
 from ott.geometry.geometry import Geometry
 import jax.numpy as jnp
 
-from post_hoc_utils import get_model_and_data
-from models import load_scTripletgrate_model
-from setup_utils import return_setup_func_from_dataset, mdd_setup
-from eval_utils import align_metrics
-from data_utils import fetch_data_from_loaders
-from losses_and_distances_utils import clip_loss
-
-import socket
-hostname = socket.gethostname()
-
-if 'narval' in hostname:
-    os.environ['machine'] = 'narval'
-    default_outdir = outpath = '/home/dmannk/scratch/'
-
-elif (hostname == 'MBP-de-Dylan.lan') or (hostname == 'MacBook-Pro-de-Dylan.local'):
-    os.environ['machine'] = 'local'
-    default_outdir = outpath = '/Users/dmannk/cisformer/outputs/'
-
-elif np_any([mcb_server in hostname for mcb_server in ['mcb', 'buckeridge' ,'hlr', 'ri', 'wh', 'yl']]):
-    os.environ['machine'] = 'mcb'
-    default_outdir = outpath = '/home/mcb/users/dmannk/scMultiCLIP/outputs'
-
-torch.autograd.set_detect_anomaly(True)
+from eclare import \
+    scTripletgrate, load_scTripletgrate_model, return_setup_func_from_dataset, mdd_setup, align_metrics, fetch_data_from_loaders, clip_loss
 
 class Knowledge_distillation_fn(torch.nn.Module):
 

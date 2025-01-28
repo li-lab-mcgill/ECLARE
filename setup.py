@@ -1,9 +1,11 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='ECLARE',
+    name='eclare',
     version='0.1.0',
-    packages=find_packages(),
+    url='https://github.com/li-lab-mcgill/ECLARE',
+    package_dir={'': 'src'},
+    packages=find_packages(where='src'),
     install_requires=[
         "absl-py==2.0.0",
         "alabaster==0.7.16",
@@ -168,7 +170,6 @@ setup(
     author='Dylan Mann-Krzisnik',
     author_email='dylan.mann-krzisnik@mail.mcgill.ca',
     description='ECLARE: Enesemble knowledge distillation for Contrastive Learning of ATAC and RNA Embeddings',
-    url='https://github.com/li-lab-mcgill/ECLARE',  # if you have a URL
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: MIT License',
