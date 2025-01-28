@@ -1,0 +1,6 @@
+# Optional: Default active environment if hostname detection fails
+active_environment: "local_directories"
+
+local_directories:
+  outpath: "/path/to/outputs"
+  datapath: "/path/to/data"
