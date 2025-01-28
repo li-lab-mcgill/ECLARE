@@ -7,6 +7,7 @@ from argparse import Namespace
 from pybedtools import BedTool
 from sklearn.model_selection import StratifiedShuffleSplit
 from pybiomart import Dataset as biomart_Dataset
+from data_utils import keep_CREs_and_adult_only, merge_major_cell_group, create_loaders
 #import bbknn
 from muon import atac as ac
 from scipy.sparse import csr_matrix, save_npz, load_npz
@@ -24,7 +25,12 @@ import re
 from sklearn.ensemble import GradientBoostingRegressor
 from joblib import Parallel, delayed
 
-#from eclare import keep_CREs_and_adult_only, merge_major_cell_group, create_loaders
+import socket
+hostname = socket.gethostname()
+
+CLARE_root = os.environ['CLARE_root']
+os.environ['datapath'] = os.path.join( os.path.dirname(CLARE_root), 'data' )
+print(f'Datapath: {os.environ["datapath"]}')
 
 def return_setup_func_from_dataset(dataset_name):
 

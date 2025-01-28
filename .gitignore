@@ -2,7 +2,7 @@ benchmark_*/**/*_env
 **/.git
 slurm-*.out
 
-config_dmk.yaml
+config.yaml
 
 *.zip
 

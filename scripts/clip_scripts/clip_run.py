@@ -11,10 +11,8 @@ import optuna
 from shutil import copy2
 from numpy import any as np_any
 
-from utils.run_utils import run_scTripletgrate
-from utils.setup_utils import \
-    CAtlas_Tabula_Sapiens_setup, mdd_setup, pbmc_multiome_setup, splatter_sim_setup, toy_simulation_setup, Roussos_cerebral_cortex_setup, retain_feature_overlap, merged_dataset_setup, snMultiome_388_human_brains_setup, snMultiome_388_human_brains_one_subject_setup, AD_Anderson_et_al_setup, PD_Adams_et_al_setup, human_dlpfc_setup, sea_ad_setup, merged_dataset_setup
-from utils.tune_utils import study_summary
+from eclare import \
+    load_scTripletgrate_model, return_setup_func_from_dataset, mdd_setup, merged_dataset_setup, align_metrics, fetch_data_from_loaders, clip_loss
 
 if __name__ == "__main__":
 
