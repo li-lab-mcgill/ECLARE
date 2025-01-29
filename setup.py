@@ -90,7 +90,7 @@ setup(
         "kiwisolver==1.4.5",
         "legacy-api-wrap==1.4.1",
         "leidenalg==0.10.1",
-        "lineax==0.0.7",
+        "lineax==0.0.6",
         "llvmlite==0.41.1",
         "louvain==0.8.0",
         "Mako==1.3.0",
