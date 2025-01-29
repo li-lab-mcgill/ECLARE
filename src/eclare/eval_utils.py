@@ -11,6 +11,7 @@ import jax.numpy as jnp
 from jax.lax import top_k as lax_top_k
 from functools import partial
 
+from eclare.losses_and_distances_utils import clip_loss, clip_loss_split_by_ct
 
 def align_metrics(model, rna_cells, rna_celltypes, atac_cells, atac_celltypes, paired=True, is_latents=False):
             
