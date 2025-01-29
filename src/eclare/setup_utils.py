@@ -2808,3 +2808,51 @@ def get_genes_by_peaks_str(datasets = ["Roussos_lab", "AD_Anderson_et_al", "huma
     ## save dataframes
     genes_by_peaks_str_df.to_csv(os.path.join(datapath, 'genes_by_peaks_str.csv'))
     genes_by_peaks_str_timestamp_df.to_csv(os.path.join(datapath, 'genes_by_peaks_str_timestamp.csv'))
+
+
+def teachers_setup(model_paths):
+    datasets = []
+    models = {}
+    target_rna_train_loaders = {}
+    target_atac_train_loaders = {}
+    target_rna_valid_loaders = {}
+    target_atac_valid_loaders = {}
+    
+    for m, model_path in enumerate(model_paths):
+
+        print(model_path)
+
+        ## Load the model
+        model, model_args_dict = load_scTripletgrate_model(model_path, device=device)
+
+        ## Determine the dataset
+        dataset = model_args_dict['args'].source_dataset
+        source_setup_func = return_setup_func_from_dataset(dataset)
+        target_setup_func = return_setup_func_from_dataset(model_args_dict['args'].target_dataset)
+        genes_by_peaks_str = model_args_dict['args'].genes_by_peaks_str
+
+        print(dataset)
+        datasets.append(dataset)
+
+        ## Load the data loaders
+        #rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
+        #    source_setup_func(model_args_dict['args'], pretrain=None, return_type='loaders', dataset=dataset)
+        
+        overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
+        target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
+            target_setup_func(model_args_dict['args'], pretrain=None, return_type='loaders')
+        
+        if args.train_encoders:
+            model.train()
+
+        models[dataset] = model
+
+        if args.source_dataset_embedder:
+            dataset_idx_dict[dataset] = m
+
+        target_rna_train_loaders[dataset] = target_rna_train_loader
+        target_atac_train_loaders[dataset] = target_atac_train_loader
+        target_rna_valid_loaders[dataset] = target_rna_valid_loader
+        target_atac_valid_loaders[dataset] = target_atac_valid_loader
+
+    return datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders

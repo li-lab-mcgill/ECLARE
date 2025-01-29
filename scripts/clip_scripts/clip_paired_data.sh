@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=ATAC_RNA_triplet_loss_align_paired_data
+#SBATCH --job-name=clip_paired_data
 #SBATCH --account=ctb-liyue
 #SBATCH --time=0-0:30:0
 #SBATCH --cpus-per-task=1
@@ -11,14 +11,14 @@
  
 #source /home/dmannk/projects/def-liyue/dmannk/torch_env/bin/activate
 source /home/dmannk/projects/def-liyue/dmannk/tmp/envs/torch_env_py39/bin/activate
-cd /home/dmannk/projects/def-liyue/dmannk/CLARE
+cd /home/dmannk/projects/def-liyue/dmannk/ECLARE
  
 ## Make new sub-directory for current SLURM job ID and assign to "TMPDIR" variable
 mkdir /home/dmannk/scratch/clip_${SLURM_JOB_ID}
 TMPDIR=/home/dmannk/scratch/clip_${SLURM_JOB_ID}
  
 ## Copy scripts to sub-directory for reproducibility
-cp ATAC_RNA_triplet_loss_align.py ATAC_RNA_triplet_loss_align.sh $TMPDIR
+cp clip_run.py clip_paired_data.sh $TMPDIR
  
 ## https://docs.alliancecan.ca/wiki/PyTorch#PyTorch_with_Multiple_GPUs
 export NCCL_BLOCKING_WAIT=1  #Set this environment variable if you wish to use the NCCL backend for inter-GPU communication.
@@ -84,7 +84,7 @@ for target_dataset in "${datasets[@]}"; do
             mkdir -p $TMPDIR/$target_dataset/$source_dataset/$SLURM_ARRAY_TASK_ID
             
             ## Run the python script
-            srun python ATAC_RNA_triplet_loss_align.py --outdir $$TMPDIR/$target_dataset/$source_dataset/$SLURM_ARRAY_TASK_ID \
+            srun python clip_run.py --outdir $$TMPDIR/$target_dataset/$source_dataset/$SLURM_ARRAY_TASK_ID \
             --source_dataset=$source_dataset \
             --target_dataset=$target_dataset \
             --genes_by_peaks_str=$genes_by_peaks_str \

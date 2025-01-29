@@ -1,23 +1,17 @@
 #%%
-from config import ConfigLoader
-
-import sys
 import os
-
 from argparse import ArgumentParser
 import torch
 import pandas as pd
 import optuna
 from shutil import copy2
-from numpy import any as np_any
 
-from eclare import \
-    load_scTripletgrate_model, return_setup_func_from_dataset, mdd_setup, merged_dataset_setup, align_metrics, fetch_data_from_loaders, clip_loss
+from eclare import merged_dataset_setup, return_setup_func_from_dataset, run_scTripletgrate, study_summary
 
 if __name__ == "__main__":
 
     parser = ArgumentParser(description='CAtlas_celltyping')
-    parser.add_argument('--outdir', type=str, default=default_outdir,
+    parser.add_argument('--outdir', type=str, default=os.environ.get('outpath', None),
                         help='output directory')
     parser.add_argument('--source_dataset', type=str, default='AD_Anderson_et_al',
                         help='current options: CAtlas_Tabula_Sapiens, pbmc_multiome, pbmc_multiome_setup, splatter_sim, toy_simulation')
@@ -111,41 +105,9 @@ if __name__ == "__main__":
         #args.source_dataset = args.source_dataset.replace('imputed_', '')
         source_setup_func = merged_dataset_setup
 
-    elif args.source_dataset == 'CAtlas_Tabula_Sapiens':
-        source_setup_func = CAtlas_Tabula_Sapiens_setup
+    else:
+        source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
-    elif args.source_dataset == 'mdd':
-        source_setup_func = mdd_setup
-        
-    elif args.source_dataset == 'pbmc_multiome':
-        source_setup_func = pbmc_multiome_setup
-
-    elif args.source_dataset == 'roussos':
-        source_setup_func = Roussos_cerebral_cortex_setup
-
-    elif args.source_dataset == 'splatter_sim':
-        source_setup_func = splatter_sim_setup
-
-    elif args.source_dataset == 'toy_simulation':
-        source_setup_func = toy_simulation_setup
-
-    elif args.source_dataset == '388_human_brains':
-        source_setup_func = snMultiome_388_human_brains_setup
-
-    elif args.source_dataset == '388_human_brains_one_subject':
-        source_setup_func = snMultiome_388_human_brains_one_subject_setup
-
-    elif args.source_dataset == 'AD_Anderson_et_al':
-        source_setup_func = AD_Anderson_et_al_setup
-
-    elif args.source_dataset == 'PD_Adams_et_al':
-        source_setup_func = PD_Adams_et_al_setup
-
-    elif args.source_dataset == 'human_dlpfc':
-        source_setup_func = human_dlpfc_setup
-
-    elif args.source_dataset == 'sea_ad':
-        source_setup_func = sea_ad_setup
 
     ## TARGET dataset setup function
     if 'merged' in args.target_dataset:
@@ -153,32 +115,8 @@ if __name__ == "__main__":
         #args.target_dataset = args.target_dataset.replace('imputed_', '')
         target_setup_func = merged_dataset_setup
 
-    elif args.target_dataset == 'mdd':
-        target_setup_func = mdd_setup
-
-    elif args.target_dataset == 'pbmc_multiome':
-        target_setup_func = pbmc_multiome_setup
-
-    elif args.target_dataset == 'roussos':
-        target_setup_func = Roussos_cerebral_cortex_setup
-
-    elif args.target_dataset == '388_human_brains':
-        target_setup_func = snMultiome_388_human_brains_setup
-
-    elif args.target_dataset == '388_human_brains_one_subject':
-        target_setup_func = snMultiome_388_human_brains_one_subject_setup
-
-    elif args.target_dataset == 'AD_Anderson_et_al':
-        target_setup_func = AD_Anderson_et_al_setup
-
-    elif args.target_dataset == 'PD_Adams_et_al':
-        target_setup_func = PD_Adams_et_al_setup
-
-    elif args.target_dataset == 'human_dlpfc':
-        target_setup_func = human_dlpfc_setup
-
-    elif args.target_dataset == 'sea_ad':
-        target_setup_func = sea_ad_setup
+    else:
+        target_setup_func = return_setup_func_from_dataset(args.target_dataset)
     
 
     ## get data loaders
@@ -191,6 +129,8 @@ if __name__ == "__main__":
     else:
         _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
             target_setup_func(args, pretrain=None, return_type='loaders', dataset=args.target_dataset)
+        
+    slurm_job_path = os.path.join(os.environ.get('outpath'))
             
     ## Run training loops
     if (not args.tune_hyperparameters) and (args.slurm_id is not None):

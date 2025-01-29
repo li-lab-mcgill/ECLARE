@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=ATAC_RNA_triplet_loss_align_tune
+#SBATCH --job-name=clip_tune
 #SBATCH --account=ctb-liyue
 #SBATCH --time=0-6:30:0
 #SBATCH --nodes=1
@@ -11,14 +11,14 @@
 
 #source /home/dmannk/projects/def-liyue/dmannk/torch_env/bin/activate
 source /home/dmannk/projects/def-liyue/dmannk/tmp/envs/torch_env_py39/bin/activate
-cd /home/dmannk/projects/def-liyue/dmannk/scTripletgrate
+cd /home/dmannk/projects/def-liyue/dmannk/ECLARE
 
 ## Make new sub-directory for current SLURM job ID and assign to "TMPDIR" variable
-mkdir /home/dmannk/scratch/triplet_align_tune_${SLURM_JOB_ID}
-TMPDIR=/home/dmannk/scratch/triplet_align_tune_${SLURM_JOB_ID}
+mkdir /home/dmannk/scratch/clip_tune_${SLURM_JOB_ID}
+TMPDIR=/home/dmannk/scratch/clip_tune_${SLURM_JOB_ID}
 
 ## Copy scripts to sub-directory for reproducibility
-cp ATAC_RNA_triplet_loss_align.py ATAC_RNA_triplet_loss_align_tune.sh $TMPDIR
+cp clip_run.py clip_tune.sh $TMPDIR
 
 ## https://docs.alliancecan.ca/wiki/PyTorch#PyTorch_with_Multiple_GPUs
 export NCCL_BLOCKING_WAIT=1  #Set this environment variable if you wish to use the NCCL backend for inter-GPU communication.
@@ -29,7 +29,7 @@ echo "r$SLURM_NODEID Launching python script"
 
 
 ## Perform celltyping analysis on Tabula Sapiens RNA data
-srun python ATAC_RNA_triplet_loss_align.py --outdir $TMPDIR \
+srun python clip_run.py --outdir $TMPDIR \
 --init_method=tcp://$MASTER_ADDR:3456 \
 --world_size=$SLURM_NTASKS \
 --feature='388 human brains, pretraining only with hyperparameter tuning' \
