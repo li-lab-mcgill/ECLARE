@@ -38,7 +38,7 @@ os.environ['datapath']      = str(DATAPATH)
 os.environ['nampath']       = str(NAMPATH)
 
 from .models import scTripletgrate, load_scTripletgrate_model
-from .setup_utils import return_setup_func_from_dataset, mdd_setup, teachers_setup
+from .setup_utils import return_setup_func_from_dataset, mdd_setup, teachers_setup, merged_dataset_setup
 from .eval_utils import align_metrics, compute_mdd_eval_metrics, foscttm_moscot
 from .data_utils import keep_CREs_and_adult_only, merge_major_cell_group, create_loaders, fetch_data_from_loaders
 from .losses_and_distances_utils import clip_loss, cosine_distance, clip_loss_split_by_ct, Knowledge_distillation_fn, ct_losses
