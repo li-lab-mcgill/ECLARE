@@ -1,4 +1,27 @@
+import sys
 from setuptools import setup, find_packages
+from setuptools.command.install import install
+
+class CustomInstallCommand(install):
+    """Customized setuptools install command to warn about virtual environments."""
+
+    def run(self):
+        # Check if the script is running inside a virtual environment
+        if not (hasattr(sys, 'real_prefix') or 
+                (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)):
+            print(
+                "\nWARNING: It is highly recommended to install this package within a virtual environment "
+                "to avoid dependency conflicts.\n"
+                "You can create one using:\n"
+                "    python -m venv env\n"
+                "And activate it using:\n"
+                "    # On Windows\n"
+                "    env\\Scripts\\activate\n"
+                "    # On Unix or MacOS\n"
+                "    source env/bin/activate\n\n"
+            )
+        # Proceed with the standard installation
+        install.run(self)
 
 setup(
     name='eclare',
@@ -170,6 +193,9 @@ setup(
     author='Dylan Mann-Krzisnik',
     author_email='dylan.mann-krzisnik@mail.mcgill.ca',
     description='ECLARE: Enesemble knowledge distillation for Contrastive Learning of ATAC and RNA Embeddings',
+    cmdclass={
+        'install': CustomInstallCommand,
+    },
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: MIT License',
