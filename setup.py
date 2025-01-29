@@ -169,7 +169,7 @@ setup(
         "tornado==6.3.3",
         "tqdm==4.66.1",
         "traitlets==5.13.0",
-        "triton==3.1.0",
+        #"triton==2.0.0",
         "typing_extensions==4.8.0",
         "tzdata==2023.3",
         "tzlocal==5.2",
