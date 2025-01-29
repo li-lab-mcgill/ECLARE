@@ -6,20 +6,25 @@ from pathlib import Path
 import os
 import sys
 
+## Import ECLARE_root env variable.
+try:
+    ECLARE_ROOT = Path(os.environ['ECLARE_root'])
+    print(f"ECLARE_root: {ECLARE_ROOT}")
+except KeyError:
+    raise KeyError("ECLARE_root environment variable is not set. Please set it to the root directory of the ECLARE project. \n Example, from terminal: export ECLARE_root=/path/to/ECLARE")
+
 # Construct the path to the config file
-current_file = Path(__file__).resolve()
-current_dir = current_file.parent
-config_file = current_dir.parent.parent / "config" / "config.yaml"
+config_file = ECLARE_ROOT / "config" / "config.yaml"
 
 # Import configuration loader
-sys.path.insert(0, str(current_dir.parent))  # Add parent directory to sys.path
+sys.path.insert(0, str(ECLARE_ROOT))  # Add ECLARE_root to searchable paths
 from config.config import ConfigLoader  # Absolute import
 
 # Initialize ConfigLoader
 config = ConfigLoader(config_file=Path(str(config_file)))
 
 # Expose configuration parameters
-ECLARE_ROOT     = config.get_directory('ECLARE_root')
+ECLARE_ROOT     = config.get_directory('ECLARE_root') # redundant, but useful for clarity
 OUTPATH         = config.get_directory('outpath')
 DATAPATH        = config.get_directory('datapath')
 NAMPATH         = os.path.join(ECLARE_ROOT, 'neural-additive-models-pt')
