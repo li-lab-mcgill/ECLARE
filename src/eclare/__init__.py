@@ -2,15 +2,18 @@
 eclare: Main package for the ECLARE project.
 """
 
-# Import configuration loader
-from config.config import ConfigLoader  # Absolute import
 from pathlib import Path
 import os
+import sys
 
 # Construct the path to the config file
 current_file = Path(__file__).resolve()
 current_dir = current_file.parent
 config_file = current_dir.parent.parent / "config" / "config.yaml"
+
+# Import configuration loader
+sys.path.insert(0, str(current_dir.parent))  # Add parent directory to sys.path
+from config.config import ConfigLoader  # Absolute import
 
 # Initialize ConfigLoader
 config = ConfigLoader(config_file=Path(str(config_file)))
@@ -27,11 +30,11 @@ os.environ['datapath']      = str(DATAPATH)
 os.environ['nampath']       = str(NAMPATH)
 
 from .models import scTripletgrate, load_scTripletgrate_model
-from .setup_utils import return_setup_func_from_dataset, mdd_setup
+from .setup_utils import return_setup_func_from_dataset, mdd_setup, teachers_setup
 from .eval_utils import align_metrics, compute_mdd_eval_metrics, foscttm_moscot
 from .data_utils import keep_CREs_and_adult_only, merge_major_cell_group, create_loaders, fetch_data_from_loaders
-from .losses_and_distances_utils import clip_loss, cosine_distance, clip_loss_split_by_ct
-from .run_utils import run_scTripletgrate
+from .losses_and_distances_utils import clip_loss, cosine_distance, clip_loss_split_by_ct, Knowledge_distillation_fn, ct_losses
+from .run_utils import run_scTripletgrate, save_latents
 from .tune_utils import study_summary
 from .triplet_utils import get_triplet_loss
 
@@ -57,6 +60,10 @@ __all__ = [
     'get_triplet_loss',
     'compute_mdd_eval_metrics',
     'foscttm_moscot',
+    'Knowledge_distillation_fn',
+    'ct_losses',
+    'save_latents',
+    'teachers_setup',
     'ECLARE_ROOT',
     'OUTPATH',
     'DATAPATH',

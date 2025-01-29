@@ -1,8 +1,9 @@
+config.yaml
+*.sh
+
 benchmark_*/**/*_env
 **/.git
 slurm-*.out
-
-config.yaml
 
 *.zip
 
