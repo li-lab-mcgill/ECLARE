@@ -111,7 +111,7 @@ setup(
         "numpy==1.25.2",
         "openpyxl==3.1.5",
         "opt_einsum==3.4.0",
-        "optax==0.2.4",
+        "optax==0.1.7",
         "optuna==3.4.0",
         "ott-jax==0.4.5",
         "packaging==23.2",
