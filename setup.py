@@ -49,7 +49,7 @@ setup(
         "certifi==2023.11.17",
         "cffi==1.15.1",
         "charset-normalizer==3.3.2",
-        "chex==0.1.88",
+        "chex==0.1.7",
         "click==8.1.8",
         "colorama",  # No version specified; installs latest
         "colorlog==5.0.1",
