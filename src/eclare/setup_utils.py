@@ -10,7 +10,6 @@ from pybiomart import Dataset as biomart_Dataset
 #import bbknn
 from muon import atac as ac
 from scipy.sparse import csr_matrix, save_npz, load_npz
-from scanpy.external.pp import harmony_integrate
 from pickle import dump as pkl_dump
 from pickle import load as pkl_load
 from functools import reduce
@@ -24,7 +23,9 @@ import re
 from sklearn.ensemble import GradientBoostingRegressor
 from joblib import Parallel, delayed
 
-#from eclare import keep_CREs_and_adult_only, merge_major_cell_group, create_loaders
+from eclare.models import load_scTripletgrate_model
+from eclare.data_utils import create_loaders, keep_CREs_and_adult_only, merge_major_cell_group
+from eclare.setup_utils import return_setup_func_from_dataset
 
 def return_setup_func_from_dataset(dataset_name):
 
@@ -693,7 +694,7 @@ def toy_simulation_setup(args, pretrain=False, cell_group='dummy_celltype'):
     elif not pretrain:
         rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
         atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        return align_setup_completed, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx
+        return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx
 
 def splatter_sim_setup(args, pretrain=False, cell_group='Group'):
 
@@ -715,7 +716,7 @@ def splatter_sim_setup(args, pretrain=False, cell_group='Group'):
     elif not pretrain:
         rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
         atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        return align_setup_completed, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx
+        return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx
 
 def pbmc_multiome_setup(args, pretrain=False, cell_group='seurat_annotations', hvg_only=False, protein_coding_only=True, do_gas=False, return_type='loaders'):
 
@@ -2810,7 +2811,7 @@ def get_genes_by_peaks_str(datasets = ["Roussos_lab", "AD_Anderson_et_al", "huma
     genes_by_peaks_str_timestamp_df.to_csv(os.path.join(datapath, 'genes_by_peaks_str_timestamp.csv'))
 
 
-def teachers_setup(model_paths):
+def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
     datasets = []
     models = {}
     target_rna_train_loaders = {}

@@ -1058,3 +1058,24 @@ def align_and_reconstruction_pass(rna_loader,
     return align_losses, align_losses_atac, align_losses_rna,\
         align_metrics_dict, target_align_metrics_dict, clip_loss_, clip_loss_censored,\
         acc_ct, acc_top5_ct, clip_loss_ct, clip_loss_ct_split
+
+
+def save_latents(student_rna_latents_valid, student_atac_latents_valid, student_rna_celltypes_valid, all_atac_celltypes_valid, epoch, n_epochs, outdir):
+    ## in reality, only a single batch of valid latents per epoch, so no need to accumulate
+
+    n = 4  # set to -1 to inactivate epoch-level save latents
+    save_latents_ckpts_epochs = (np.linspace(0,1,n+1) * n_epochs).astype(int)
+    save_latents_ckpts_epochs[-1] = save_latents_ckpts_epochs[-1] - 1 # ensure that last checkpoint is the last epoch
+
+    if np.isin(epoch, save_latents_ckpts_epochs).item():
+
+        n_epochs_str_length = len(str(args.n_epochs - 1))
+        epoch_str = str(epoch).zfill(n_epochs_str_length)
+
+        filename = f'latents_valid_epoch_{epoch_str}.npz'
+            
+        all_rna_latents_valid = student_rna_latents_valid.detach().cpu().numpy(); all_atac_latents_valid = student_atac_latents_valid.detach().cpu().numpy()
+        all_rna_celltypes_valid = student_rna_celltypes_valid; all_atac_celltypes_valid = student_atac_celltypes_valid
+
+        filepath = os.path.join(outdir, filename)
+        np.savez_compressed(filepath, rna=all_rna_latents_valid, atac=all_atac_latents_valid, rna_celltypes=all_rna_celltypes_valid, atac_celltypes=all_atac_celltypes_valid)
