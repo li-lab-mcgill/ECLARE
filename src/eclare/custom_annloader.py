@@ -27,17 +27,26 @@ class CustomBatchIndexSampler(original_annloader.BatchIndexSampler):
 
 
 class CustomAnnLoader(original_annloader.AnnLoader):
-    """Custom version of AnnLoader that supports explicit indices."""
+    """Custom AnnLoader that allows specifying explicit indices."""
 
     def __init__(self, *args, indices=None, **kwargs):
-        super().__init__(*args, **kwargs)
         self.indices = indices
 
-        if isinstance(self.sampler, original_annloader.BatchIndexSampler):
-            self.sampler = CustomBatchIndexSampler(
-                len(self.dataset), self.batch_size, indices=self.indices,
-                shuffle=self.sampler.shuffle, drop_last=self.sampler.drop_last
+        # Check if indices are provided
+        if indices is not None:
+            batch_size = kwargs.get("batch_size", 1)
+            shuffle = kwargs.get("shuffle", False)
+            drop_last = kwargs.get("drop_last", False)
+
+            # Use custom sampler before calling super().__init__()
+            kwargs["sampler"] = CustomBatchIndexSampler(
+                len(args[0]), batch_size=batch_size, indices=indices, shuffle=shuffle, drop_last=drop_last
             )
+            kwargs["batch_size"] = None  # Ensures batch_size is handled by sampler
+
+        # Now call the parent class constructor with updated kwargs
+        super().__init__(*args, **kwargs)
+
 
 
 # Override specific functions/classes
