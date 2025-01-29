@@ -25,7 +25,6 @@ from joblib import Parallel, delayed
 
 from eclare.models import load_scTripletgrate_model
 from eclare.data_utils import create_loaders, keep_CREs_and_adult_only, merge_major_cell_group
-from eclare.setup_utils import return_setup_func_from_dataset
 
 def return_setup_func_from_dataset(dataset_name):
 
