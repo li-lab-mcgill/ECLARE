@@ -164,7 +164,7 @@ setup(
         "threadpoolctl==3.2.0",
         "toolz==1.0.0",
         "torch==2.0.1",
-        "torchaudio==2.0.1",
+        #"torchaudio==2.0.1",
         "torchvision==0.15.1",
         "tornado==6.3.3",
         "tqdm==4.66.1",
