@@ -11,7 +11,10 @@ try:
     ECLARE_ROOT = Path(os.environ['ECLARE_root'])
     print(f"ECLARE_root: {ECLARE_ROOT}")
 except KeyError:
-    raise KeyError("ECLARE_root environment variable is not set. Please set it to the root directory of the ECLARE project. \n Example, from terminal: export ECLARE_root=/path/to/ECLARE")
+    raise KeyError(
+        "ECLARE_root environment variable is not set. Please set it to the root directory of the ECLARE project. "
+        "Example, from terminal: export ECLARE_root=/path/to/ECLARE"
+    )
 
 # Construct the path to the config file
 config_file = ECLARE_ROOT / "config" / "config.yaml"
