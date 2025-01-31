@@ -6,9 +6,7 @@ from argparse import ArgumentParser
 import numpy as np
 from tqdm import tqdm
 import torch
-import torch.nn.functional as F
 import pandas as pd
-from ot import solve as ot_solve
 from glob import glob
 
 from ott.geometry.geometry import Geometry
@@ -128,29 +126,16 @@ if __name__ == "__main__":
 
     ## Create student model
     student_model = scTripletgrate(**student_model_args_dict, trial=None).to(device=device)
-
-    ## Create source dataset embedder
-    if args.source_dataset_embedder:
-        n_units = student_model.rna_to_core[0].out_features
-        dataset_idx_dict = {}
-
-        source_dataset_embedder = torch.nn.Sequential(
-            torch.nn.Embedding(len(model_paths), n_units, device=device),
-            torch.nn.ReLU()
-        ).to(device)
     
     ## Setup teachers
     datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders = \
-        teachers_setup(model_paths)
-
+        teachers_setup(model_paths, device, args)
 
     # Define the optimized parameters
     optimized_parameters = list(student_model.parameters())
 
     if args.train_encoders:
         optimized_parameters += [param for model in models.values() for param in model.parameters()]
-    if args.source_dataset_embedder:
-        optimized_parameters += list(source_dataset_embedder.parameters())
 
     optimizer = torch.optim.AdamW(optimized_parameters, lr=1e-3, weight_decay=0.01)
 
@@ -194,10 +179,6 @@ if __name__ == "__main__":
             align_losses_valid, align_losses_T_valid = [], []
             offsets_valid, offsets_T_valid = [], []
 
-            if args.source_dataset_embedder:
-                source_dataset_embedder.eval()
-            #student_model.eval()
-
             ## Get student data and latents
             student_rna_cells_valid, student_rna_celltypes_valid, student_atac_cells_valid, student_atac_celltypes_valid, rna_nuclei_idx_valid, atac_nuclei_idxs_valid    = fetch_data_from_loaders(student_rna_valid_loader, student_atac_valid_loader, paired=paired, subsample=args.valid_subsample) # reuse same nuclei indices for all student and teacher datasets, or else distillation loss not sensible
             student_rna_latents_valid   = student_model(student_rna_cells_valid, modality='rna', task='align')[0]
@@ -218,14 +199,8 @@ if __name__ == "__main__":
             ## loop through teachers
             for dataset in datasets:
 
-                ## Obtain dataset embedding
-                if args.source_dataset_embedder:
-                    #dataset = np.random.choice(datasets)  # randomly select one of the datasets, but then would also have to select the target dataset accordingly
-                    dataset_idx = dataset_idx_dict[dataset]
-                    dataset_idx = torch.LongTensor([dataset_idx]).to(device)
-                    dataset_embedding = source_dataset_embedder(dataset_idx)
-                else:
-                    dataset_embedding = None
+
+                dataset_embedding = None
 
                 model = models[dataset]
 
@@ -335,10 +310,6 @@ if __name__ == "__main__":
             if args.save_latents:
                 save_latents(student_rna_latents_valid, student_atac_latents_valid, student_rna_celltypes_valid, student_atac_celltypes_valid, epoch, args.n_epochs, args.outdir)
 
-            #student_model.train()
-            if args.source_dataset_embedder:
-                source_dataset_embedder.train()
-
         ## Set gradients to zero
         optimizer.zero_grad()
 
@@ -433,14 +404,7 @@ if __name__ == "__main__":
                 target_rna_latents = target_rna_latents.detach()
                 target_atac_latents = target_atac_latents.detach()
 
-                ## Obtain dataset embedding
-                if args.source_dataset_embedder:
-                    #dataset = np.random.choice(datasets)  # randomly select one of the datasets, but then would also have to select the target dataset accordingly
-                    dataset_idx = dataset_idx_dict[dataset]
-                    dataset_idx = torch.LongTensor([dataset_idx]).to(device)
-                    dataset_embedding = source_dataset_embedder(dataset_idx)
-                else:
-                    dataset_embedding = None
+                dataset_embedding = None
 
                 assert (student_rna_dat.obs_names == target_rna_dat.obs_names).all()
                 assert (student_atac_dat.obs_names == target_atac_dat.obs_names).all()
