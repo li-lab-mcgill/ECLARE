@@ -19,7 +19,7 @@ It is highly recommended to install ECLARE within a virtual environment to avoid
     python -m venv eclare_env
     ```
 
-    Activate virtual environment
+3. Activate virtual environment
     
     Windows
     ```bash
@@ -37,7 +37,7 @@ It is highly recommended to install ECLARE within a virtual environment to avoid
     ```
 
 
-3. Install the package:
+4. Install the package:
     For standard installation:
     ```bash
     pip install .
