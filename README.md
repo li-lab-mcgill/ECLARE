@@ -16,13 +16,12 @@ It is highly recommended to install ECLARE within a virtual environment to avoid
 2. Create and activate a virtual environment:
 
     ```bash
-    # Create virtual environment
     python -m venv eclare_env
 
-    # Activate virtual environment
-    # On Windows:
+    // Activate virtual environment
+    // On Windows:
     eclare_env\Scripts\activate
-    # On Unix or MacOS:
+    // On Unix or MacOS:
     source eclare_env/bin/activate
     ```
 
