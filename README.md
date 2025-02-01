@@ -55,7 +55,7 @@ Before running the application, you need to set up your configuration file. Foll
 1. Copy the template configuration file:
 
     ```bash
-    cp config/config_template.yaml config.yaml
+    cp config/config_template.yaml config/config.yaml
     ```
 
 2. Edit `config.yaml` to suit your environment. Update paths and settings as necessary:
