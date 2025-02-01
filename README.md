@@ -14,24 +14,36 @@ It is highly recommended to install ECLARE within a virtual environment to avoid
     ```
 
 2. Create and activate a virtual environment:
-
+    Create virtual environment
     ```bash
     python -m venv eclare_env
+    ```
 
-    // Activate virtual environment
-    // On Windows:
+    Activate virtual environment
+    
+    Windows
+    ```bash
     eclare_env\Scripts\activate
-    // On Unix or MacOS:
+    ```
+    
+    macOS and Linux
+    ```bash 
     source eclare_env/bin/activate
     ```
 
-3. Install the package:
-    # For standard installation:
-    pip install .
-
-    # For editable installation (recommended for development):
+    Git Bash on Windows
+    ```bash
+    source eclare_env/Scripts/activate
     ```
 
+
+3. Install the package:
+    For standard installation:
+    ```bash
+    pip install .
+    ```
+
+    For editable installation (recommended for development):
     ```bash
     pip install -e .
     ```
