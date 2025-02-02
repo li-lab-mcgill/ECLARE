@@ -73,6 +73,7 @@ Before running the application, you need to set up your configuration file. Foll
 - See `setup.py` for a complete list of dependencies
 
 ## ECLARE framework
-<p style="text-align: center;">
-  <img src="fig1_landscape_no_alpha.png" alt="ECLARE Framework" style="margin: 20px;"/>
-</p>
+<div style="display: flex; justify-content: center; margin: 200px;">
+  <img src="fig1_landscape_no_alpha.png" alt="ECLARE Framework"/>
+</div>
+
