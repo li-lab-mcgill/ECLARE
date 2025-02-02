@@ -5,12 +5,16 @@ eclare: Main package for the ECLARE project.
 from pathlib import Path
 import os
 import sys
+import subprocess
+
+## Set ECLARE_root to the root directory of the ECLARE project.
+ECLARE_ROOT = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL)
+ECLARE_ROOT = ECLARE_ROOT.strip().decode()
+ECLARE_ROOT = Path(ECLARE_ROOT)
+print(f"ECLARE_root detected: {ECLARE_ROOT}")
 
 ## Import ECLARE_root env variable.
-try:
-    ECLARE_ROOT = Path(os.environ['ECLARE_root'])
-    print(f"ECLARE_root: {ECLARE_ROOT}")
-except KeyError:
+if ECLARE_ROOT is None:
     raise KeyError(
         "ECLARE_root environment variable is not set. Please set it to the root directory of the ECLARE project. "
         "Example, from terminal: export ECLARE_root=/path/to/ECLARE"

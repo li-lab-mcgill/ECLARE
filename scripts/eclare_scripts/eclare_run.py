@@ -13,7 +13,7 @@ from ott.geometry.geometry import Geometry
 import jax.numpy as jnp
 
 from eclare import \
-    scTripletgrate, Knowledge_distillation_fn, load_scTripletgrate_model, return_setup_func_from_dataset, mdd_setup, align_metrics, fetch_data_from_loaders, teachers_setup, ct_losses, save_latents
+    CLIP, Knowledge_distillation_fn, load_CLIP_model, return_setup_func_from_dataset, mdd_setup, align_metrics, fetch_data_from_loaders, teachers_setup, ct_losses, save_latents
 
 
 if __name__ == "__main__":
@@ -95,7 +95,7 @@ if __name__ == "__main__":
     #model_paths = [model_paths[0], model_paths[1]]
 
     ## Instantiate student model args dict from one of the source datasets, later overwrite with target dataset
-    _, student_model_args_dict = load_scTripletgrate_model(model_paths[0], device=device)
+    _, student_model_args_dict = load_CLIP_model(model_paths[0], device=device)
     target_dataset_og = student_model_args_dict['args'].target_dataset
     student_setup_func = return_setup_func_from_dataset(target_dataset_og)
 
@@ -125,7 +125,7 @@ if __name__ == "__main__":
         mdd_setup(student_model_args_dict['args'], overlapping_subjects_only=False, pretrain=None, return_type='loaders')
 
     ## Create student model
-    student_model = scTripletgrate(**student_model_args_dict, trial=None).to(device=device)
+    student_model = CLIP(**student_model_args_dict, trial=None).to(device=device)
     
     ## Setup teachers
     datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders = \

@@ -39,8 +39,6 @@ def run_CLIP(trial,
                        outdir: str = None,
                        ):
 
-    print('Activate anomaly detection')
-    torch.autograd.set_detect_anomaly(True)
 
     ## Model setup
     if (not args.tune_hyperparameters) and (args.slurm_id is not None):
@@ -305,10 +303,6 @@ def align_and_reconstruction_pass(rna_loader,
         atac_cells.requires_grad_()
         atac_cells_recon, atac_latents = model(atac_cells, modality='atac', task='pretrain')
 
-        ## obtain single set of batch labels
-        #assert np.all(rna_batch_labels == atac_batch_labels)
-        #batch_labels = torch.nn.functional.one_hot(rna_batch_labels).float() if rna_batch_labels is not None else None
-
         if save_latents:
             all_rna_latents.append(rna_latents.detach().cpu().numpy())
             all_atac_latents.append(atac_latents.detach().cpu().numpy())
@@ -338,12 +332,6 @@ def align_and_reconstruction_pass(rna_loader,
             loss.backward(retain_graph=True)
             optimizer.step()
 
-        #else:
-        #    atac_and_rna_latents = anndata.concat([anndata.AnnData(atac_latents.detach().cpu().numpy(), obs={'modality':'atac'}), anndata.AnnData(rna_latents.detach().cpu().numpy(), {'modality':'rna'})])
-        #    atac_and_rna_latents.obs['modality'] = atac_and_rna_latents.obs['modality'].astype('category')
-        #    ilisi = ilisi_graph(atac_and_rna_latents, batch_key='modality', type_='full')
-        #    ilisis += ilisi / num_batches
-
         ## Save losses
         align_losses_atac += (align_loss_atac/num_batches).detach().cpu().numpy()
         align_losses_rna += (align_loss_rna/num_batches).detach().cpu().numpy()
@@ -356,28 +344,6 @@ def align_and_reconstruction_pass(rna_loader,
         ## Save latents
         n = 0  # set to -1 to inactivate batch-level save latents
         save_latents_ckpts_batches = (np.linspace(0,1,n+1) * num_batches).astype(int)
-
-        if save_latents=='itr' and np.isin( align_itr_pbar.n , save_latents_ckpts_batches ).item(): # save latents at each 1/nth iteration
-
-            epoch = str(kwargs['epoch']).zfill(kwargs['n_epochs_str_length'])
-            itr   = str(align_itr_pbar.n).zfill(kwargs['n_batches_str_length'])
-
-            if optimizer is not None:
-                filename = f'latents_train_epoch_{epoch}_itr_{itr}.npz'
-            elif eval:
-                filename = f'latents_train_eval_epoch_{epoch}_itr_{itr}.npz'
-            else:
-                filename = f'latents_valid_epoch_{epoch}_itr_{itr}.npz'
-
-            filepath = os.path.join(os.path.join(kwargs['outdir'], filename))
-
-            rna_ = rna_latents.detach().cpu().numpy()
-            atac_ = atac_latents.detach().cpu().numpy()
-            loss_ = loss.detach().cpu().numpy()
-            loss_rna_ = loss_rna.detach().cpu().numpy()
-            loss_atac_ = loss_atac.detach().cpu().numpy()
-            mmd_loss_ = mmd_loss.detach().cpu().numpy()
-            np.savez_compressed(filepath, rna=rna_, atac=atac_, loss=loss_, loss_rna=loss_rna_, loss_atac=loss_atac_, mmd_loss=mmd_loss_, rna_celltypes=rna_celltypes, atac_celltypes=atac_celltypes)
 
 
     if save_latents:
