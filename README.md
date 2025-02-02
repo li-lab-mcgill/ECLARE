@@ -71,3 +71,6 @@ Before running the application, you need to set up your configuration file. Foll
 ### Requirements
 - Python ≥ 3.9
 - See `setup.py` for a complete list of dependencies
+
+## ECLARE framework
+![ECLARE Framework](fig1_landscape.png)
