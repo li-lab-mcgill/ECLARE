@@ -39,23 +39,12 @@ def run_CLIP(trial,
                        outdir: str = None,
                        ):
 
-    print('Activate anomaly detection')
-    torch.autograd.set_detect_anomaly(True)
 
     ## Model setup
     if (not args.tune_hyperparameters) and (args.slurm_id is not None):
         print('parameters already defined')
         trial = None
         
-        #for key in tuned_hyperparameters:
-        #    if 'params_' in key:
-        #        new_variable_name = key.replace('params_', '')
-        #        globals()[new_variable_name] = tuned_hyperparameters[key]  # discouraged
-
-        #columns_align    = pd.MultiIndex.from_product([['align train','align valid','align eval'], ['incorrect fraction score','loss','ari']])
-        #indices = pd.MultiIndex.from_product([np.arange(args.total_epochs), ['pulmonary epithelial', 'mast', 'b lymphocyte', 'pnc-derived', 'endothelial', 'mural', 'ductal', 'acinar', 'hepatocyte', 'ionic mesenchymal', 'keratinocyte', 'stromal smooth muscle', 'luminal epithelial', 'myeloid / macrophage', 'myoepithelial', 'gastrointestinal epithelial', 'mesenchymal']], names=['epoch','celltype'])
-        #celltype_results_df = pd.DataFrame( 0, index = indices, columns = columns_align)
-
         default_hyperparameters = {'params_pretrain': True if np.isin(args.source_dataset, ['388_human_brains', '388_human_brains_one_subject']).item() else False,
                                 'params_margin': 1.,
                                 'params_mmd_scale': 1.,
@@ -123,40 +112,13 @@ def run_CLIP(trial,
         'atac_valid_idx': atac_valid_idx,
     }
 
-    if args.source_dataset == '388_human_brains':
-        print('creating batch classifier')
+    batch_classifier = None
 
-        num_units = 256
-        dropout_p = 0.3
-
-        if hasattr(atac_valid_loader.dataset, 'dataset'):
-            num_batches = len(np.unique(rna_train_loader.dataset.dataset.batches))
-        else:
-            num_batches = rna_train_loader.dataset.obs['subject'].nunique()  # 'subject' keyword currently only good for 388_human_brains data
-
-        model_args_dict['num_experimental_batches'] = num_batches
-
-        batch_classifier = nn.Sequential(
-            nn.Linear(num_units, 2*num_batches), nn.ReLU(), nn.Dropout(p=dropout_p),
-            nn.Linear(2*num_batches, num_batches)
-        )
-    else:
-        batch_classifier = None
-
-    #model = CLIP(n_peaks, n_genes, args, device,\
-    #                                         nam_type='few-to-one', genes_to_peaks_binary_mask=genes_to_peaks_binary_mask, pretrain=pretrain, tuned_hyperparameters=tuned_hyperparameters).to(device=device)
     model = CLIP(**model_args_dict, trial=trial).to(device=device)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    ## Initialize triplet loss with margin hyperparameter
-    if np.isin(args.triplet_type, ['mnn','cell-type']).item():
-        align_loss_fn = (
-            nn.TripletMarginWithDistanceLoss(
-            distance_function=lambda x, y: 1.0 - nn.functional.cosine_similarity(x, y, dim=-1),
-            margin=margin, reduction='none')) # margin=1.0 as default
-        
-    elif np.isin(args.triplet_type, ['clip']).item():
-        align_loss_fn = clip_loss
+    ## Initialize clip loss
+    align_loss_fn = clip_loss
     
     align_loss_fn.bandwidth_parameter = bandwidth_parameter
     align_loss_fn.temperature = temperature
@@ -166,82 +128,12 @@ def run_CLIP(trial,
     if args.tune_hyperparameters:
         trial.set_user_attr('num_params', num_params)
 
-    ## create separate optimizers for align loss and batch correction
-    #align_params = model.parameters() #[ param for name, param in model.named_parameters() if not name.startswith("batch_classifier") ] # isolate parameters not part of batch_classifier
-    #batch_classifier_params = batch_classifier.parameters()
 
     optimizer_align                = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
     optimizer_batch_loss_minimizer = None #torch.optim.AdamW(batch_classifier.parameters(), lr=0.001, weight_decay=0.01)
     optimizer_batch_loss_maximizer = None #torch.optim.AdamW(model.rna_to_core.parameters(), lr=0.001, weight_decay=0.01)
     scheduler_align           = None
 
-    '''
-    if pretrain:
-        
-        optimizer_pretrain_unimodal = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
-        optimizer_pretrain_bimodal  = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
-
-        all_pretrain_valid_loss_rna = []
-        all_pretrain_train_loss_rna = []
-        all_pretrain_valid_loss_atac = []
-        all_pretrain_train_loss_atac = []
-        all_pretrain_valid_loss = []
-        all_pretrain_eval_loss = []
-
-        for epoch in (epochs_pbar := tqdm(range(args.total_epochs))):
-            epochs_pbar.set_description('EPOCHS')
-
-            if (((epoch+1) % args.valid_freq) == 0) or (epoch == 0):
-                with torch.no_grad():
-                    model.eval()
-
-                    ## Valid pretrain
-                    if do_pretrain_valid:
-                        pretrain_valid_loss_rna, pretrain_valid_loss_atac = pretrain_pass(rna_valid_loader, atac_valid_loader, model, None, None, rna_pretrain_loss_fn, atac_pretrain_loss_fn, atac_valid_num_batches,
-                                                                            save_latents=False if args.tune_hyperparameters else True, outdir=outdir, epoch=epoch, total_epochs=args.total_epochs, n_batches_str_length=atac_valid_n_batches_str_length, n_epochs_str_length=atac_valid_n_epochs_str_length)
-                        
-                        all_pretrain_valid_loss_rna.append(pretrain_valid_loss_rna)
-                        all_pretrain_valid_loss_atac.append(pretrain_valid_loss_atac)
-
-                        if args.tune_hyperparameters:
-                            ## add per-epoch loss to trial logger
-                            #trial.report(pretrain_valid_loss, step=epoch)  #UserWarning: The reported value is ignored because this `step` 0 is already reported.
-                            epoch_str = str(epoch).zfill(len(str(args.total_epochs)))
-                            trial.set_user_attr(f"epoch_{epoch_str}_pretrain_loss_rna", pretrain_valid_loss_rna)
-                            trial.set_user_attr(f"epoch_{epoch_str}_pretrain_loss_atac", pretrain_valid_loss_atac)
-
-                            ## early stopping -- default pruner is Median pruner
-                            if trial.should_prune():
-                                raise TrialPruned()
-
-                    ## Train pretrain (eval)
-                    if do_pretrain_train_eval:
-                        pretrain_eval_loss = pretrain_pass(rna_valid_loader, atac_valid_loader, model, None, None, rna_pretrain_loss_fn, atac_pretrain_loss_fn, atac_train_num_batches,
-                                                           eval=True, save_latents=False if args.tune_hyperparameters else True, outdir=outdir, epoch=epoch, total_epochs=args.total_epochs, n_batches_str_length=atac_train_n_batches_str_length, n_epochs_str_length=atac_train_n_epochs_str_length)
-                        all_pretrain_eval_loss.append(pretrain_eval_loss)
-
-                    model.train()
-
-            ## Train pretrain
-            if do_pretrain_train:
-                pretrain_train_loss_rna, pretrain_train_loss_atac = pretrain_pass(rna_train_loader, atac_train_loader, model, optimizer_pretrain_unimodal, optimizer_pretrain_bimodal, rna_pretrain_loss_fn, atac_pretrain_loss_fn, atac_train_num_batches,
-                                                    save_latents=False if args.tune_hyperparameters else True, outdir=outdir, epoch=epoch, total_epochs=args.total_epochs, n_batches_str_length=atac_train_n_batches_str_length, n_epochs_str_length=atac_train_n_epochs_str_length)
-                
-                all_pretrain_train_loss_rna.append(pretrain_train_loss_rna)
-                all_pretrain_train_loss_atac.append(pretrain_train_loss_atac)
-
-        if not args.tune_hyperparameters:
-            model.eval()
-            model_args_dict['model_state_dict'] = model.state_dict()
-            torch.save(model_args_dict, os.path.join(outdir,'model.pt'))
-
-            ## Save all valid and train pretrain losses in one dataframe
-            all_pretrain_valid_loss_df = pd.DataFrame({'valid_rna':all_pretrain_valid_loss_rna, 'valid_atac':all_pretrain_valid_loss_atac, 'train_rna':all_pretrain_train_loss_rna, 'train_atac':all_pretrain_train_loss_atac})
-            all_pretrain_valid_loss_df.to_csv(os.path.join(outdir, 'pretrain_losses.csv'))
-
-            if not (do_align_train or do_align_valid):
-                return model
-    '''
 
     ## Train model
 
@@ -365,462 +257,6 @@ def run_CLIP(trial,
 
         return optuna_obj
 
-        
-def pretrain_pass_unimodal(loader, modality, model, optimizer, loss_fn, num_batches, eval=False, save_latents=False, **kwargs):
-
-    if save_latents:
-        all_rna_genes, all_atac_genes = [], []
-        all_rna_celltypes, all_atac_celltypes = [], []
-
-    pretrain_loss = 0
-    for features, celltypes in (pretrain_itr_pbar := tqdm( loader , total=int(num_batches-1) )):  # kernel dumped
-
-        if (optimizer is not None):
-            pretrain_itr_pbar.set_description('TRAIN itr -- PRETRAIN')
-        elif eval:
-            pretrain_itr_pbar.set_description('TRAIN EVAL itr -- PRETRAIN')
-        else:
-            pretrain_itr_pbar.set_description('VALID itr -- PRETRAIN')
-
-        features = features.to_dense().squeeze(1).to(device=device)
-
-        if isinstance(loss_fn, nn.BCEWithLogitsLoss):
-            features = (features > 0).float()  # can binarize and use BCE loss
-
-        features.requires_grad_()
-        features_recon, latents = model(features, modality=modality, task='pretrain')  # output has requires_grad=False...why?
-
-        if save_latents:
-            if modality == 'rna':
-                all_rna_genes.append(latents.detach().cpu().numpy())
-                all_rna_celltypes.append(celltypes)
-            elif modality == 'atac':
-                all_atac_genes.append(latents.detach().cpu().numpy())
-                all_atac_celltypes.append(celltypes)
-
-        ## reconstruction loss
-        loss = loss_fn(features_recon, features)
-        pretrain_loss += (loss/num_batches).detach().cpu().numpy()
-
-        if (optimizer is not None) and (not eval):
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-        n=0
-        if save_latents=='itr' and np.isin( pretrain_itr_pbar.n , (np.linspace(0,1,n+1) * num_batches).astype(int) ).item(): # save latents at each 1/nth iteration
-            epoch = str(kwargs['epoch']).zfill(kwargs['n_epochs_str_length'])
-            itr   = str(pretrain_itr_pbar.n).zfill(kwargs['n_batches_str_length'])
-
-            if optimizer is not None:
-                filename = f'latents_train_pretrain_epoch_{epoch}_itr_{itr}.npz'
-            elif eval:
-                filename = f'latents_train_eval_pretrain_epoch_{epoch}_itr_{itr}.npz'
-            else:
-                filename = f'latents_valid_pretrain_epoch_{epoch}_itr_{itr}.npz'
-
-            filepath = os.path.join(os.path.join(kwargs['outdir'], filename))
-            np.savez_compressed(filepath, latents=latents.detach().cpu().numpy(), loss=loss.detach().cpu().numpy(), celltypes=celltypes)
-
-    if save_latents:
-        epoch = str(kwargs['epoch']).zfill(kwargs['n_epochs_str_length'])
-
-        if optimizer is not None:
-            filename = f'latents_train_pretrain_epoch_{epoch}.npz'
-        elif eval:
-            filename = f'latents_train_eval_pretrain_epoch_{epoch}.npz'
-        else:
-            filename = f'latents_valid_pretrain_epoch_{epoch}.npz'
-
-        all_rna_genes = np.vstack(all_rna_genes); all_atac_genes = np.vstack(all_atac_genes)
-        all_rna_celltypes = np.hstack(all_rna_celltypes); all_atac_celltypes = np.hstack(all_atac_celltypes)        
-
-        filepath = os.path.join(os.path.join(kwargs['outdir'], filename))
-        if modality == 'rna':
-            np.savez_compressed(filepath, latents=all_rna_genes, celltypes=all_rna_celltypes)
-        elif modality == 'atac':
-            np.savez_compressed(filepath, latents=all_atac_genes, celltypes=all_atac_celltypes)
-        
-    return pretrain_loss
-
-
-def pretrain_pass(rna_loader, atac_loader, model, optimizer_pretrain_unimodal, optimizer_pretrain_bimodal, rna_loss_fn, atac_loss_fn, num_batches,
-                  do_recon_loss=True, do_unimodal_ortho_loss=False, do_bimodal_ortho_loss=False, eval=False, save_latents=False, **kwargs):
-
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    if save_latents:
-        all_rna_latents, all_atac_latents = [], []
-        all_rna_celltypes, all_atac_celltypes = [], []
-        all_rna_batch_labels, all_atac_batch_labels = [], []
-
-    rna_ortho_losses, atac_ortho_losses = 0, 0
-    rna_recon_losses, atac_recon_losses = 0, 0
-    bimodal_ortho_losses = 0
-    bimodal_losses = 0
-
-    #torch.autograd.set_detect_anomaly(True)
-        
-    #for (rna_genes, rna_celltypes, rna_batch_labels), (atac_peaks, atac_celltypes, atac_batch_labels) in (align_itr_pbar := tqdm( zip(rna_loader, atac_loader))):
-    for rna_dat, atac_dat in (align_itr_pbar := tqdm( zip(rna_loader, atac_loader))):
-
-        if (optimizer_pretrain_unimodal is not None) and (optimizer_pretrain_bimodal is not None):
-            align_itr_pbar.set_description('TRAIN itr -- PRETRAIN')
-        elif eval:
-            align_itr_pbar.set_description('TRAIN EVAL itr -- PRETRAIN')
-        else:
-            align_itr_pbar.set_description('VALID itr -- PRETRAIN')
-
-        ## project RNA data and compute losses
-        #rna_genes = rna_genes.to_dense().squeeze(1).to(device=device)
-        rna_genes = rna_dat.X.float() # already float32
-        rna_celltypes = rna_dat.obs['cell_type']#.tolist()
-        rna_batch_labels = np.zeros(len(rna_dat))# rna_dat.obs['subject']#.tolist()
-
-        rna_genes.requires_grad_()
-        rna_genes_recon, rna_latents = model(rna_genes, modality='rna', task='pretrain')
-        #rna_latents = rna_latents - rna_latents.mean(dim=0, keepdim=True)  # center latents
-
-        ## project ATAC data and compute losses
-        #atac_peaks = atac_peaks.to_dense().squeeze(1).to(device=device)
-        atac_peaks = atac_dat.X.float()
-        atac_celltypes = atac_dat.obs['cell_type']#.tolist()
-        atac_batch_labels = np.zeros(len(atac_dat))# atac_dat.obs['subject']#.tolist()
-
-        atac_peaks.requires_grad_()
-        atac_peaks_recon, atac_latents = model(atac_peaks, modality='atac', task='pretrain')
-        #atac_latents = atac_latents - atac_latents.mean(dim=0, keepdim=True)  # center latents
-
-        if do_recon_loss:
-            rna_recon_loss = rna_loss_fn(rna_genes_recon, rna_genes); rna_recon_losses += (rna_recon_loss/num_batches).detach().cpu().numpy()
-            atac_recon_loss = atac_loss_fn(atac_peaks_recon, atac_peaks); atac_recon_losses += (atac_recon_loss/num_batches).detach().cpu().numpy()
-        else:
-            rna_recon_loss = atac_recon_loss = 0
-
-
-        '''
-        if do_unimodal_ortho_loss:
-            rna_latents_gram = torch.matmul(rna_latents.T, rna_latents)
-            rna_ortho_loss = rna_latents_gram.triu().pow(2).mean()
-            rna_ortho_loss /= 10
-            rna_ortho_losses += (rna_ortho_loss/num_batches).detach().cpu().numpy()
-        else:
-            rna_ortho_loss = 0
-
-        if do_unimodal_ortho_loss and not do_bimodal_ortho_loss:
-            rna_loss = rna_recon_loss + rna_ortho_loss
-
-            if (optimizer_pretrain_unimodal is not None) and (not eval):
-                optimizer_pretrain_unimodal.zero_grad()
-                rna_loss.backward()
-                optimizer_pretrain_unimodal.step()
-        '''
-
-
-        if optimizer_pretrain_bimodal is not None:
-            optimizer_pretrain_bimodal.zero_grad()
-            rna_recon_loss.backward()
-            atac_recon_loss.backward()
-            optimizer_pretrain_bimodal.step()
-
-        '''
-        if do_unimodal_ortho_loss:
-            atac_latents_gram = torch.matmul(atac_latents.T, atac_latents)
-            atac_ortho_loss = atac_latents_gram.triu().pow(2).mean()
-            atac_ortho_loss /= 10
-            atac_ortho_losses += (atac_ortho_loss/num_batches).detach().cpu().numpy()
-        else:
-            atac_ortho_loss = 0
-
-        if do_unimodal_ortho_loss and not do_bimodal_ortho_loss:
-            atac_loss = atac_recon_loss + atac_ortho_loss
-
-            if (optimizer_pretrain_unimodal is not None) and (not eval):
-                optimizer_pretrain_unimodal.zero_grad()            
-                atac_loss.backward(retain_graph=True)
-                optimizer_pretrain_unimodal.step()
-
-        ## bimodal ortho loss
-        if do_bimodal_ortho_loss:
-
-            #bimodal_latents_gram = torch.matmul(rna_latents.T, atac_latents)
-            #bimodal_ortho_loss_offdiag = bimodal_latents_gram.triu().pow(2).mean()
-            #bimodal_ortho_loss_trace = bimodal_latents_gram.diag().mean()
-            #bimodal_ortho_loss = bimodal_ortho_loss_offdiag - bimodal_ortho_loss_trace
-
-            bimodal_ortho_loss = SamplesLoss(loss="gaussian", blur=1)(rna_latents, atac_latents)
-
-            bimodal_ortho_losses += (bimodal_ortho_loss/num_batches).detach().cpu().numpy()
-
-            #prop_epochs = kwargs['epoch'] / (kwargs['total_epochs'] - 1)
-            sched = 0 #(1 - np.cos( prop_epochs * np.pi )) / 2
-
-            bimodal_loss = (sched*bimodal_ortho_loss + 0.5*rna_ortho_loss + 0.5*atac_ortho_loss) + (rna_recon_loss + atac_recon_loss)
-            bimodal_losses += (bimodal_loss/num_batches).detach().cpu().numpy()
-
-            if (optimizer_pretrain_bimodal is not None) and (not eval):
-                optimizer_pretrain_bimodal.zero_grad()
-                bimodal_loss.backward()
-                optimizer_pretrain_bimodal.step()
-
-        else:
-            bimodal_ortho_loss = 0
-
-        '''
-
-        ## save latents
-        if save_latents:
-            all_rna_latents.append(rna_latents.detach().cpu().numpy())
-            all_atac_latents.append(atac_latents.detach().cpu().numpy())
-            all_rna_celltypes.append(rna_celltypes)
-            all_atac_celltypes.append(atac_celltypes)
-            all_rna_batch_labels.append(rna_batch_labels)
-            all_atac_batch_labels.append(atac_batch_labels)
-            #all_rna_batch_labels.append(rna_batch_labels.detach().cpu().numpy())
-            #all_atac_batch_labels.append(atac_batch_labels.detach().cpu().numpy())
-
-    
-    ## set checkpoints for saving latents
-    n = 4  # set to -1 to inactivate batch-level save latents
-    save_latents_ckpts_epochs = (np.linspace(0,1,n+1) * kwargs['total_epochs']).astype(int)
-    save_latents_ckpts_epochs[-1] = save_latents_ckpts_epochs[-1] - 1
-
-    if save_latents and np.isin( kwargs['epoch'] , save_latents_ckpts_epochs ).item(): # save latents at each 1/nth iteration
-        epoch = str(kwargs['epoch']).zfill(kwargs['n_epochs_str_length'])
-
-        if (optimizer_pretrain_unimodal is not None) and (optimizer_pretrain_bimodal is not None):
-            filename = f'latents_train_pretrain_epoch_{epoch}.npz'
-        elif eval:
-            filename = f'latents_train_eval_pretrain_epoch_{epoch}.npz'
-        else:
-            filename = f'latents_valid_pretrain_epoch_{epoch}.npz'
-
-        all_rna_latents = np.vstack(all_rna_latents); all_atac_latents = np.vstack(all_atac_latents)
-        all_rna_celltypes = np.hstack(all_rna_celltypes); all_atac_celltypes = np.hstack(all_atac_celltypes)
-        all_rna_batch_labels = np.hstack(all_rna_batch_labels); all_atac_batch_labels = np.hstack(all_atac_batch_labels)
-
-        filepath = os.path.join(os.path.join(kwargs['outdir'], filename))
-
-        np.savez_compressed(filepath, rna=all_rna_latents, atac=all_atac_latents, \
-                            rna_celltypes=all_rna_celltypes, atac_celltypes=all_atac_celltypes, \
-                            rna_recon_loss=rna_recon_losses, atac_recon_loss=atac_recon_losses, \
-                            rna_ortho_loss=rna_ortho_losses, atac_ortho_loss=atac_ortho_losses, \
-                            bimodal_ortho_loss=bimodal_ortho_losses,\
-                            rna_batches=all_rna_batch_labels, atac_batches=all_atac_batch_labels)
-
-
-    if do_bimodal_ortho_loss:
-        return bimodal_losses
-    
-    elif do_unimodal_ortho_loss and not do_bimodal_ortho_loss:
-        return rna_ortho_losses + atac_ortho_losses
-    
-    elif do_recon_loss:
-        return rna_recon_losses, atac_recon_losses
-
-
-def bimodal_align_pass(rna_loader,
-                       atac_loader,
-                       target_rna_loader,
-                       target_atac_loader,
-                       model, batch_classifier,
-                       device, optimizer, optimizer_batch_loss_minimizer, optimizer_batch_loss_maximizer, scheduler, loss_fn, mmd_loss_fn, batch_classification_loss, num_batches, triplet_type, tune_hyperparameters, eval=False, save_latents=False, **kwargs):
-
-    align_losses, align_losses_atac, align_losses_rna = 0, 0, 0
-    #losses_atac_ct = pd.DataFrame(0, index = np.arange(1), columns = list(atac_loader.dataset.dataset.y.categories) + list(['ALL']))
-    #losses_rna_ct = pd.DataFrame(0, index = np.arange(1), columns = list(rna_loader.dataset.dataset.y.categories) + list(['ALL']))
-
-    if save_latents:
-        all_rna_latents, all_atac_latents = [], []
-        all_rna_celltypes, all_atac_celltypes = [], []
-        all_rna_batch_labels, all_atac_batch_labels = [], []
-        
-    #for (rna_cells, rna_celltypes, rna_batch_labels), (atac_cells, atac_celltypes, atac_batch_labels) in (align_itr_pbar := tqdm( zip(rna_loader, atac_loader))):
-    for rna_dat, atac_dat in (align_itr_pbar := tqdm( zip(rna_loader, atac_loader))):
-
-        if (optimizer is not None):
-            align_itr_pbar.set_description('TRAIN itr -- ALIGN')
-        elif eval:
-            align_itr_pbar.set_description('TRAIN EVAL itr -- ALIGN')
-        else:
-            align_itr_pbar.set_description('VALID itr -- ALIGN')
-
-        ## check if cells loaded in matching pairs
-        #assert (rna_dat.obs_names == atac_dat.obs_names).all()
-        
-        ## project RNA data
-        #rna_cells = rna_cells.to_dense().squeeze(1).to(device=device)
-        rna_cells = rna_dat.X.float() # already float32
-        rna_celltypes = rna_dat.obs['cell_type'].tolist()
-        rna_batch_labels = np.zeros(len(rna_dat)) # rna_dat.obs['subject'].tolist()
-
-        rna_cells.requires_grad_()
-        rna_latents, rna_genes = model(rna_cells, modality='rna', task='align')
-
-        ## project ATAC data
-        #atac_cells = atac_cells.to_dense().squeeze(1).to(device=device)
-        atac_cells = atac_dat.X.float()
-        atac_celltypes = atac_dat.obs['cell_type'].tolist()
-        atac_batch_labels = np.zeros(len(atac_dat)) # atac_dat.obs['subject'].tolist()
-
-        atac_cells.requires_grad_()
-        atac_latents, atac_genes = model(atac_cells, modality='atac', task='align')
-
-        ## obtain single set of batch labels
-        #assert np.all(rna_batch_labels == atac_batch_labels)
-        #batch_labels = torch.nn.functional.one_hot(rna_batch_labels).float() if rna_batch_labels is not None else None
-
-        if save_latents:
-            all_rna_latents.append(rna_latents.detach().cpu().numpy())
-            all_atac_latents.append(atac_latents.detach().cpu().numpy())
-            all_rna_celltypes.append(rna_celltypes)
-            all_atac_celltypes.append(atac_celltypes)
-            #all_rna_batch_labels.append(rna_batch_labels)
-            #all_atac_batch_labels.append(atac_batch_labels)
-
-        temperature = loss_fn.temperature
-        loss_atac, loss_rna = loss_fn(atac_latents, rna_latents, atac_celltypes, rna_celltypes, temperature=temperature)
-
-        ## Compute MMD loss
-        atac_genes = None
-        if atac_genes is not None:
-
-            rna_genes = nn.functional.normalize(rna_genes, dim=0)
-            atac_genes = nn.functional.normalize(atac_genes, dim=0)
-            #atac_genes = -atac_genes # flip to recreate cosine disimilarity
-
-
-            
-            #target_loss = target_loss_per_ct(atac_genes, rna_genes, atac_celltypes, rna_celltypes)
-            
-
-        ## Sum losses - more memory efficient to call backward on each loss separately (not implemented here yet)
-
-        loss = (loss_atac + loss_rna)
-
-        align_losses_atac += (loss_atac/num_batches).detach().cpu().numpy()
-        align_losses_rna += (loss_rna/num_batches).detach().cpu().numpy()
-        align_losses += (loss/num_batches).detach().cpu().numpy()
-
-
-        if (optimizer is not None) and (not eval):
-            ## CLIP loss
-            optimizer.zero_grad()
-            loss.backward(retain_graph=True)
-            optimizer.step()
-
-            '''
-            ## batch loss minimizer
-            optimizer_batch_loss_minimizer.zero_grad()
-            batch_loss_minimizer.backward(retain_graph=True)
-            optimizer_batch_loss_minimizer.step()
-
-            ## batch loss maximizer
-            optimizer_batch_loss_maximizer.zero_grad()
-            batch_loss_maximizer.backward(retain_graph=True)
-            optimizer_batch_loss_maximizer.step()
-            '''
-
-        #else:
-        #    atac_and_rna_latents = anndata.concat([anndata.AnnData(atac_latents.detach().cpu().numpy(), obs={'modality':'atac'}), anndata.AnnData(rna_latents.detach().cpu().numpy(), {'modality':'rna'})])
-        #    atac_and_rna_latents.obs['modality'] = atac_and_rna_latents.obs['modality'].astype('category')
-        #    ilisi = ilisi_graph(atac_and_rna_latents, batch_key='modality', type_='full')
-        #    ilisis += ilisi / num_batches
-
-        n = 0  # set to -1 to inactivate batch-level save latents
-        save_latents_ckpts_batches = (np.linspace(0,1,n+1) * num_batches).astype(int)
-
-        if save_latents=='itr' and np.isin( align_itr_pbar.n , save_latents_ckpts_batches ).item(): # save latents at each 1/nth iteration
-
-            epoch = str(kwargs['epoch']).zfill(kwargs['n_epochs_str_length'])
-            itr   = str(align_itr_pbar.n).zfill(kwargs['n_batches_str_length'])
-
-            if optimizer is not None:
-                filename = f'latents_train_epoch_{epoch}_itr_{itr}.npz'
-            elif eval:
-                filename = f'latents_train_eval_epoch_{epoch}_itr_{itr}.npz'
-            else:
-                filename = f'latents_valid_epoch_{epoch}_itr_{itr}.npz'
-
-            filepath = os.path.join(os.path.join(kwargs['outdir'], filename))
-
-            rna_ = rna_latents.detach().cpu().numpy()
-            atac_ = atac_latents.detach().cpu().numpy()
-            loss_ = loss.detach().cpu().numpy()
-            loss_rna_ = loss_rna.detach().cpu().numpy()
-            loss_atac_ = loss_atac.detach().cpu().numpy()
-            mmd_loss_ = mmd_loss.detach().cpu().numpy()
-            np.savez_compressed(filepath, rna=rna_, atac=atac_, loss=loss_, loss_rna=loss_rna_, loss_atac=loss_atac_, mmd_loss=mmd_loss_, rna_celltypes=rna_celltypes, atac_celltypes=atac_celltypes)
-
-
-    if save_latents:
-
-        n = 4  # set to -1 to inactivate epoch-level save latents
-        save_latents_ckpts_epochs = (np.linspace(0,1,n+1) * kwargs['total_epochs']).astype(int)
-        save_latents_ckpts_epochs[-1] = save_latents_ckpts_epochs[-1] - 1 # ensure that last checkpoint is the last epoch
-
-        if np.isin(kwargs['epoch'], save_latents_ckpts_epochs).item():
-
-            epoch = str(kwargs['epoch']).zfill(kwargs['n_epochs_str_length'])
-
-            if optimizer is not None:
-                filename = f'latents_train_epoch_{epoch}.npz'
-            elif eval:
-                filename = f'latents_train_eval_epoch_{epoch}.npz'
-            else:
-                filename = f'latents_valid_epoch_{epoch}.npz'
-                
-                ## MDD latents when valid
-                with torch.no_grad():
-                    rna_cells, rna_celltypes, atac_cells, atac_celltypes = fetch_data_from_loaders(target_rna_loader, target_atac_loader, paired=False, subsample=2000)
-
-                    rna_latents, _ = model(rna_cells, modality='rna', task='align')
-                    atac_latents, _ = model(atac_cells, modality='atac', task='align')
-
-                    filepath = os.path.join(os.path.join(kwargs['outdir'], f'target_{filename}'))
-                    np.savez_compressed(filepath, rna=rna_latents.detach().cpu().numpy(), atac=atac_latents.detach().cpu().numpy(), rna_celltypes=rna_celltypes, atac_celltypes=atac_celltypes)
-
-                
-            all_rna_latents = np.vstack(all_rna_latents); all_atac_latents = np.vstack(all_atac_latents)
-            all_rna_celltypes = np.hstack(all_rna_celltypes); all_atac_celltypes = np.hstack(all_atac_celltypes)
-            all_rna_batch_labels = np.hstack(all_rna_batch_labels); all_atac_batch_labels = np.hstack(all_atac_batch_labels)
-
-            filepath = os.path.join(os.path.join(kwargs['outdir'], filename))
-            np.savez_compressed(filepath, rna=all_rna_latents, atac=all_atac_latents, rna_celltypes=all_rna_celltypes, atac_celltypes=all_atac_celltypes, rna_batches=all_rna_batch_labels, atac_batches=all_atac_batch_labels)
-
-
-    ## update scheduler based on validation loss after each epoch to change learning rate
-    if (scheduler is not None) and (not eval) and (optimizer is None):
-        scheduler.step(align_losses.mean().item())
-
-    ## compute metrics, if valid or eval data
-    if (optimizer is None) and (not tune_hyperparameters):
-
-        with torch.no_grad():
-            rna_cells, rna_celltypes, atac_cells, atac_celltypes = fetch_data_from_loaders(rna_loader, atac_loader)
-            ilisis, clisis, nmi, ari, diag_concentration_minimizer, foscttm_score, acc, acc_top5, clip_loss_, clip_loss_censored, \
-                foscttm_score_ct, acc_ct, acc_top5_ct, clip_loss_ct, clip_loss_ct_split = align_metrics(model, rna_cells, rna_celltypes, atac_cells, atac_celltypes) # should be valid loaders
-            
-            align_metrics_dict = {'loss_rna':loss_rna.item(), 'loss_atac':loss_atac.item(), \
-                                  'clip_loss': clip_loss_, 'clip_loss_censored': clip_loss_censored, \
-                                  'ilisi':ilisis, 'clisi':clisis, 'nmi':nmi, 'ari':ari, 'diag_concentration_minimizer':diag_concentration_minimizer, 'foscttm':foscttm_score, 'acc':acc, 'acc_top5':acc_top5}
-
-            ## evaluate on MDD data
-            ilisis, clisis, nmi, ari, diag_concentration_minimizer, foscttm_score, acc, acc_top5 = compute_mdd_eval_metrics(model, target_rna_loader, target_atac_loader, device, mdd_eval_method='subsample')
-            target_align_metrics_dict = {'ilisi':ilisis, 'clisi':clisis, 'nmi':nmi, 'ari':ari, 'diag_concentration_minimizer':diag_concentration_minimizer, 'foscttm':foscttm_score, 'acc':acc, 'acc_top5':acc_top5}
-
-    elif (optimizer is None) and tune_hyperparameters:
-        foscttm_score = foscttm_moscot(rna_latents.detach().cpu().numpy(), atac_latents.detach().cpu().numpy())
-        align_metrics_dict = {'foscttm':foscttm_score.item()}
-        target_align_metrics_dict = acc_ct = acc_top5_ct = clip_loss_ct = clip_loss_ct_split = clip_loss_ = clip_loss_censored = None
-
-    else:
-        align_metrics_dict = target_align_metrics_dict = acc_ct = acc_top5_ct = clip_loss_ct = clip_loss_ct_split = clip_loss_ = clip_loss_censored = None
-
-    return align_losses, align_losses_atac, align_losses_rna, mmd_losses, align_metrics_dict, target_align_metrics_dict, clip_loss_, clip_loss_censored,\
-        acc_ct, acc_top5_ct, clip_loss_ct, clip_loss_ct_split
-
-
 
 def align_and_reconstruction_pass(rna_loader,
                                 atac_loader,
@@ -867,10 +303,6 @@ def align_and_reconstruction_pass(rna_loader,
         atac_cells.requires_grad_()
         atac_cells_recon, atac_latents = model(atac_cells, modality='atac', task='pretrain')
 
-        ## obtain single set of batch labels
-        #assert np.all(rna_batch_labels == atac_batch_labels)
-        #batch_labels = torch.nn.functional.one_hot(rna_batch_labels).float() if rna_batch_labels is not None else None
-
         if save_latents:
             all_rna_latents.append(rna_latents.detach().cpu().numpy())
             all_atac_latents.append(atac_latents.detach().cpu().numpy())
@@ -900,12 +332,6 @@ def align_and_reconstruction_pass(rna_loader,
             loss.backward(retain_graph=True)
             optimizer.step()
 
-        #else:
-        #    atac_and_rna_latents = anndata.concat([anndata.AnnData(atac_latents.detach().cpu().numpy(), obs={'modality':'atac'}), anndata.AnnData(rna_latents.detach().cpu().numpy(), {'modality':'rna'})])
-        #    atac_and_rna_latents.obs['modality'] = atac_and_rna_latents.obs['modality'].astype('category')
-        #    ilisi = ilisi_graph(atac_and_rna_latents, batch_key='modality', type_='full')
-        #    ilisis += ilisi / num_batches
-
         ## Save losses
         align_losses_atac += (align_loss_atac/num_batches).detach().cpu().numpy()
         align_losses_rna += (align_loss_rna/num_batches).detach().cpu().numpy()
@@ -918,28 +344,6 @@ def align_and_reconstruction_pass(rna_loader,
         ## Save latents
         n = 0  # set to -1 to inactivate batch-level save latents
         save_latents_ckpts_batches = (np.linspace(0,1,n+1) * num_batches).astype(int)
-
-        if save_latents=='itr' and np.isin( align_itr_pbar.n , save_latents_ckpts_batches ).item(): # save latents at each 1/nth iteration
-
-            epoch = str(kwargs['epoch']).zfill(kwargs['n_epochs_str_length'])
-            itr   = str(align_itr_pbar.n).zfill(kwargs['n_batches_str_length'])
-
-            if optimizer is not None:
-                filename = f'latents_train_epoch_{epoch}_itr_{itr}.npz'
-            elif eval:
-                filename = f'latents_train_eval_epoch_{epoch}_itr_{itr}.npz'
-            else:
-                filename = f'latents_valid_epoch_{epoch}_itr_{itr}.npz'
-
-            filepath = os.path.join(os.path.join(kwargs['outdir'], filename))
-
-            rna_ = rna_latents.detach().cpu().numpy()
-            atac_ = atac_latents.detach().cpu().numpy()
-            loss_ = loss.detach().cpu().numpy()
-            loss_rna_ = loss_rna.detach().cpu().numpy()
-            loss_atac_ = loss_atac.detach().cpu().numpy()
-            mmd_loss_ = mmd_loss.detach().cpu().numpy()
-            np.savez_compressed(filepath, rna=rna_, atac=atac_, loss=loss_, loss_rna=loss_rna_, loss_atac=loss_atac_, mmd_loss=mmd_loss_, rna_celltypes=rna_celltypes, atac_celltypes=atac_celltypes)
 
 
     if save_latents:

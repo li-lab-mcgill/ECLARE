@@ -13,13 +13,13 @@ It is highly recommended to install ECLARE within a virtual environment to avoid
     cd ECLARE
     ```
 
-2. Create and activate a virtual environment:
+2. Create a virtual environment:
     Create virtual environment
     ```bash
     python -m venv eclare_env
     ```
 
-3. Activate virtual environment
+3. Activate the virtual environment
     
     Windows
     ```bash
@@ -35,6 +35,8 @@ It is highly recommended to install ECLARE within a virtual environment to avoid
     ```bash
     source eclare_env/Scripts/activate
     ```
+
+
 
 
 4. Install the package:

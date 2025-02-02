@@ -145,7 +145,7 @@ setup(
         "requests==2.31.0",
         "requests-cache==1.2.1",
         "rich==13.9.4",
-        "scanpy==1.9.6",
+        "scanpy[leiden]==1.9.6",
         "scib-metrics==0.4.1",
         "scikit-learn==1.3.0",
         "scipy==1.11.4",

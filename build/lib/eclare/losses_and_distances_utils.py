@@ -1,6 +1,9 @@
 import torch
 import numpy as np
 from pandas import DataFrame, factorize
+import pandas as pd
+import torch.nn.functional as F
+from ot import solve as ot_solve
 
 def cosine_distance(x, y, norm=True, detach=True):
     x_norm = torch.nn.functional.normalize(x, p=2, dim=1)

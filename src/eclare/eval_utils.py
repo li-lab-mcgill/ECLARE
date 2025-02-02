@@ -6,12 +6,19 @@ from scib_metrics import ilisi_knn, clisi_knn, nmi_ari_cluster_labels_leiden
 from sklearn.model_selection import StratifiedKFold
 from pandas import DataFrame
 
+from scanpy.tl import leiden
+from scanpy.pp import neighbors
+from scib_metrics import silhouette_label, silhouette_batch
+
 from jax import jit
 import jax.numpy as jnp
 from jax.lax import top_k as lax_top_k
 from functools import partial
 
 from eclare.losses_and_distances_utils import clip_loss, clip_loss_split_by_ct
+from eclare.data_utils import fetch_data_from_loaders
+from eclare.losses_and_distances_utils import cosine_distance
+
 
 def align_metrics(model, rna_cells, rna_celltypes, atac_cells, atac_celltypes, paired=True, is_latents=False):
             
@@ -85,10 +92,6 @@ def align_metrics(model, rna_cells, rna_celltypes, atac_cells, atac_celltypes, p
 
     else:
         diag_concentration_minimizer = None
-
-    from scanpy.tl import leiden
-    from scanpy.pp import neighbors
-    from scib_metrics import silhouette_label, silhouette_batch
 
     atac_and_rna_latents_df = anndata.concat([anndata.AnnData(atac_latents.detach().cpu().numpy(), obs={'modality':'atac'}), anndata.AnnData(rna_latents.detach().cpu().numpy(), {'modality':'rna'})])
     atac_and_rna_latents_df.obs['modality'] = atac_and_rna_latents_df.obs['modality'].astype('category')
