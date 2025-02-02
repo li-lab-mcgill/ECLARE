@@ -1,6 +1,6 @@
 #%%
 from post_hoc_utils import *
-from models import load_scTripletgrate_model
+from models import load_CLIP_model
 from losses_and_distances_utils import clip_loss
 
 import torch

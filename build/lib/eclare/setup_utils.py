@@ -7,11 +7,9 @@ from argparse import Namespace
 from pybedtools import BedTool
 from sklearn.model_selection import StratifiedShuffleSplit
 from pybiomart import Dataset as biomart_Dataset
-from data_utils import keep_CREs_and_adult_only, merge_major_cell_group, create_loaders
 #import bbknn
 from muon import atac as ac
 from scipy.sparse import csr_matrix, save_npz, load_npz
-from scanpy.external.pp import harmony_integrate
 from pickle import dump as pkl_dump
 from pickle import load as pkl_load
 from functools import reduce
@@ -25,12 +23,8 @@ import re
 from sklearn.ensemble import GradientBoostingRegressor
 from joblib import Parallel, delayed
 
-import socket
-hostname = socket.gethostname()
-
-CLARE_root = os.environ['CLARE_root']
-os.environ['datapath'] = os.path.join( os.path.dirname(CLARE_root), 'data' )
-print(f'Datapath: {os.environ["datapath"]}')
+from eclare.models import load_CLIP_model
+from eclare.data_utils import create_loaders, keep_CREs_and_adult_only, merge_major_cell_group
 
 def return_setup_func_from_dataset(dataset_name):
 
@@ -699,7 +693,7 @@ def toy_simulation_setup(args, pretrain=False, cell_group='dummy_celltype'):
     elif not pretrain:
         rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
         atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        return align_setup_completed, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx
+        return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx
 
 def splatter_sim_setup(args, pretrain=False, cell_group='Group'):
 
@@ -721,7 +715,7 @@ def splatter_sim_setup(args, pretrain=False, cell_group='Group'):
     elif not pretrain:
         rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
         atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        return align_setup_completed, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx
+        return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx
 
 def pbmc_multiome_setup(args, pretrain=False, cell_group='seurat_annotations', hvg_only=False, protein_coding_only=True, do_gas=False, return_type='loaders'):
 
@@ -2814,3 +2808,51 @@ def get_genes_by_peaks_str(datasets = ["Roussos_lab", "AD_Anderson_et_al", "huma
     ## save dataframes
     genes_by_peaks_str_df.to_csv(os.path.join(datapath, 'genes_by_peaks_str.csv'))
     genes_by_peaks_str_timestamp_df.to_csv(os.path.join(datapath, 'genes_by_peaks_str_timestamp.csv'))
+
+
+def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
+    datasets = []
+    models = {}
+    target_rna_train_loaders = {}
+    target_atac_train_loaders = {}
+    target_rna_valid_loaders = {}
+    target_atac_valid_loaders = {}
+    
+    for m, model_path in enumerate(model_paths):
+
+        print(model_path)
+
+        ## Load the model
+        model, model_args_dict = load_CLIP_model(model_path, device=device)
+
+        ## Determine the dataset
+        dataset = model_args_dict['args'].source_dataset
+        source_setup_func = return_setup_func_from_dataset(dataset)
+        target_setup_func = return_setup_func_from_dataset(model_args_dict['args'].target_dataset)
+        genes_by_peaks_str = model_args_dict['args'].genes_by_peaks_str
+
+        print(dataset)
+        datasets.append(dataset)
+
+        ## Load the data loaders
+        #rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
+        #    source_setup_func(model_args_dict['args'], pretrain=None, return_type='loaders', dataset=dataset)
+        
+        overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
+        target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
+            target_setup_func(model_args_dict['args'], pretrain=None, return_type='loaders')
+        
+        if args.train_encoders:
+            model.train()
+
+        models[dataset] = model
+
+        if args.source_dataset_embedder:
+            dataset_idx_dict[dataset] = m
+
+        target_rna_train_loaders[dataset] = target_rna_train_loader
+        target_atac_train_loaders[dataset] = target_atac_train_loader
+        target_rna_valid_loaders[dataset] = target_rna_valid_loader
+        target_atac_valid_loaders[dataset] = target_atac_valid_loader
+
+    return datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders

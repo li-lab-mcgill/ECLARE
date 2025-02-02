@@ -34,9 +34,9 @@ from ot import solve as ot_solve
 from collections import defaultdict
 from string import ascii_uppercase
 
-from models import load_scTripletgrate_model, scTripletgrate
-from setup_utils import mdd_setup
-from post_hoc_utils import get_latents, sample_proportional_celltypes_and_condition
+from eclare.models import load_CLIP_model, CLIP
+from eclare.setup_utils import mdd_setup
+from eclare.post_hoc_utils import get_latents, sample_proportional_celltypes_and_condition
 
 from datetime import datetime
 from glob import glob
@@ -522,7 +522,7 @@ def load_scMulticlip_mdd_model(student_model_path):
 
     slurm_job_id = student_model_args_dict['args'].slurm_job_ids
     model_path = glob(os.path.join(os.environ['outdir'], f'clip_mdd_{slurm_job_id}/mdd/AD_Anderson_et_al/{best_multiclip_mdd}/model.pt'))[0]
-    _, clip_model_args_dict = load_scTripletgrate_model(model_path, device='cpu')
+    _, clip_model_args_dict = load_CLIP_model(model_path, device='cpu')
 
     clip_model_args_dict['args'].source_dataset = 'mdd'
     clip_model_args_dict['args'].target_dataset = None
@@ -535,7 +535,7 @@ def load_scMulticlip_mdd_model(student_model_path):
 
     clip_model_args_dict['model_state_dict'] = student_model_args_dict['model_state_dict']
 
-    student_model = scTripletgrate(**clip_model_args_dict, trial=None)
+    student_model = CLIP(**clip_model_args_dict, trial=None)
 
     return student_model
 
@@ -654,7 +654,7 @@ best_multiclip_mdd = str(mdd_df_multiclip['ilisis'].droplevel(0).argmax())
 method_job_id = f'scMulticlip_mdd_{methods_id_dict["scMulticlip_mdd"]}'
 paths_root = os.path.join(default_outdir, method_job_id)
 student_model_path = os.path.join(paths_root, 'mdd', best_multiclip_mdd, 'student_model.pt')
-#model, model_args_dict = load_scTripletgrate_model(model_path, device='cpu')
+#model, model_args_dict = load_CLIP_model(model_path, device='cpu')
 
 student_model = load_scMulticlip_mdd_model(student_model_path)
 student_model.eval()

@@ -2,8 +2,6 @@ import numpy as np
 import torch
 import warnings
 
-from losses_and_distances_utils import cosine_distance
-
 
 def find_mnn_idxs(rna_genes, atac_genes, distance, n_neighbors=30):
 

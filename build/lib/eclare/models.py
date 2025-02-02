@@ -1,29 +1,14 @@
 import torch
 import torch.nn as nn
-from torchvision.ops import MLP
 
 import numpy as np
 #from sparselinear import SparseLinear
 
-from typing import Union
 import sys
 import os
-import socket
-hostname = socket.gethostname()
+sys.path.insert(0, os.environ['nampath'])
 
-## set path to CLARE root directory & add to sys.path
-CLARE_root = os.environ['CLARE_root']
-nam_path = os.path.join(CLARE_root, 'neural-additive-models-pt')
-
-sys.path.insert(0, nam_path)
-from nam.model import *
-
-#hyenadna_path = os.path.join(CLARE_root, 'hyena-dna')
-#sys.path.insert(0, hyenadna_path)
-#from standalone_hyenadna import *
-#from huggingface import *
-
-class scTripletgrate(nn.Module):
+class CLIP(nn.Module):
     def __init__(self, n_peaks, n_genes, args, device, trial=None, **kwargs):
         super().__init__()
 
@@ -267,7 +252,7 @@ class scTripletgrate(nn.Module):
                 return core, genes
 
 
-def load_scTripletgrate_model(model_path, device, **kwargs):
+def load_CLIP_model(model_path, device, **kwargs):
 
     model_args_dict = torch.load(model_path, map_location=device)
     model_args_dict['device'] = device
@@ -275,72 +260,8 @@ def load_scTripletgrate_model(model_path, device, **kwargs):
     if 'tune_hyperparameters' in kwargs:
         model_args_dict['args'].tune_hyperparameters = kwargs['tune_hyperparameters']
 
-    model = scTripletgrate(**model_args_dict).to(device=device)
+    model = CLIP(**model_args_dict).to(device=device)
     model.load_state_dict(model_args_dict['model_state_dict'])
     model.eval()
     
     return model, model_args_dict
-
-'''
-def get_hyena_dna_model_and_tokenizer(
-        pretrained_model_name: str = 'hyenadna-tiny-1k-seqlen',
-        hyenadna_path: Union[str, os.PathLike] = hyenadna_path,
-        download: bool = False):
-
-    max_lengths = {
-        'hyenadna-tiny-1k-seqlen': 1024,
-        'hyenadna-small-32k-seqlen': 32768,
-        'hyenadna-medium-160k-seqlen': 160000,
-        'hyenadna-medium-450k-seqlen': 450000,  # T4 up to here
-        'hyenadna-large-1m-seqlen': 1_000_000,  # only A100 (paid tier)
-    }
-
-    max_length = max_lengths[pretrained_model_name]  # auto selects
-
-    # data settings:
-    use_padding = True
-    rc_aug = False  # reverse complement augmentation
-    add_eos = False  # add end of sentence token
-
-    # we need these for the decoder head, if using
-    use_head = False
-    n_classes = 2  # not used for embeddings only
-
-    # you can override with your own backbone config here if you want,
-    # otherwise we'll load the HF one in None
-    backbone_cfg = None
-
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print("Using device:", device)
-
-    # instantiate the model (pretrained here)
-    if pretrained_model_name in ['hyenadna-tiny-1k-seqlen',
-                                 'hyenadna-small-32k-seqlen',
-                                 'hyenadna-medium-160k-seqlen',
-                                 'hyenadna-medium-450k-seqlen',
-                                 'hyenadna-large-1m-seqlen']:
-        # use the pretrained Huggingface wrapper instead
-        model = HyenaDNAPreTrainedModel.from_pretrained(
-            os.path.join(hyenadna_path, 'checkpoints'),
-            pretrained_model_name,
-            download=download,
-            config=backbone_cfg,
-            device=device,
-            use_head=use_head,
-            n_classes=n_classes,
-        )
-
-    # from scratch
-    elif pretrained_model_name is None:
-        model = HyenaDNAModel(**backbone_cfg, use_head=use_head, n_classes=n_classes)
-
-    # create tokenizer
-    tokenizer = CharacterTokenizer(
-        characters=['A', 'C', 'G', 'T', 'N'],  # add DNA characters, N is uncertain
-        model_max_length=max_length + 2,  # to account for special tokens, like EOS
-        add_special_tokens=False,  # we handle special tokens elsewhere
-        padding_side='left', # since HyenaDNA is causal, we pad on the left
-    )
-
-    return model, tokenizer
-'''

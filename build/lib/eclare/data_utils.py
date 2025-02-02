@@ -6,9 +6,11 @@ from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
 import pandas as pd
 import os
 import anndata
-from anndata.experimental import AnnLoader
+#from anndata.experimental import AnnLoader
 from scipy.sparse import issparse
 import h5py
+
+from eclare.custom_annloader import CustomAnnLoader as AnnLoader
 
 class SparseData(Dataset):
     def __init__(self, X, celltypes, batches=None):

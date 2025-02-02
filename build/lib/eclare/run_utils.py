@@ -8,14 +8,13 @@ import torch.nn as nn
 from tqdm import tqdm
 from optuna import TrialPruned
 
-from models import scTripletgrate
-from losses_and_distances_utils import clip_loss
-from triplet_utils import get_triplet_loss
-from eval_utils import align_metrics, compute_mdd_eval_metrics
-from data_utils import fetch_data_from_loaders
-from eval_utils import foscttm_moscot
+from eclare.models import CLIP
+from eclare.losses_and_distances_utils import clip_loss
+from eclare.eval_utils import align_metrics, compute_mdd_eval_metrics
+from eclare.data_utils import fetch_data_from_loaders
+from eclare.eval_utils import foscttm_moscot
 
-def run_scTripletgrate(trial,
+def run_CLIP(trial,
                        args: Namespace,
                        genes_to_peaks_binary_mask,
                        rna_train_loader,
@@ -63,7 +62,7 @@ def run_scTripletgrate(trial,
                                 'params_bandwidth_parameter': 1.,
                                 'temperature': 1.}
         
-        pretrain    = tuned_hyperparameters.get('params_pretrain', default_hyperparameters['params_pretrain'])  # default should already be set before calling run_scTripletgrate
+        pretrain    = tuned_hyperparameters.get('params_pretrain', default_hyperparameters['params_pretrain'])  # default should already be set before calling run_CLIP
         margin      = tuned_hyperparameters.get('params_margin', default_hyperparameters['params_margin'])
         mmd_scale   = tuned_hyperparameters.get('params_mmd_scale', default_hyperparameters['params_mmd_scale'])
         bandwidth_parameter = tuned_hyperparameters.get('params_bandwidth_parameter', default_hyperparameters['params_bandwidth_parameter'])
@@ -144,9 +143,9 @@ def run_scTripletgrate(trial,
     else:
         batch_classifier = None
 
-    #model = scTripletgrate(n_peaks, n_genes, args, device,\
+    #model = CLIP(n_peaks, n_genes, args, device,\
     #                                         nam_type='few-to-one', genes_to_peaks_binary_mask=genes_to_peaks_binary_mask, pretrain=pretrain, tuned_hyperparameters=tuned_hyperparameters).to(device=device)
-    model = scTripletgrate(**model_args_dict, trial=trial).to(device=device)
+    model = CLIP(**model_args_dict, trial=trial).to(device=device)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     ## Initialize triplet loss with margin hyperparameter
@@ -366,48 +365,6 @@ def run_scTripletgrate(trial,
 
         return optuna_obj
 
-
-def mdd_loss_per_ct(atac_genes, rna_genes, atac_celltypes, rna_celltypes):
-
-    rna_celltypes_dummies = pd.get_dummies(rna_celltypes).reindex(sorted(np.unique(rna_celltypes)), axis=1)
-    atac_celltypes_dummies = pd.get_dummies(atac_celltypes).reindex(sorted(np.unique(atac_celltypes)), axis=1)
-    common_celltypes = set(rna_celltypes).intersection(set(atac_celltypes))
-
-    mmd_loss = 0
-    for celltype in common_celltypes:
-
-        rna_genes_ct = rna_genes[ rna_celltypes_dummies[celltype] ]
-        atac_genes_ct = atac_genes[ atac_celltypes_dummies[celltype] ]
-
-        ## zero-pad, if required
-        padding_rows = np.abs(len(rna_genes_ct) - len(atac_genes_ct))
-        if padding_rows != 0:
-            if len(rna_genes_ct) < len(atac_genes_ct):
-                rna_genes_ct = nn.functional.pad(rna_genes_ct, (0, 0, 0, padding_rows), mode='constant', value=0)
-            elif len(atac_genes_ct) < len(rna_genes_ct):
-                atac_genes_ct = nn.functional.pad(atac_genes_ct, (0, 0, 0, padding_rows), mode='constant', value=0)
-
-
-        rna_genes_sorted = torch.sort(rna_genes_ct, dim=0).values
-        atac_genes_sorted = torch.sort(atac_genes_ct, dim=0).values
-
-        mmd_loss_ct = mmd_loss_fn(atac_genes_sorted, rna_genes_sorted)
-
-        #gene_by_gene = torch.matmul(rna_genes_sorted.T, atac_genes_sorted)
-        #gene_by_gene = gene_by_gene / torch.linalg.norm(gene_by_gene)
-        #mmd_loss_ct = torch.log2(gene_by_gene.sum()) - torch.log2(gene_by_gene.trace())
-
-        mmd_loss = mmd_loss + (mmd_loss_ct/len(common_celltypes))
-        return mmd_loss
-
-def get_batch_minmax(latents, batch_labels):
-    batch_prediction_rna = batch_classifier(rna_latents.clone())
-    batch_prediction_atac = batch_classifier(atac_latents.clone())
-    batch_prediction = torch.mean(torch.stack([batch_prediction_rna, batch_prediction_atac]), dim=0)
-
-    batch_loss_minimizer = batch_classification_loss(batch_prediction, batch_labels)
-    batch_loss_maximizer = -1 * batch_loss_minimizer.clone()
-    return batch_loss_minimizer, batch_loss_maximizer
         
 def pretrain_pass_unimodal(loader, modality, model, optimizer, loss_fn, num_batches, eval=False, save_latents=False, **kwargs):
 
@@ -721,11 +678,8 @@ def bimodal_align_pass(rna_loader,
             #all_rna_batch_labels.append(rna_batch_labels)
             #all_atac_batch_labels.append(atac_batch_labels)
 
-        if triplet_type != 'clip':
-            loss_atac, loss_rna = get_triplet_loss(atac_latents, rna_latents, atac_celltypes, rna_celltypes, triplet_type='mnn', loss_fn=None)
-        elif triplet_type == 'clip':
-            temperature = loss_fn.temperature
-            loss_atac, loss_rna = loss_fn(atac_latents, rna_latents, atac_celltypes, rna_celltypes, temperature=temperature)
+        temperature = loss_fn.temperature
+        loss_atac, loss_rna = loss_fn(atac_latents, rna_latents, atac_celltypes, rna_celltypes, temperature=temperature)
 
         ## Compute MMD loss
         atac_genes = None
@@ -926,11 +880,8 @@ def align_and_reconstruction_pass(rna_loader,
             all_atac_batch_labels.append(atac_batch_labels)
 
         ## Align losses
-        if triplet_type != 'clip':
-            loss_atac, loss_rna = get_triplet_loss(atac_latents, rna_latents, atac_celltypes, rna_celltypes, triplet_type='mnn', loss_fn=None)
-        elif triplet_type == 'clip':
-            temperature = loss_fn.temperature
-            align_loss_atac, align_loss_rna = loss_fn(None, atac_latents=atac_latents, rna_latents=rna_latents, atac_celltypes=atac_celltypes, rna_celltypes=rna_celltypes, temperature=temperature)
+        temperature = loss_fn.temperature
+        align_loss_atac, align_loss_rna = loss_fn(None, atac_latents=atac_latents, rna_latents=rna_latents, atac_celltypes=atac_celltypes, rna_celltypes=rna_celltypes, temperature=temperature)
 
         align_loss = 0.5 * (align_loss_atac + align_loss_rna)
 
@@ -1065,3 +1016,24 @@ def align_and_reconstruction_pass(rna_loader,
     return align_losses, align_losses_atac, align_losses_rna,\
         align_metrics_dict, target_align_metrics_dict, clip_loss_, clip_loss_censored,\
         acc_ct, acc_top5_ct, clip_loss_ct, clip_loss_ct_split
+
+
+def save_latents(student_rna_latents_valid, student_atac_latents_valid, student_rna_celltypes_valid, student_atac_celltypes_valid, epoch, n_epochs, outdir):
+    ## in reality, only a single batch of valid latents per epoch, so no need to accumulate
+
+    n = 4  # set to -1 to inactivate epoch-level save latents
+    save_latents_ckpts_epochs = (np.linspace(0,1,n+1) * n_epochs).astype(int)
+    save_latents_ckpts_epochs[-1] = save_latents_ckpts_epochs[-1] - 1 # ensure that last checkpoint is the last epoch
+
+    if np.isin(epoch, save_latents_ckpts_epochs).item():
+
+        n_epochs_str_length = len(str(n_epochs - 1))
+        epoch_str = str(epoch).zfill(n_epochs_str_length)
+
+        filename = f'latents_valid_epoch_{epoch_str}.npz'
+            
+        all_rna_latents_valid = student_rna_latents_valid.detach().cpu().numpy(); all_atac_latents_valid = student_atac_latents_valid.detach().cpu().numpy()
+        all_rna_celltypes_valid = student_rna_celltypes_valid; all_atac_celltypes_valid = student_atac_celltypes_valid
+
+        filepath = os.path.join(outdir, filename)
+        np.savez_compressed(filepath, rna=all_rna_latents_valid, atac=all_atac_latents_valid, rna_celltypes=all_rna_celltypes_valid, atac_celltypes=all_atac_celltypes_valid)

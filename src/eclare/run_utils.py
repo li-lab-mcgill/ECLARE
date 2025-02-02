@@ -8,13 +8,13 @@ import torch.nn as nn
 from tqdm import tqdm
 from optuna import TrialPruned
 
-from eclare.models import scTripletgrate
+from eclare.models import CLIP
 from eclare.losses_and_distances_utils import clip_loss
 from eclare.eval_utils import align_metrics, compute_mdd_eval_metrics
 from eclare.data_utils import fetch_data_from_loaders
 from eclare.eval_utils import foscttm_moscot
 
-def run_scTripletgrate(trial,
+def run_CLIP(trial,
                        args: Namespace,
                        genes_to_peaks_binary_mask,
                        rna_train_loader,
@@ -62,7 +62,7 @@ def run_scTripletgrate(trial,
                                 'params_bandwidth_parameter': 1.,
                                 'temperature': 1.}
         
-        pretrain    = tuned_hyperparameters.get('params_pretrain', default_hyperparameters['params_pretrain'])  # default should already be set before calling run_scTripletgrate
+        pretrain    = tuned_hyperparameters.get('params_pretrain', default_hyperparameters['params_pretrain'])  # default should already be set before calling run_CLIP
         margin      = tuned_hyperparameters.get('params_margin', default_hyperparameters['params_margin'])
         mmd_scale   = tuned_hyperparameters.get('params_mmd_scale', default_hyperparameters['params_mmd_scale'])
         bandwidth_parameter = tuned_hyperparameters.get('params_bandwidth_parameter', default_hyperparameters['params_bandwidth_parameter'])
@@ -143,9 +143,9 @@ def run_scTripletgrate(trial,
     else:
         batch_classifier = None
 
-    #model = scTripletgrate(n_peaks, n_genes, args, device,\
+    #model = CLIP(n_peaks, n_genes, args, device,\
     #                                         nam_type='few-to-one', genes_to_peaks_binary_mask=genes_to_peaks_binary_mask, pretrain=pretrain, tuned_hyperparameters=tuned_hyperparameters).to(device=device)
-    model = scTripletgrate(**model_args_dict, trial=trial).to(device=device)
+    model = CLIP(**model_args_dict, trial=trial).to(device=device)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     ## Initialize triplet loss with margin hyperparameter

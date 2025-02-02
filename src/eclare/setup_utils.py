@@ -23,7 +23,7 @@ import re
 from sklearn.ensemble import GradientBoostingRegressor
 from joblib import Parallel, delayed
 
-from eclare.models import load_scTripletgrate_model
+from eclare.models import load_CLIP_model
 from eclare.data_utils import create_loaders, keep_CREs_and_adult_only, merge_major_cell_group
 
 def return_setup_func_from_dataset(dataset_name):
@@ -2823,7 +2823,7 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
         print(model_path)
 
         ## Load the model
-        model, model_args_dict = load_scTripletgrate_model(model_path, device=device)
+        model, model_args_dict = load_CLIP_model(model_path, device=device)
 
         ## Determine the dataset
         dataset = model_args_dict['args'].source_dataset
