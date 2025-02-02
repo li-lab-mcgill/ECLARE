@@ -6,7 +6,7 @@ import pandas as pd
 import optuna
 from shutil import copy2
 
-from eclare import merged_dataset_setup, return_setup_func_from_dataset, run_scTripletgrate, study_summary
+from eclare import merged_dataset_setup, return_setup_func_from_dataset, run_CLIP, study_summary
 
 if __name__ == "__main__":
 
@@ -168,7 +168,7 @@ if __name__ == "__main__":
         
         ## dataset setup - unsure why previously had different setups for pretrain vs not pretrain...
         ## instantiate, train and return model
-        model = run_scTripletgrate(None, args, genes_to_peaks_binary_mask,
+        model = run_CLIP(None, args, genes_to_peaks_binary_mask,
                                rna_train_loader, atac_train_loader, rna_valid_loader, atac_valid_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length,\
                                target_atac_valid_loader, target_rna_valid_loader, \
                                tuned_hyperparameters, outdir=args.outdir, \
@@ -195,7 +195,7 @@ if __name__ == "__main__":
 
         tuned_hyperparameters = None
 
-        run_scTripletgrate_with_args = lambda trial: run_scTripletgrate(trial, args, genes_to_peaks_binary_mask,
+        run_CLIP_with_args = lambda trial: run_CLIP(trial, args, genes_to_peaks_binary_mask,
                                                                         rna_train_loader, atac_train_loader, rna_valid_loader, atac_valid_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, target_atac_valid_loader, target_rna_valid_loader, tuned_hyperparameters, outdir=args.outdir, do_pretrain_train=True, do_pretrain_valid=True, do_align_train=False, do_align_valid=False)
                                                                         
 
@@ -206,7 +206,7 @@ if __name__ == "__main__":
         pruner = optuna.pruners.NopPruner()
         warmstart = optuna.create_study(direction="minimize", pruner=pruner, study_name='tune-align', sampler=optuna.samplers.RandomSampler())
 
-        warmstart.optimize(run_scTripletgrate_with_args, n_trials=args.n_trials, timeout=None)
+        warmstart.optimize(run_CLIP_with_args, n_trials=args.n_trials, timeout=None)
 
         if args.n_trials > 0:
             study_summary(warmstart)
@@ -231,7 +231,7 @@ if __name__ == "__main__":
         pruner = optuna.pruners.NopPruner()
         tune = optuna.create_study(direction="minimize", pruner=pruner, study_name=warmstart.study_name, sampler=optuna.samplers.TPESampler(), load_if_exists=True)
         
-        tune.optimize(run_scTripletgrate_with_args, n_trials=int(args.n_trials / 4) + 1, timeout=None)
+        tune.optimize(run_CLIP_with_args, n_trials=int(args.n_trials / 4) + 1, timeout=None)
 
         if args.n_trials > 0:
             study_summary(tune)

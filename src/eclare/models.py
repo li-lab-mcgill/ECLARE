@@ -8,7 +8,7 @@ import sys
 import os
 sys.path.insert(0, os.environ['nampath'])
 
-class scTripletgrate(nn.Module):
+class CLIP(nn.Module):
     def __init__(self, n_peaks, n_genes, args, device, trial=None, **kwargs):
         super().__init__()
 
@@ -252,7 +252,7 @@ class scTripletgrate(nn.Module):
                 return core, genes
 
 
-def load_scTripletgrate_model(model_path, device, **kwargs):
+def load_CLIP_model(model_path, device, **kwargs):
 
     model_args_dict = torch.load(model_path, map_location=device)
     model_args_dict['device'] = device
@@ -260,7 +260,7 @@ def load_scTripletgrate_model(model_path, device, **kwargs):
     if 'tune_hyperparameters' in kwargs:
         model_args_dict['args'].tune_hyperparameters = kwargs['tune_hyperparameters']
 
-    model = scTripletgrate(**model_args_dict).to(device=device)
+    model = CLIP(**model_args_dict).to(device=device)
     model.load_state_dict(model_args_dict['model_state_dict'])
     model.eval()
     
