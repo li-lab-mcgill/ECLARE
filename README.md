@@ -74,5 +74,5 @@ Before running the application, you need to set up your configuration file. Foll
 
 ## ECLARE framework
 <p style="text-align: center;">
-  <img src="path/to/fig1_landscape_no_alpha.png" alt="ECLARE Framework" style="margin: 20px;"/>
+  <img src="fig1_landscape_no_alpha.png" alt="ECLARE Framework" style="margin: 20px;"/>
 </p>
