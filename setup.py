@@ -192,7 +192,7 @@ setup(
     },
     author='Dylan Mann-Krzisnik',
     author_email='dylan.mann-krzisnik@mail.mcgill.ca',
-    description='ECLARE: Enesemble knowledge distillation for Contrastive Learning of ATAC and RNA Embeddings',
+    description='ECLARE: Ensemble knowledge distillation for Contrastive Learning of ATAC and RNA Embeddings',
     cmdclass={
         'install': CustomInstallCommand,
     },
