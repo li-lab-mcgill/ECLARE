@@ -1,5 +1,7 @@
 config.yaml
-*.sh
+*slurm.sh
+MCB_bash_scripts/
+build/
 
 benchmark_*/**/*_env
 **/.git

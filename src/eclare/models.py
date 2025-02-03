@@ -6,7 +6,7 @@ import numpy as np
 
 import sys
 import os
-sys.path.insert(0, os.environ['nampath'])
+sys.path.insert(0, os.environ['NAMPATH'])
 
 class CLIP(nn.Module):
     def __init__(self, n_peaks, n_genes, args, device, trial=None, **kwargs):

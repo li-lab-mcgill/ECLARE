@@ -142,12 +142,13 @@ class ConfigLoader:
         """
         Override directory paths with environment variables if they are set.
         Environment variables should be in uppercase and match the directory keys.
-        Example: ECLARE_ROOT overrides 'ECLARE_root'
+        Example: ECLARE_ROOT overrides 'ECLARE_ROOT'
         """
         env_mapping = {
-            'ECLARE_root': 'ECLARE_ROOT',
-            'outpath': 'OUTPATH',
-            'datapath': 'DATAPATH'
+            'ECLARE_ROOT': 'ECLARE_ROOT',
+            'OUTPATH': 'OUTPATH',
+            'DATAPATH': 'DATAPATH',
+            'NAMPATH': 'NAMPATH'
         }
 
         for key, env_var in env_mapping.items():

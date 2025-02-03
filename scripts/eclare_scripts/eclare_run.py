@@ -19,7 +19,7 @@ from eclare import \
 if __name__ == "__main__":
 
     parser = ArgumentParser(description='')
-    parser.add_argument('--outdir', type=str, default=os.environ.get('outpath', None),
+    parser.add_argument('--outdir', type=str, default=os.environ.get('OUTPATH', None),
                         help='output directory')
     parser.add_argument('--slurm_job_ids', default=['37119283'], #['34887192', '34870779', '35175388', '35168470'], # 35318790 (SEA-AD) error when doing data[valid_idx].copy()
                         help='list of datasets to merge')
@@ -68,7 +68,7 @@ if __name__ == "__main__":
     print(f"Allocated CPUs: {cpus_per_task}")
 
     ## extract data
-    outpath = os.environ.get('outpath', args.outdir)
+    outpath = os.environ.get('OUTPATH', args.outdir)
 
     print('Extracting data')
     slurm_job_ids = args.slurm_job_ids if isinstance(args.slurm_job_ids, list) else [args.slurm_job_ids]

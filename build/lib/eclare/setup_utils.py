@@ -71,7 +71,7 @@ def return_setup_func_from_dataset(dataset_name):
 
 def get_protein_coding_genes(rna):
 
-    ensembl_path = os.path.join(os.environ['datapath'], 'ensembl_gene_positions.csv')
+    ensembl_path = os.path.join(os.environ['DATAPATH'], 'ensembl_gene_positions.csv')
 
     protein_coding_genes = pd.read_csv(ensembl_path)
     protein_coding_genes = protein_coding_genes[protein_coding_genes['Gene type'] == 'protein_coding']
@@ -87,7 +87,7 @@ def get_genes_by_peaks(rna, atac, genes_to_peaks_binary_mask_path, window_size =
             rna_var_tmp = rna.var.copy()
         else:
 
-            gene_positions_path = os.path.join(os.environ['datapath'], 'ensembl_gene_positions.csv')
+            gene_positions_path = os.path.join(os.environ['DATAPATH'], 'ensembl_gene_positions.csv')
 
             results = pd.read_csv(gene_positions_path)
             results = results.rename(columns={'Transcription start site (TSS)':'TSS start (bp)'})
@@ -215,7 +215,7 @@ def get_gas(rna, atac):
         if np.isin( ['Chromosome/scaffold name', 'Gene start (bp)', 'Gene end (bp)'] , rna.var.columns ).all():
             rna_var_tmp = rna.var
         else:
-            results = pd.read_csv(os.path.join(os.environ['datapath'], 'ensembl_gene_positions.csv'))
+            results = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'ensembl_gene_positions.csv'))
             filt_chroms = [str(i) for i in range(1,23+1)] + ['X','Y']
             results = results[results['Chromosome/scaffold name'].isin(filt_chroms)]
             rna_var_tmp = pd.merge(rna.var, results, left_index=True, right_on='Gene name', how='left').set_index('Gene name')
@@ -540,7 +540,7 @@ def merge_datasets_union(
     ## create Bedtool from cCREs (highjack cre_bedtool via MDD peaks)
     #cre_bedtool = BedTool(cre_path)
 
-    mdd_atac_path = os.path.join(os.environ['datapath'], 'mdd_data', 'mdd_atac_broad.h5ad')
+    mdd_atac_path = os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_broad.h5ad')
 
     mdd_atac = anndata.read_h5ad(mdd_atac_path, backed='r')
     mdd_peak_names = mdd_atac.var_names.str.split('-', expand=True)
@@ -643,7 +643,7 @@ def merged_dataset_setup(args, pretrain=False, cell_group='Cell type', hvg_only=
 
     dataset = dataset.replace('merged_','').replace('imputed_','')
 
-    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], f'merged_data/{dataset}')
+    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], f'merged_data/{dataset}')
 
 
     if args.genes_by_peaks_str is not None:
@@ -675,7 +675,7 @@ def merged_dataset_setup(args, pretrain=False, cell_group='Cell type', hvg_only=
 
 def toy_simulation_setup(args, pretrain=False, cell_group='dummy_celltype'):
 
-    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'toy_simulation')
+    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'toy_simulation')
 
     args.RNA_file = "toy_simulation_rna.h5ad"
     args.ATAC_file = "toy_simulation_atac.h5ad"
@@ -697,7 +697,7 @@ def toy_simulation_setup(args, pretrain=False, cell_group='dummy_celltype'):
 
 def splatter_sim_setup(args, pretrain=False, cell_group='Group'):
 
-    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], '10x_pbmc')
+    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], '10x_pbmc')
 
     args.RNA_file = "pbmcMultiome_rna_sim_gas.h5ad"
     args.ATAC_file = "pbmcMultiome_atac_sim.h5ad"
@@ -719,7 +719,7 @@ def splatter_sim_setup(args, pretrain=False, cell_group='Group'):
 
 def pbmc_multiome_setup(args, pretrain=False, cell_group='seurat_annotations', hvg_only=False, protein_coding_only=True, do_gas=False, return_type='loaders'):
 
-    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], '10x_pbmc')
+    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], '10x_pbmc')
 
     args.RNA_file = "pbmcMultiome_rna.h5ad"
     args.ATAC_file = "pbmcMultiome_atac.h5ad"
@@ -847,7 +847,7 @@ def pbmc_multiome_setup(args, pretrain=False, cell_group='seurat_annotations', h
 
 def mdd_setup(args, pretrain=None, cell_groups=dict({'atac':'ClustersMapped','rna':'Broad'}), hvg_only=True, protein_coding_only=True, do_gas=False, do_pseudobulk=False, return_type='loaders', overlapping_subjects_only=False, return_raw_data=False, dataset='mdd'):
 
-    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'mdd_data')
+    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'mdd_data')
 
     if args.genes_by_peaks_str is not None:
 
@@ -1198,7 +1198,7 @@ def CAtlas_Tabula_Sapiens_setup(args, pretrain=False, cell_group='major_cell_typ
 
 def Bm_1469_setup(args, cell_group='cell_type', hvg_only=True, protein_coding_only=False, do_gas=False):
 
-    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/1469')
+    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/1469')
 
     args.RNA_file = "rna.h5ad"
     args.ATAC_file = "atac.h5ad"
@@ -1265,10 +1265,10 @@ def Bm_P0_setup(args, cell_group='cell_type', hvg_only=True, protein_coding_only
 
     if args.machine == 'local':
         raise NotImplemented()
-        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/1469')
+        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/1469')
     elif args.machine == 'narval':
-        args.rna_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/P0/RNA')
-        args.atac_datapath = os.path.jon(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/P0/ATAC')
+        args.rna_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/P0/RNA')
+        args.atac_datapath = os.path.jon(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/P0/ATAC')
 
     args.RNA_file = "rna.h5ad"
     args.ATAC_file = "atac.h5ad"
@@ -1335,10 +1335,10 @@ def Bm_uterus_setup(args, cell_group='cell_type', hvg_only=True, protein_coding_
 
     if args.machine == 'local':
         raise NotImplementedError()
-        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/1469')
+        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/1469')
     elif args.machine == 'narval':
-        args.rna_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/uterus/RNA')
-        args.atac_datapath = os.path.jon(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/uterus/ATAC')
+        args.rna_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/uterus/RNA')
+        args.atac_datapath = os.path.jon(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/uterus/ATAC')
 
     args.RNA_file = "Uterus_Wang_2020.h5ad"
     args.ATAC_file = "adata_anno.h5ad"
@@ -1405,9 +1405,9 @@ def bm_bmmc_setup(args, pretrain=False, cell_group='cell_type', hvg_only=True, p
 
     if args.machine == 'local':
         assert NotImplementedError()
-        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/bmmc')
+        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/bmmc')
     elif args.machine == 'narval':
-        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/bmmc')
+        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/bmmc')
 
     args.RNA_file = "multiome_bmmc_site1_or_donor1_RNA.h5ad"
     args.ATAC_file = "multiome_bmmc_site1_or_donor1_ATAC_pmat.h5ad"
@@ -1473,9 +1473,9 @@ def bm_mouse_skin_setup(args, pretrain=False, cell_group='cell_type', hvg_only=T
 
     if args.machine == 'local':
         raise NotImplementedError()
-        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/mouse_skin')
+        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/mouse_skin')
     elif args.machine == 'narval':
-        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/mouse_skin')
+        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/mouse_skin')
 
     args.RNA_file = "shareseq_mouse_skin_rna.h5ad"      # also have mouse_skin_shareseq_rna_10k.h5ad
     args.ATAC_file = "shareseq_mouse_skin_atac.h5ad"    # also have mouse_skin_shareseq_atac_10k.h5ad
@@ -1541,9 +1541,9 @@ def bm_multiome_pbmc_10k_setup(args, pretrain=False, cell_group='cell_type', hvg
 
     if args.machine == 'local':
         raise NotImplementedError()
-        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/multiome_pbmc_10k')
+        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/multiome_pbmc_10k')
     elif args.machine == 'narval':
-        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/multiome_pbmc_10k')
+        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/multiome_pbmc_10k')
 
     args.RNA_file = "pbmc_10x_rna_public.h5ad"
     args.ATAC_file = "pbmc_10x_atac_public.h5ad"
@@ -1609,7 +1609,7 @@ def bm_hpap_setup(args, pretrain=False, cell_group='cell_type', hvg_only=True, p
 
     if args.machine == 'local':
         raise NotImplementedError()
-        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/hpap')
+        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'Benchmarking_single-cell_RNA_and_ATAC_data_integration_dataset/hpap')
     elif args.machine == 'narval':
         args.rna_datapath = os.path.join('benchmark_sc_multiomic_integration_dataset/hpap/unpaired_RNA')      # also have paired_RNA
         args.atac_datapath = os.path.join('benchmark_sc_multiomic_integration_dataset/hpap/unpaired_ATAC')    # also have paired_ATAC
@@ -1731,7 +1731,7 @@ def bm_hpap_setup(args, pretrain=False, cell_group='cell_type', hvg_only=True, p
 def Roussos_cerebral_cortex_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='roussos', \
     keep_group=['Fet', 'Inf', 'Child', 'Adol', 'Adult']):
 
-    datapath = os.path.join(os.environ['datapath'], 'Roussos_lab')
+    datapath = os.path.join(os.environ['DATAPATH'], 'Roussos_lab')
     args.rna_datapath = os.path.join(datapath, 'rna')
     args.atac_datapath = os.path.join(datapath, 'atac')
 
@@ -1900,8 +1900,8 @@ def Roussos_cerebral_cortex_setup(args, pretrain=False, cell_group='Cell type', 
 
 def snMultiome_388_human_brains_setup(args, pretrain=False, cell_group='cell_type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', dataset='388_human_brains'):
     
-    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], '388_human_brains')
-    celltypist_model_path = os.path.join(os.environ['datapath'], 'Adult_Human_PrefrontalCortex.pkl')
+    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], '388_human_brains')
+    celltypist_model_path = os.path.join(os.environ['DATAPATH'], 'Adult_Human_PrefrontalCortex.pkl')
 
     if args.genes_by_peaks_str is not None:
 
@@ -2051,8 +2051,8 @@ def snMultiome_388_human_brains_setup(args, pretrain=False, cell_group='cell_typ
 
 def snMultiome_388_human_brains_one_subject_setup(args, subject='RT00391N', pretrain=False, cell_group='cell_type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders'):
         
-        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], '388_human_brains', subject)
-        celltypist_model_path = os.path.join(os.environ['datapath'], 'Adult_Human_PrefrontalCortex.pkl')
+        args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], '388_human_brains', subject)
+        celltypist_model_path = os.path.join(os.environ['DATAPATH'], 'Adult_Human_PrefrontalCortex.pkl')
     
         if args.genes_by_peaks_str is not None:
     
@@ -2189,7 +2189,7 @@ def snMultiome_388_human_brains_one_subject_setup(args, subject='RT00391N', pret
 
 def AD_Anderson_et_al_setup(args, pretrain=False, cell_group='predicted.id', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='AD_Anderson_et_al'):
         
-    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'AD_Anderson_et_al/snMultiome')
+    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'AD_Anderson_et_al/snMultiome')
 
     if args.genes_by_peaks_str is not None:
 
@@ -2311,8 +2311,8 @@ def AD_Anderson_et_al_setup(args, pretrain=False, cell_group='predicted.id', hvg
 
 def PD_Adams_et_al_setup(args, pretrain=False, cell_group='cell_type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PD_Adams_et_al'):
     
-    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'PD_Adams_et_al')
-    celltypist_model_path = os.path.join(os.environ['datapath'], 'Adult_Human_PrefrontalCortex.pkl')
+    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'PD_Adams_et_al')
+    celltypist_model_path = os.path.join(os.environ['DATAPATH'], 'Adult_Human_PrefrontalCortex.pkl')
 
     if args.genes_by_peaks_str is not None:
 
@@ -2456,7 +2456,7 @@ def PD_Adams_et_al_setup(args, pretrain=False, cell_group='cell_type', hvg_only=
 
 def human_dlpfc_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='human_dlpfc'):
         
-    datapath = args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'human_dlpfc')
+    datapath = args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'human_dlpfc')
 
     if args.genes_by_peaks_str is not None:
 
@@ -2591,7 +2591,7 @@ def human_dlpfc_setup(args, pretrain=False, cell_group='subclass', hvg_only=True
 
 def sea_ad_setup(args, pretrain=False, cell_group='Subclass', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='sea_ad'):
         
-    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], 'SEA-AD')
+    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['DATAPATH'], 'SEA-AD')
 
     if args.genes_by_peaks_str is not None:
 
@@ -2712,7 +2712,7 @@ def sea_ad_setup(args, pretrain=False, cell_group='Subclass', hvg_only=True, pro
 
 def gene_activity_score_adata(atac, rna):
 
-    ensembl_path = os.path.join(os.environ['datapath'], 'ensembl_gene_positions.csv')
+    ensembl_path = os.path.join(os.environ['DATAPATH'], 'ensembl_gene_positions.csv')
 
     ## Merge gene coordinates to RNA
     results = pd.read_csv(ensembl_path)
@@ -2767,7 +2767,7 @@ def gene_activity_score_adata(atac, rna):
 
 def get_genes_by_peaks_str(datasets = ["Roussos_lab", "AD_Anderson_et_al", "human_dlpfc", "PD_Adams_et_al"]):
 
-    datapath = os.environ['datapath']
+    datapath = os.environ['DATAPATH']
 
     ## initialize dataframes
     genes_by_peaks_str_df = pd.DataFrame(index = datasets, columns = datasets)
