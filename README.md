@@ -13,8 +13,7 @@ It is highly recommended to install ECLARE within a virtual environment to avoid
     cd ECLARE
     ```
 
-2. Create a virtual environment:
-    Create virtual environment
+2. Create a virtual environment (use Python 3.9.6 for best reproducibility):
     ```bash
     python -m venv eclare_env
     ```
@@ -71,7 +70,7 @@ Before running the application, you need to set up your configuration file. Foll
     ```
 
 ### Requirements
-- Python ≥ 3.9
+- Python ≥ 3.9 (3.9.6 for best reproducibility)
 - See `setup.py` for a complete list of dependencies
 
 ## ECLARE framework
