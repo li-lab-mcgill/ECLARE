@@ -2,13 +2,12 @@ import anndata
 import torch
 import numpy as np
 from scipy.sparse import csr_matrix
-from scib_metrics import ilisi_knn, clisi_knn, nmi_ari_cluster_labels_leiden
-from sklearn.model_selection import StratifiedKFold
+from scib_metrics import ilisi_knn, nmi_ari_cluster_labels_leiden
 from pandas import DataFrame
 
 from scanpy.tl import leiden
 from scanpy.pp import neighbors
-from scib_metrics import silhouette_label, silhouette_batch
+from scib_metrics import silhouette_label
 
 from jax import jit
 import jax.numpy as jnp
