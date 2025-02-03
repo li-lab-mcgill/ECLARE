@@ -895,7 +895,7 @@ def mdd_setup(args, pretrain=None, cell_groups=dict({'atac':'ClustersMapped','rn
     elif return_type == 'data':
         return rna, atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
     
-def pfc_zhu_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='roussos', \
+def pfc_zhu_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_Zhu', \
     keep_group=['Fet', 'Inf', 'Child', 'Adol', 'Adult']):
 
     rna_datapath = atac_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu')
@@ -1062,7 +1062,7 @@ def pfc_zhu_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, p
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
       
-def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='AD_Anderson_et_al'):
+def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Anderson'):
         
     rna_datapath = atac_datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Anderson')
 
@@ -1183,7 +1183,7 @@ def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_on
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
 
-def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PD_Adams_et_al'):
+def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='Midbrain_Adams'):
     
     rna_datapath = atac_datapath = os.path.join(os.environ['DATAPATH'], 'Midbrain_Adams')
     celltypist_model_path = os.path.join(os.environ['DATAPATH'], 'Adult_Human_PrefrontalCortex.pkl')
@@ -1327,7 +1327,7 @@ def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
 
-def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='human_dlpfc'):
+def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Ma'):
         
     datapath = rna_datapath = atac_datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Ma')
 
