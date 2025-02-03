@@ -9,16 +9,16 @@ active_environment: "local_directories"
 
 # Environment-specific directories
 local_directories:
-  ECLARE_root: "/Users/dmannk/cisformer/ECLARE"
-  outpath: "/Users/dmannk/cisformer/outputs"
-  datapath: "/Users/dmannk/cisformer/data"
+  ECLARE_ROOT: "/Users/dmannk/cisformer/ECLARE"
+  OUTPATH: "/Users/dmannk/cisformer/outputs"
+  DATAPATH: "/Users/dmannk/cisformer/data"
 
 narval_directories:
-  ECLARE_root: "/home/dmannk/projects/def-liyue/dmannk/CLARE"
-  outpath: "/home/dmannk/scratch"
-  datapath: "/home/dmannk/projects/def-liyue/dmannk/data"
+  ECLARE_ROOT: "/home/dmannk/projects/def-liyue/dmannk/ECLARE"
+  OUTPATH: "/home/dmannk/scratch"
+  DATAPATH: "/home/dmannk/projects/def-liyue/dmannk/data"
 
 mcb_directories:
-  ECLARE_root: "/home/mcb/users/dmannk/scMultiCLIP/CLARE"
-  outpath: "/home/mcb/users/dmannk/scMultiCLIP/outputs"
-  datapath: "/home/mcb/users/dmannk/scMultiCLIP/data"
+  ECLARE_ROOT: "/home/mcb/users/dmannk/scMultiCLIP/ECLARE"
+  OUTPATH: "/home/mcb/users/dmannk/scMultiCLIP/outputs"
+  DATAPATH: "/home/mcb/users/dmannk/scMultiCLIP/data"

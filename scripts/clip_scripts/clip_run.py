@@ -13,7 +13,7 @@ from eclare.run_utils import run_CLIP
 if __name__ == "__main__":
 
     parser = ArgumentParser(description='CAtlas_celltyping')
-    parser.add_argument('--outdir', type=str, default=os.environ.get('outpath', None),
+    parser.add_argument('--outdir', type=str, default=os.environ.get('OUTPATH', None),
                         help='output directory')
     parser.add_argument('--source_dataset', type=str, default='AD_Anderson_et_al',
                         help='current options: CAtlas_Tabula_Sapiens, pbmc_multiome, pbmc_multiome_setup, splatter_sim, toy_simulation')
@@ -147,7 +147,7 @@ if __name__ == "__main__":
 
         tune_id = str(args.tune_id)
         tune_job = 'clip_tune_' + tune_id
-        tune_job_path = os.path.join(os.environ.get('outpath'), tune_job)
+        tune_job_path = os.path.join(os.environ.get('OUTPATH'), tune_job)
 
         if args.use_tune:
             trial_df_path = os.path.join(tune_job_path, 'tune_optuna_trials.csv')

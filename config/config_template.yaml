@@ -2,5 +2,7 @@
 active_environment: "local_directories"
 
 local_directories:
-  outpath: "/path/to/outputs"
-  datapath: "/path/to/data"
+  ECLARE_ROOT: "/path/to/ECLARE"
+  OUTPATH: "/path/to/outputs"
+  DATAPATH: "/path/to/data"
+  NAMPATH: "/path/to/neural-additive-models-pt"

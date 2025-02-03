@@ -155,7 +155,7 @@ if __name__ == '__main__':
         sc.pp.normalize_total(rna_celltypist, target_sum=1e4, exclude_highly_expressed=False)
         sc.pp.log1p(rna_celltypist)
 
-        celltypist_model_path = os.path.join(os.environ['datapath'], 'Adult_Human_PrefrontalCortex.pkl')
+        celltypist_model_path = os.path.join(os.environ['DATAPATH'], 'Adult_Human_PrefrontalCortex.pkl')
         predictions = celltypist.annotate(rna_celltypist, majority_voting=False, model=celltypist_model_path)
 
         ## Keep top N cell types

@@ -7,39 +7,45 @@ import os
 import sys
 import subprocess
 
-## Set ECLARE_root to the root directory of the ECLARE project.
-ECLARE_ROOT = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL)
-ECLARE_ROOT = ECLARE_ROOT.strip().decode()
-ECLARE_ROOT = Path(ECLARE_ROOT)
-print(f"ECLARE_root detected: {ECLARE_ROOT}")
+def initialize_environment():
 
-## Import ECLARE_root env variable.
-if ECLARE_ROOT is None:
-    raise KeyError(
-        "ECLARE_root environment variable is not set. Please set it to the root directory of the ECLARE project. "
-        "Example, from terminal: export ECLARE_root=/path/to/ECLARE"
-    )
+    ## Set ECLARE_ROOT to the root directory of the ECLARE project.
+    ECLARE_ROOT = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL)
+    ECLARE_ROOT = ECLARE_ROOT.strip().decode()
+    ECLARE_ROOT = Path(ECLARE_ROOT)
+    print(f"ECLARE_ROOT detected: {ECLARE_ROOT}")
 
-# Construct the path to the config file
-config_file = ECLARE_ROOT / "config" / "config.yaml"
+    ## Import ECLARE_ROOT env variable.
+    if ECLARE_ROOT is None:
+        raise KeyError(
+            "ECLARE_ROOT environment variable is not set. Please set it to the root directory of the ECLARE project. "
+            "Example, from terminal: export ECLARE_ROOT=/path/to/ECLARE"
+        )
 
-# Import configuration loader
-sys.path.insert(0, str(ECLARE_ROOT))  # Add ECLARE_root to searchable paths
-from config.config import ConfigLoader  # Absolute import
+    # Construct the path to the config file
+    config_file = ECLARE_ROOT / "config" / "config.yaml"
 
-# Initialize ConfigLoader
-config = ConfigLoader(config_file=Path(str(config_file)))
+    # Import configuration loader
+    sys.path.insert(0, str(ECLARE_ROOT))  # Add ECLARE_ROOT to searchable paths
+    from config.config import ConfigLoader  # Absolute import
 
-# Expose configuration parameters
-ECLARE_ROOT     = config.get_directory('ECLARE_root') # redundant, but useful for clarity
-OUTPATH         = config.get_directory('outpath')
-DATAPATH        = config.get_directory('datapath')
-NAMPATH         = os.path.join(ECLARE_ROOT, 'neural-additive-models-pt')
+    # Initialize ConfigLoader
+    config = ConfigLoader(config_file=Path(str(config_file)))
 
-os.environ['ECLARE_root']   = str(ECLARE_ROOT)
-os.environ['outpath']       = str(OUTPATH)
-os.environ['datapath']      = str(DATAPATH)
-os.environ['nampath']       = str(NAMPATH)
+    # Expose configuration parameters
+    ECLARE_ROOT     = config.get_directory('ECLARE_ROOT') # redundant, but useful for clarity
+    OUTPATH         = config.get_directory('OUTPATH')
+    DATAPATH        = config.get_directory('DATAPATH')
+    NAMPATH         = os.path.join(ECLARE_ROOT, 'neural-additive-models-pt')
+
+    os.environ['ECLARE_ROOT']   = str(ECLARE_ROOT)
+    os.environ['OUTPATH']       = str(OUTPATH)
+    os.environ['DATAPATH']      = str(DATAPATH)
+    os.environ['NAMPATH']       = str(NAMPATH)
+
+    return ECLARE_ROOT, OUTPATH, DATAPATH, NAMPATH
+
+ECLARE_ROOT, OUTPATH, DATAPATH, NAMPATH = initialize_environment()
 
 from .models import CLIP, load_CLIP_model
 from .setup_utils import return_setup_func_from_dataset, mdd_setup, teachers_setup, merged_dataset_setup
