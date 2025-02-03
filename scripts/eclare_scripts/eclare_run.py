@@ -13,7 +13,7 @@ from ott.geometry.geometry import Geometry
 import jax.numpy as jnp
 
 from eclare import \
-    CLIP, Knowledge_distillation_fn, load_CLIP_model, return_setup_func_from_dataset, mdd_setup, align_metrics, fetch_data_from_loaders, teachers_setup, ct_losses, save_latents
+    CLIP, Knowledge_distillation_fn, load_CLIP_model, return_setup_func_from_dataset, align_metrics, fetch_data_from_loaders, teachers_setup, ct_losses, save_latents
 
 
 if __name__ == "__main__":
@@ -21,8 +21,8 @@ if __name__ == "__main__":
     parser = ArgumentParser(description='')
     parser.add_argument('--outdir', type=str, default=os.environ.get('OUTPATH', None),
                         help='output directory')
-    parser.add_argument('--slurm_job_ids', default=['37119283'], #['34887192', '34870779', '35175388', '35168470'], # 35318790 (SEA-AD) error when doing data[valid_idx].copy()
-                        help='list of datasets to merge')
+    parser.add_argument('--clip_job_id', type=str, default=None,
+                        help='Job ID of CLIP training')
     parser.add_argument('--n_epochs', type=int, default=2,
                         help='number of epochs')
     parser.add_argument('--loss_type', type=str, default='knowledge_distillation',
@@ -71,28 +71,21 @@ if __name__ == "__main__":
     outpath = os.environ.get('OUTPATH', args.outdir)
 
     print('Extracting data')
-    slurm_job_ids = args.slurm_job_ids if isinstance(args.slurm_job_ids, list) else [args.slurm_job_ids]
-    if len(slurm_job_ids) > 1:
-        model_paths = [os.path.join(outpath, f'triplet_align_{slurm_job_id}', 'model.pt') for slurm_job_id in slurm_job_ids]
 
+    if args.target_dataset is not None:
+        target_dataset_og = args.target_dataset
+        replicate_idx = str(args.replicate_idx)
+
+        if args.source_dataset is not None:
+            source_dataset_og = args.source_dataset
+            model_paths = glob(os.path.join(outpath, f'clip_*{args.clip_job_id}/{target_dataset_og}/{source_dataset_og}/{replicate_idx}/model.pt'))
+        else:
+            model_paths = glob(os.path.join(outpath, f'clip_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model.pt'))
+
+        if len(model_paths) == 0:
+            model_paths = glob(os.path.join(outpath, f'clip_*{args.clip_job_id}/{target_dataset_og}/{source_dataset_og}/{replicate_idx}/model.pt'))
     else:
-        if args.target_dataset is not None:
-            target_dataset_og = args.target_dataset
-            replicate_idx = str(args.replicate_idx)
-
-            if args.source_dataset is not None:
-                source_dataset_og = args.source_dataset
-                model_paths = glob(os.path.join(outpath, f'clip_*{slurm_job_ids[0]}/{target_dataset_og}/{source_dataset_og}/{replicate_idx}/model.pt'))
-            else:
-                model_paths = glob(os.path.join(outpath, f'clip_*{slurm_job_ids[0]}/{target_dataset_og}/**/{replicate_idx}/model.pt'))
-
-            if len(model_paths) == 0:
-                model_paths = glob(os.path.join(outpath, f'clip_*{slurm_job_ids[0]}/{target_dataset_og}/{source_dataset_og}/{replicate_idx}/model.pt'))
-        
-        else:  # for older job, one less sub-directory deep
-            model_paths = glob(os.path.join(outpath, f'triplet_align_{slurm_job_ids[0]}/**/model.pt'))
-
-    #model_paths = [model_paths[0], model_paths[1]]
+        raise ValueError(f'Need to specify target dataset')
 
     ## Instantiate student model args dict from one of the source datasets, later overwrite with target dataset
     _, student_model_args_dict = load_CLIP_model(model_paths[0], device=device)
@@ -120,9 +113,6 @@ if __name__ == "__main__":
 
     student_rna_train_loader, student_atac_train_loader, student_atac_train_num_batches, student_atac_train_n_batches_str_length, student_atac_train_n_epochs_str_length, student_rna_valid_loader, student_atac_valid_loader, student_atac_valid_num_batches, student_atac_valid_n_batches_str_length, student_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
         student_setup_func(student_model_args_dict['args'], pretrain=None, return_type='loaders')
-    
-    mdd_rna_train_loader, mdd_atac_train_loader, mdd_atac_train_num_batches, mdd_atac_train_n_batches_str_length, mdd_atac_train_n_epochs_str_length, mdd_rna_valid_loader, mdd_atac_valid_loader, mdd_atac_valid_num_batches, mdd_atac_valid_n_batches_str_length, mdd_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
-        mdd_setup(student_model_args_dict['args'], overlapping_subjects_only=False, pretrain=None, return_type='loaders')
 
     ## Create student model
     student_model = CLIP(**student_model_args_dict, trial=None).to(device=device)
@@ -184,17 +174,9 @@ if __name__ == "__main__":
             student_rna_latents_valid   = student_model(student_rna_cells_valid, modality='rna', task='align')[0]
             student_atac_latents_valid  = student_model(student_atac_cells_valid, modality='atac', task='align')[0]
 
-            ## Get MDD data and latents
-            mdd_rna_cells_valid, mdd_rna_celltypes_valid, mdd_atac_cells_valid, mdd_atac_celltypes_valid, _, _        = fetch_data_from_loaders(mdd_rna_valid_loader, mdd_atac_valid_loader, paired=False, subsample=args.valid_subsample)
-            mdd_rna_latents_valid   = student_model(mdd_rna_cells_valid, modality='rna', task='align')[0]
-            mdd_atac_latents_valid  = student_model(mdd_atac_cells_valid, modality='atac', task='align')[0]
-
             ## normalize latents (already being normalized in loss_fn)
             student_rna_latents_valid = torch.nn.functional.normalize(student_rna_latents_valid, p=2, dim=1)
             student_atac_latents_valid = torch.nn.functional.normalize(student_atac_latents_valid, p=2, dim=1)    
-
-            mdd_rna_latents_valid = torch.nn.functional.normalize(mdd_rna_latents_valid, p=2, dim=1)
-            mdd_atac_latents_valid = torch.nn.functional.normalize(mdd_atac_latents_valid, p=2, dim=1)
             
             ## loop through teachers
             for dataset in datasets:
@@ -298,14 +280,6 @@ if __name__ == "__main__":
                 foscttm_score_ct.name = f'{epoch+1}'
                 student_foscttm_per_ct_valid = pd.concat([student_foscttm_per_ct_valid, foscttm_score_ct], axis=1)
                 epoch_foscttm[target_dataset_og] = foscttm_score.item()
-            
-                ## Get metrics for MDD data
-                ilisis_mdd, clisis_mdd, nmi_mdd, ari_mdd, diag_concentration_minimizer_mdd, foscttm_score_mdd, rank_score_mdd, acc_mdd, acc_top5_mdd, _, _, _, _, _, _, _ = \
-                    align_metrics(student_model, mdd_rna_latents_valid, mdd_rna_celltypes_valid, mdd_atac_latents_valid, mdd_atac_celltypes_valid, paired=False, is_latents=True)
-
-                epoch_ilisis['MDD'], epoch_clisis['MDD'], epoch_nmi['MDD'], epoch_ari['MDD'] = ilisis_mdd, clisis_mdd, nmi_mdd, ari_mdd
-                epoch_rank_score['MDD'] = rank_score_mdd
-
 
             if args.save_latents:
                 save_latents(student_rna_latents_valid, student_atac_latents_valid, student_rna_celltypes_valid, student_atac_celltypes_valid, epoch, args.n_epochs, args.outdir)
@@ -458,14 +432,13 @@ if __name__ == "__main__":
         row = {'Epoch': epoch + 1}
         for dataset in datasets+[target_dataset_og]:
 
-            if dataset != 'MDD':
-                row[f'Loss-{dataset}'] = epoch_losses[dataset] / num_batches
-                row[f'Loss_align-{dataset}'] = epoch_align_loss[dataset] / num_batches
-                row[f'Loss_distil-{dataset}'] = epoch_distil_loss[dataset] / num_batches
+            row[f'Loss-{dataset}'] = epoch_losses[dataset] / num_batches
+            row[f'Loss_align-{dataset}'] = epoch_align_loss[dataset] / num_batches
+            row[f'Loss_distil-{dataset}'] = epoch_distil_loss[dataset] / num_batches
 
-                row[f'Loss_valid-{dataset}'] = epoch_losses_valid[dataset]
-                row[f'Loss_align_valid-{dataset}'] = epoch_align_losses_valid[dataset]
-                row[f'Loss_distil_valid-{dataset}'] = epoch_distil_losses_valid[dataset]
+            row[f'Loss_valid-{dataset}'] = epoch_losses_valid[dataset]
+            row[f'Loss_align_valid-{dataset}'] = epoch_align_losses_valid[dataset]
+            row[f'Loss_distil_valid-{dataset}'] = epoch_distil_losses_valid[dataset]
             
             if (epoch == 0) or np.isin(dataset, [target_dataset_og]).item():
                 row[f'iLISI-{dataset}'] = epoch_ilisis[dataset]
@@ -476,13 +449,6 @@ if __name__ == "__main__":
                 if paired:
                     row[f'FOSCTTM-{dataset}'] = epoch_foscttm[dataset]
                     row[f'Rank_score-{dataset}'] = epoch_rank_score[dataset]
-
-        if paired:
-            row[f'iLISI-MDD'] = epoch_ilisis['MDD']
-            row[f'cLISI-MDD'] = epoch_clisis['MDD']
-            row[f'NMI-MDD'] = epoch_nmi['MDD']
-            row[f'ARI-MDD'] = epoch_ari['MDD']
-            row[f'Rank_score-MDD'] = epoch_rank_score['MDD']
             
         # Append the row to the DataFrame
         log_df = pd.concat([log_df, pd.DataFrame([row])], ignore_index=True)
