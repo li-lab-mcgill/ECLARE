@@ -4,8 +4,6 @@ This repository is dedicated to <ins>**E**</ins>nsemble knowledge distillation f
 
 ## Installation
 
-It is highly recommended to install ECLARE within a virtual environment to avoid dependency conflicts.
-
 1. First, clone the repository:
 
     ```bash
