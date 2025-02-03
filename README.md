@@ -76,3 +76,6 @@ Before running the application, you need to set up your configuration file. Foll
   <img src="fig1_landscape_no_alpha.png" alt="ECLARE Framework"/>
 </div>
 
+## Sample data
+Sample data is available from Zenodo at https://doi.org/10.5281/zenodo.14794845.
+

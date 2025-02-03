@@ -6,7 +6,9 @@ import pandas as pd
 import optuna
 from shutil import copy2
 
-from eclare import merged_dataset_setup, return_setup_func_from_dataset, run_CLIP, study_summary
+#from eclare import merged_dataset_setup, return_setup_func_from_dataset, run_CLIP, study_summary
+from eclare import merged_dataset_setup, return_setup_func_from_dataset, study_summary
+from eclare.run_utils import run_CLIP
 
 if __name__ == "__main__":
 
@@ -55,8 +57,8 @@ if __name__ == "__main__":
                         help='flag to indicate whether only adult cells are considered')
     parser.add_argument('--valid_freq', type=int, default=1, metavar='V',
                         help='number of epochs after which performance evaluated on validation set')
-    parser.add_argument('--slurm_id', type=str, default='29945910',
-                        help='slurm ID of Optuna hyperparameter tuning')
+    parser.add_argument('--tune_id', type=str, default=None,
+                        help='ID of job for Optuna hyperparameter tuning')
     parser.add_argument('--ddp', action='store_true', default=False,
                         help='Flag to activate DDP for multi-GPU training')
     parser.add_argument('--subsample', type=int, default=-1,
@@ -129,64 +131,57 @@ if __name__ == "__main__":
     else:
         _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
             target_setup_func(args, pretrain=None, return_type='loaders', dataset=args.target_dataset)
-        
-    slurm_job_path = os.path.join(os.environ.get('outpath'))
             
     ## Run training loops
-    if (not args.tune_hyperparameters) and (args.slurm_id is not None):
+    if (not args.tune_hyperparameters) and (args.tune_id is None):
 
-        slurm_id = str(args.slurm_id)
-        slurm_job = 'triplet_align_tune_' + slurm_id
-        slurm_job_path = os.path.join(slurm_job_path, slurm_job)
+        tuned_hyperparameters = {}
+
+        model = run_CLIP(None, args, genes_to_peaks_binary_mask,
+                               rna_train_loader, atac_train_loader, rna_valid_loader, atac_valid_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length,\
+                               target_atac_valid_loader, target_rna_valid_loader, \
+                               tuned_hyperparameters, outdir=args.outdir, \
+                                do_pretrain_train=False, do_pretrain_valid=False, do_align_train=True, do_align_valid=True)
+                         
+    elif (not args.tune_hyperparameters) and (args.tune_id is not None):
+
+        tune_id = str(args.tune_id)
+        tune_job = 'clip_tune_' + tune_id
+        tune_job_path = os.path.join(os.environ.get('outpath'), tune_job)
 
         if args.use_tune:
-            trial_df_path = os.path.join(slurm_job_path, 'tune_optuna_trials.csv')
+            trial_df_path = os.path.join(tune_job_path, 'tune_optuna_trials.csv')
             trial_df = pd.read_csv(trial_df_path, index_col=0)
         elif args.use_warmstart:
-            trial_df_path = os.path.join(slurm_job_path, 'warmstart_optuna_trials.csv')
+            trial_df_path = os.path.join(tune_job_path, 'warmstart_optuna_trials.csv')
             trial_df = pd.read_csv(trial_df_path, index_col=0)
         else:
             print('warmstart vs tune not specified, default to concat of tune and warmstart trials')
 
-            trial_df_path_warmstart = os.path.join(slurm_job_path, 'warmstart_optuna_trials.csv')
+            trial_df_path_warmstart = os.path.join(tune_job_path, 'warmstart_optuna_trials.csv')
             trial_df_warmstart = pd.read_csv(trial_df_path_warmstart, index_col=0)
 
-            trial_df_path_tune      = os.path.join(slurm_job_path, 'tune_optuna_trials.csv')
+            trial_df_path_tune      = os.path.join(tune_job_path, 'tune_optuna_trials.csv')
             trial_df_tune = pd.read_csv(trial_df_path_tune, index_col=0)
 
             trial_df = pd.concat([trial_df_warmstart, trial_df_tune], axis=0)
         
         tuned_hyperparameters = dict(trial_df.iloc[trial_df['value'].argmin()])
 
-        ## add pretrain argument to tuned_hyperparameters
-        #pretrain = tuned_hyperparameters.get('params_pretrain', False)
-        #tuned_hyperparameters['params_pretrain'] = pretrain
-        
-        #if pretrain:
-        #    pretrain_train_loader, pretrain_train_num_batches, pretrain_valid_loader, pretrain_valid_num_batches, n_peaks, n_genes = \
-        #else:
-        
-        ## dataset setup - unsure why previously had different setups for pretrain vs not pretrain...
-        ## instantiate, train and return model
         model = run_CLIP(None, args, genes_to_peaks_binary_mask,
                                rna_train_loader, atac_train_loader, rna_valid_loader, atac_valid_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length,\
                                target_atac_valid_loader, target_rna_valid_loader, \
                                tuned_hyperparameters, outdir=args.outdir, \
                                 do_pretrain_train=False, do_pretrain_valid=False, do_align_train=True, do_align_valid=True)
 
-        ## Save analysis arguments
-        #with open(os.path.join(args.outdir,'model_arguments.pkl'), 'wb') as f:
-        #    pkl_dump([n_peaks, n_genes, atac_valid_idx, rna_valid_idx, args], f)
 
-
-        ## copy warmstart_df and tune_df to slurm_job_path, regardless of use_tune and use_warmstart
         try:
-            copy2(os.path.join(slurm_job_path, 'tune_optuna_trials.csv'), args.outdir)
+            copy2(os.path.join(tune_job_path, 'tune_optuna_trials.csv'), args.outdir)
         except FileNotFoundError:
             pass
 
         try:
-            copy2(os.path.join(slurm_job_path, 'warmstart_optuna_trials.csv'), args.outdir)
+            copy2(os.path.join(tune_job_path, 'warmstart_optuna_trials.csv'), args.outdir)
         except FileNotFoundError:
             pass
 
@@ -215,17 +210,6 @@ if __name__ == "__main__":
 
         ## tune
         print('tune')
-
-        '''
-        if not align_setup_completed:
-            if args.source_dataset == 'CAtlas_Tabula_Sapiens':
-                align_setup_completed, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
-                    CAtlas_Tabula_Sapiens_setup(args, pretrain=False)
-                
-            elif args.source_dataset == 'pbmc_multiome':
-                rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
-                    pbmc_multiome_setup(args, pretrain=False) 
-        '''
                 
         #pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2)
         pruner = optuna.pruners.NopPruner()
