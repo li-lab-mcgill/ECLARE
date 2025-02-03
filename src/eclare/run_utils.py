@@ -15,33 +15,33 @@ from eclare.data_utils import fetch_data_from_loaders
 from eclare.eval_utils import foscttm_moscot
 
 def run_CLIP(trial,
-                       args: Namespace,
-                       genes_to_peaks_binary_mask,
-                       rna_train_loader,
-                       atac_train_loader,
-                       rna_valid_loader,
-                       atac_valid_loader,
-                       atac_train_num_batches,
-                       atac_train_n_batches_str_length,
-                       atac_train_n_epochs_str_length,
-                       atac_valid_num_batches,
-                       atac_valid_n_batches_str_length,
-                       atac_valid_n_epochs_str_length,
-                       target_atac_loader,
-                       target_rna_loader,
-                       tuned_hyperparameters: dict = {},
-                       do_pretrain_train: bool = True,
-                       do_pretrain_valid: bool = True,
-                       do_pretrain_train_eval: bool = False,
-                       do_align_train: bool = True,
-                       do_align_valid: bool = True,
-                       do_align_train_eval: bool = False,
-                       outdir: str = None,
-                       ):
+    args: Namespace,
+    genes_to_peaks_binary_mask,
+    rna_train_loader,
+    atac_train_loader,
+    rna_valid_loader,
+    atac_valid_loader,
+    atac_train_num_batches,
+    atac_train_n_batches_str_length,
+    atac_train_n_epochs_str_length,
+    atac_valid_num_batches,
+    atac_valid_n_batches_str_length,
+    atac_valid_n_epochs_str_length,
+    target_atac_loader,
+    target_rna_loader,
+    tuned_hyperparameters: dict = {},
+    do_pretrain_train: bool = True,
+    do_pretrain_valid: bool = True,
+    do_pretrain_train_eval: bool = False,
+    do_align_train: bool = True,
+    do_align_valid: bool = True,
+    do_align_train_eval: bool = False,
+    outdir: str = None,
+    ):
 
 
     ## Model setup
-    if (not args.tune_hyperparameters) and (args.slurm_id is not None):
+    if (not args.tune_hyperparameters):
         print('parameters already defined')
         trial = None
         
