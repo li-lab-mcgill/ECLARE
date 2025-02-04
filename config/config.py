@@ -147,8 +147,7 @@ class ConfigLoader:
         env_mapping = {
             'ECLARE_ROOT': 'ECLARE_ROOT',
             'OUTPATH': 'OUTPATH',
-            'DATAPATH': 'DATAPATH',
-            'NAMPATH': 'NAMPATH'
+            'DATAPATH': 'DATAPATH'
         }
 
         for key, env_var in env_mapping.items():
