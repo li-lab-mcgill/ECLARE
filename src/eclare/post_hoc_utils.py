@@ -16,10 +16,9 @@ from ott.solvers.linear.continuous_barycenter import FreeWassersteinBarycenter
 from ott.problems.quadratic.gw_barycenter import GWBarycenterProblem
 from ott.solvers.quadratic.gw_barycenter import GromovWassersteinBarycenter
 
-from models import load_CLIP_model
-from setup_utils import return_setup_func_from_dataset
-from setup_utils import \
-    snMultiome_388_human_brains_one_subject_setup, snMultiome_388_human_brains_setup, mdd_setup, Roussos_cerebral_cortex_setup, human_dlpfc_setup
+from eclare import load_CLIP_model
+from eclare import return_setup_func_from_dataset
+from eclare import mdd_setup
 
 
 def get_model_and_data(model_path, load_mdd=False):
