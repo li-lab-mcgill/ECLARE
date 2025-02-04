@@ -16,7 +16,7 @@ cp ${ECLARE_ROOT}/scripts/eclare_scripts/eclare_run.py ${ECLARE_ROOT}/scripts/ec
 
 # Read datasets from a CSV file
 csv_file=${DATAPATH}/'genes_by_peaks_str_samples.csv'
-datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
+target_datasets=('PFC_Zhu')
 
 # Define random states
 N=1
@@ -33,7 +33,7 @@ clip_job_id=$2
 echo "Total epochs: $total_epochs"
 echo "CLIP job ID: $clip_job_id"
 
-for target_dataset in "${datasets[@]}"; do
+for target_dataset in "${target_datasets[@]}"; do
     echo "=== Target dataset: $target_dataset ==="
 
     # Prepare arguments for xargs

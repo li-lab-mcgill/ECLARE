@@ -1,8 +1,3 @@
-#%%
-from post_hoc_utils import *
-from models import load_CLIP_model
-from losses_and_distances_utils import clip_loss
-
 import torch
 import numpy as np
 import ot
@@ -10,6 +5,9 @@ import argparse
 import os
 import pickle as pkl
 from scipy.sparse import csr_matrix
+
+from eclare.post_hoc_utils import *
+from eclare.losses_and_distances_utils import clip_loss
 
 import socket
 hostname = socket.gethostname()

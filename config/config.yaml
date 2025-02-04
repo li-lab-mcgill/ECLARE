@@ -5,7 +5,7 @@ hostname_mapping:
   "/(mcb|buckeridge|hlr-cfi|ri-muhc|wh|yl)/": "mcb_directories"                   # Regex pattern for MCB hosts
 
 # Optional: Default active environment if hostname detection fails
-active_environment: "local_directories"
+active_environment: "mcb_directories"
 
 # Environment-specific directories
 local_directories:

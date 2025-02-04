@@ -186,8 +186,7 @@ setup(
     include_package_data=True,
     entry_points={
         'console_scripts': [
-            # If you want to create command-line scripts, specify them here
-            # 'command_name=module:function',
+            'ECLARE=ECLARE:main',
         ],
     },
     author='Dylan Mann-Krzisnik',

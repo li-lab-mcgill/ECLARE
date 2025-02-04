@@ -1,6 +1,7 @@
-# Optional: Default active environment if hostname detection fails
+## Active environment
 active_environment: "local_directories"
 
+## ENV directories based on active environment. Can create more than one environment (e.g. remote server)
 local_directories:
   ECLARE_ROOT: "/path/to/ECLARE"
   OUTPATH: "/path/to/outputs"

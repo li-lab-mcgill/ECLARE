@@ -2,51 +2,6 @@
 eclare: Main package for the ECLARE project.
 """
 
-from pathlib import Path
-import os
-import sys
-import subprocess
-
-def initialize_environment():
-
-    ## Set ECLARE_ROOT to the root directory of the ECLARE project.
-    ECLARE_ROOT = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], stderr=subprocess.DEVNULL)
-    ECLARE_ROOT = ECLARE_ROOT.strip().decode()
-    ECLARE_ROOT = Path(ECLARE_ROOT)
-    print(f"ECLARE_ROOT detected: {ECLARE_ROOT}")
-
-    ## Import ECLARE_ROOT env variable.
-    if ECLARE_ROOT is None:
-        raise KeyError(
-            "ECLARE_ROOT environment variable is not set. Please set it to the root directory of the ECLARE project. "
-            "Example, from terminal: export ECLARE_ROOT=/path/to/ECLARE"
-        )
-
-    # Construct the path to the config file
-    config_file = ECLARE_ROOT / "config" / "config.yaml"
-
-    # Import configuration loader
-    sys.path.insert(0, str(ECLARE_ROOT))  # Add ECLARE_ROOT to searchable paths
-    from config.config import ConfigLoader  # Absolute import
-
-    # Initialize ConfigLoader
-    config = ConfigLoader(config_file=Path(str(config_file)))
-
-    # Expose configuration parameters
-    ECLARE_ROOT     = config.get_directory('ECLARE_ROOT') # redundant, but useful for clarity
-    OUTPATH         = config.get_directory('OUTPATH')
-    DATAPATH        = config.get_directory('DATAPATH')
-    NAMPATH         = os.path.join(ECLARE_ROOT, 'neural-additive-models-pt')
-
-    os.environ['ECLARE_ROOT']   = str(ECLARE_ROOT)
-    os.environ['OUTPATH']       = str(OUTPATH)
-    os.environ['DATAPATH']      = str(DATAPATH)
-    os.environ['NAMPATH']       = str(NAMPATH)
-
-    return ECLARE_ROOT, OUTPATH, DATAPATH, NAMPATH
-
-ECLARE_ROOT, OUTPATH, DATAPATH, NAMPATH = initialize_environment()
-
 from .models import CLIP, load_CLIP_model
 from .setup_utils import return_setup_func_from_dataset, mdd_setup, teachers_setup, merged_dataset_setup
 from .eval_utils import align_metrics, compute_mdd_eval_metrics, foscttm_moscot
@@ -81,9 +36,5 @@ __all__ = [
     'Knowledge_distillation_fn',
     'ct_losses',
     'save_latents',
-    'teachers_setup',
-    'ECLARE_ROOT',
-    'OUTPATH',
-    'DATAPATH',
-    'NAMPATH',
+    'teachers_setup'
 ]
