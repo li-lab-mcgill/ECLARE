@@ -6,4 +6,3 @@ local_directories:
   ECLARE_ROOT: "/path/to/ECLARE"
   OUTPATH: "/path/to/outputs"
   DATAPATH: "/path/to/data"
-  NAMPATH: "/path/to/neural-additive-models-pt"
