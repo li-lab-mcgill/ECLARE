@@ -470,7 +470,7 @@ if __name__ == "__main__":
     last_epoch_log_df = last_epoch_log_df.rename(index={'ilisi': 'ilisis', 'clisi': 'clisis', 'foscttm': 'foscttm_score'})
 
     if len(datasets) > 1:
-        last_epoch_log_df.to_csv(os.path.join(args.outdir, 'scMultiCLIP_metrics_target_valid.csv'))
+        last_epoch_log_df.to_csv(os.path.join(args.outdir, 'eclare_metrics_target_valid.csv'))
     else:
         last_epoch_log_df.to_csv(os.path.join(args.outdir, 'kd_clip_metrics_target_valid.csv'))
 

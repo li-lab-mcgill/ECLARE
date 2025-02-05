@@ -82,9 +82,9 @@ def get_latents(model, rna, atac, return_tensor=False):
     rna = torch.from_numpy(rna.X.toarray()).float()
     atac = torch.from_numpy(atac.X.toarray()).float()
 
-    with torch.inference_mode():
-        _, rna_latent = model(rna, modality='rna', task='pretrain')
-        _, atac_latent = model(atac, modality='atac', task='pretrain')
+    #with torch.inference_mode():
+    _, rna_latent = model(rna, modality='rna', task='pretrain')
+    _, atac_latent = model(atac, modality='atac', task='pretrain')
 
     if return_tensor:
         rna_latent, atac_latent = rna_latent.detach(), atac_latent.detach()
