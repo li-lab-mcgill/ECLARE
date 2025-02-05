@@ -16,9 +16,9 @@ elif 'Dylan' in hostname:
 
 elif 'mcb-gpu1' in hostname:
     os.environ['machine'] = 'mcb'
-    slurm_job_path = '/home/mcb/users/dmannk/scMultiCLIP/outputs'
-    default_outdir = '/home/mcb/users/dmannk/scMultiCLIP/outputs'
-    os.environ['CLARE_root'] = '/home/mcb/users/dmannk/scMultiCLIP/CLARE'
+    slurm_job_path = '/home/mcb/users/dmannk/eclare/outputs'
+    default_outdir = '/home/mcb/users/dmannk/eclare/outputs'
+    os.environ['CLARE_root'] = '/home/mcb/users/dmannk/eclare/CLARE'
 
 import sys
 sys.path.insert(0, os.environ['CLARE_root'])
@@ -50,7 +50,7 @@ def get_metrics(method, job_id, target_only=False):
     paths, all_data_source, all_data_target = [], [], []
     paths = glob(os.path.join(paths_root, '**', '**', '**', f'*_metrics_target_valid.csv'))
 
-    ## For scMulticlip, will not find metrics with previous command
+    ## For eclare, will not find metrics with previous command
     if paths == []:
         paths = glob(os.path.join(paths_root, '**', '**', f'*_metrics_target_valid.csv'))
     #for dirpath, dirnames, filenames in os.walk(paths_root): paths.append(dirpath) if not dirnames else None
@@ -517,7 +517,7 @@ def combined_plot_target_only(target_dataframes, value_column, dataset_labels):
     plt.tight_layout()
     plt.show()
 
-def load_scMulticlip_mdd_model(student_model_path):
+def load_eclare_mdd_model(student_model_path):
     student_model_args_dict = torch.load(student_model_path, map_location='cpu')
 
     slurm_job_id = student_model_args_dict['args'].slurm_job_ids
@@ -543,10 +543,10 @@ def load_scMulticlip_mdd_model(student_model_path):
 methods_id_dict = {
     'clip': '15122421',
     'kd_clip': '16101332_17203243',
-    'scMulticlip': '16101728',
+    'eclare': '16101728',
     'clip_mdd': '15155920',
     'kd_clip_mdd': '20091454',
-    'scMulticlip_mdd': '19154717', #16105437
+    'eclare_mdd': '19154717', #16105437
     'mojitoo': '20212916',
     'multiVI': '18175921',
     'glue': '18234131_19205223',
@@ -557,11 +557,11 @@ methods_id_dict = {
 ## Get metrics
 source_df_clip, target_df_clip, source_only_df_clip = get_metrics('clip', methods_id_dict['clip'])   # may need to rename 'triplet_align_<job_id>' by 'clip_<job_id>'
 target_df_kd_clip = get_metrics('kd_clip', methods_id_dict['kd_clip'], target_only=True)
-target_df_multiclip = get_metrics('scMulticlip', methods_id_dict['scMulticlip'], target_only=True) # may need to rename 'multisource_align_<job_id>' by 'multiclip_<job_id>'
+target_df_multiclip = get_metrics('eclare', methods_id_dict['eclare'], target_only=True) # may need to rename 'multisource_align_<job_id>' by 'multiclip_<job_id>'
 
 mdd_df_clip = get_metrics('clip_mdd', methods_id_dict['clip_mdd'], target_only=True)
 mdd_df_kd_clip = get_metrics('kd_clip_mdd', methods_id_dict['kd_clip_mdd'], target_only=True)
-mdd_df_multiclip = get_metrics('scMulticlip_mdd', methods_id_dict['scMulticlip_mdd'], target_only=True)
+mdd_df_multiclip = get_metrics('eclare_mdd', methods_id_dict['eclare_mdd'], target_only=True)
 
 source_df_mojitoo, target_df_mojitoo, source_only_df_mojitoo = get_metrics('mojitoo', methods_id_dict['mojitoo'])
 source_df_multiVI, target_df_multiVI, source_only_df_multiVI = get_metrics('multiVI', methods_id_dict['multiVI'])
@@ -651,12 +651,12 @@ fig4_clips_mdd.savefig(os.path.join(figpath, 'fig4_clips_mdd.png'), bbox_inches=
 ## MDD GRN analysis
 
 best_multiclip_mdd = str(mdd_df_multiclip['ilisis'].droplevel(0).argmax())
-method_job_id = f'scMulticlip_mdd_{methods_id_dict["scMulticlip_mdd"]}'
+method_job_id = f'eclare_mdd_{methods_id_dict["eclare_mdd"]}'
 paths_root = os.path.join(default_outdir, method_job_id)
 student_model_path = os.path.join(paths_root, 'mdd', best_multiclip_mdd, 'student_model.pt')
 #model, model_args_dict = load_CLIP_model(model_path, device='cpu')
 
-student_model = load_scMulticlip_mdd_model(student_model_path)
+student_model = load_eclare_mdd_model(student_model_path)
 student_model.eval()
 
 mdd_rna, mdd_atac, mdd_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, _, _ = mdd_setup(student_model.args, pretrain=None, return_type='data',\

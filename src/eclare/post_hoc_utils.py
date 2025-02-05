@@ -1,4 +1,6 @@
-from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
+import os
+from glob import glob
+from sklearn.model_selection import StratifiedShuffleSplit
 import torch
 from umap import UMAP
 import pandas as pd
@@ -6,15 +8,6 @@ import seaborn as sns
 import numpy as np
 import matplotlib.pyplot as plt
 import ot
-import pickle as pkl
-from scipy.special import softmax
-
-import jax.numpy as jnp
-from ott.geometry import costs as ot_costs
-from ott.problems.linear.barycenter_problem import FreeBarycenterProblem
-from ott.solvers.linear.continuous_barycenter import FreeWassersteinBarycenter
-from ott.problems.quadratic.gw_barycenter import GWBarycenterProblem
-from ott.solvers.quadratic.gw_barycenter import GromovWassersteinBarycenter
 
 from eclare import load_CLIP_model
 from eclare import return_setup_func_from_dataset
@@ -327,9 +320,9 @@ def match_analyses(similarities, datasets):
     assert len(trimmed_indices) == len(plans[0]), 'Number of selected indices does not match number of nuclei in each modality'
 
 
-def MSDA_loss_and_metrics_plot(slurm_id, ignore_losses=['cLISI'], remove_MDD=True):
+def ECLARE_loss_and_metrics_plot(clip_job_id, ignore_losses=['cLISI'], remove_MDD=True):
 
-    data = pd.read_csv(f'/Users/dmannk/cisformer/outputs/multisource_align_{slurm_id}/training_log.csv', index_col=0)
+    data = pd.read_csv(os.path.join(os.environ['OUTPATH'], f'multisource_align_{clip_job_id}', 'training_log.csv', index_col=0))
     data = data.loc[:,~data.isna().all()]
     data = data.loc[:, ~data.columns.str.contains('|'.join(ignore_losses))] if len(ignore_losses) > 0 else data
     data = data.ffill()
@@ -366,3 +359,19 @@ def MSDA_loss_and_metrics_plot(slurm_id, ignore_losses=['cLISI'], remove_MDD=Tru
 
     fig.tight_layout()
     fig.show()
+
+
+def CLIP_loss_and_metrics_plot(clip_job_id):
+
+    metrics_paths = glob(os.path.join(os.environ['OUTPATH'], f'clip_{clip_job_id}/**/**/**/metrics.csv'))
+
+    for metrics_path in metrics_paths:
+        metrics = pd.read_csv(metrics_path)
+
+        fig, ax = plt.subplots(1,4, figsize=[16,5])
+        metrics[['clip_loss', 'clip_loss_censored']].plot(marker='.', ax=ax[0])
+        metrics[['recon_loss_rna','recon_loss_atac']].plot(marker='.', legend=True, ax=ax[1])
+        metrics[['acc','acc_top5']].plot(marker='.', legend=True, ax=ax[2])
+        metrics['foscttm'].plot(marker='.', legend=True, ax=ax[3])
+        plt.suptitle(f'CLIP job id: {clip_job_id}')
+        plt.tight_layout(); plt.show()
