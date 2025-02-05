@@ -119,10 +119,13 @@ Figure 1 from manuscript: Overview of ECLARE
 
 <details>
 <summary>Demo: analysis on sample paired datasets</summary>
+
+
 We provide a demo notebook to analyze the sample paired datasets. This notebook is located in `scripts/sample_paired_datasets_analysis.ipynb`.
 
-This analysis is based on using DLPFC_Anderson and DLPFC_Ma as source datasets and PFC_Zhu as target dataset. See Table 1 in the manuscript for more details about datasets.
+This analysis is based on using DLPFC_Anderson and DLPFC_Ma as source datasets and PFC_Zhu as target dataset. See Table 1 in the [manuscript](https://www.biorxiv.org/content/10.1101/2024.01.22.576482) for more details about datasets.
 
 Sample data is available from Zenodo at https://doi.org/10.5281/zenodo.14794845. Instructions for downloading the data are available in the notebook.
+
 </details>
 
