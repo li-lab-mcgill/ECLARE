@@ -1,0 +1,48 @@
+#!/bin/bash
+
+echo "Exporting environment variables from config.yaml - script needs to be sourced"
+
+# Use Python to generate the export commands and capture them
+export_commands=$(python -c """
+import os
+import yaml
+import sys
+
+def load_config(config_file):
+    with open(config_file, 'r') as file:
+        return yaml.safe_load(file)
+
+def main(config_file):
+    config = load_config(config_file)
+
+    # Extract the active environment
+    active_env = config.get('active_environment')
+
+    # Extract values based on the active environment
+    env_config = config.get(active_env, {})
+    eclare_root = env_config.get('ECLARE_ROOT')
+    outpath = env_config.get('OUTPATH')
+    datapath = env_config.get('DATAPATH')
+
+    # Prepare the export commands
+    export_commands = f'''export ACTIVE_ENV={active_env}
+export ECLARE_ROOT={eclare_root}
+export OUTPATH={outpath}
+export DATAPATH={datapath}'''
+    print(export_commands)
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print('Usage: python export_env_variables.py <config_file>')
+        sys.exit(1)
+
+    main(sys.argv[1])
+""" "$1")
+
+# Evaluate the export commands to set the environment variables
+eval "$export_commands"
+
+echo "Environment variables set for $ACTIVE_ENV:"
+echo "ECLARE_ROOT=$ECLARE_ROOT"
+echo "OUTPATH=$OUTPATH"
+echo "DATAPATH=$DATAPATH"
