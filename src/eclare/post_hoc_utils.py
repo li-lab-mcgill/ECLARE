@@ -126,12 +126,6 @@ def create_celltype_palette(all_rna_celltypes, all_atac_celltypes, plot_color_pa
 
 def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None):
 
-    #rna_celltypes = rna.obs['ClustersMapped'].values
-    #atac_celltypes = atac.obs['ClustersMapped'].values
-
-    #rna_condition = rna.obs['Condition'].values
-    #atac_condition = atac.obs['condition'].values
-
     if umap_embedding is None:
         rna_atac_latents = np.concatenate([rna_latents, atac_latents], axis=0)
         umap_embedding = UMAP(n_neighbors=15, min_dist=0.1, n_components=2, metric='cosine', random_state=42)
@@ -148,17 +142,31 @@ def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltype
     if multiple_conditions:
         hue_order = np.unique(np.concatenate([rna_condition, atac_condition]))
 
-        fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-        sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='condition', hue_order=hue_order, alpha=0.5, ax=ax[2], legend=True)
-        ax[2].set_xticklabels([]); ax[2].set_yticklabels([]); ax[2].set_xlabel(''); ax[2].set_ylabel('')
+        fig, ax = plt.subplots(1, 4, figsize=(15, 5))
+        sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='condition', hue_order=hue_order, alpha=0.5, ax=ax[3], legend=True)
+        ax[3].set_xticklabels([]); ax[3].set_yticklabels([]); ax[3].set_xlabel(''); ax[3].set_ylabel('')
     else:
-        fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+        fig, ax = plt.subplots(1, 3, figsize=(10, 5))
 
-    sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='celltypes', palette=color_map_ct, alpha=0.8, ax=ax[0], legend=False)
-    sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, ax=ax[1], legend=True)
+    sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='celltypes', palette=color_map_ct, alpha=0.8, ax=ax[1], legend=False)
+    sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, ax=ax[2], legend=True)
 
-    ax[0].set_xticklabels([]); ax[0].set_yticklabels([]); ax[1].set_xticklabels([]); ax[1].set_yticklabels([])
-    ax[0].set_xlabel(''); ax[0].set_ylabel(''); ax[1].set_xlabel(''); ax[1].set_ylabel('')
+    ax[1].set_xticklabels([]); ax[1].set_yticklabels([]); ax[2].set_xticklabels([]); ax[2].set_yticklabels([])
+    ax[1].set_xlabel(''); ax[1].set_ylabel(''); ax[2].set_xlabel(''); ax[2].set_ylabel('')
+
+    ## add cell-type legend
+    ax[0].set_xlim(0, 3)
+    ax[0].set_ylim(-0.5, len(color_map_ct) - 0.5)
+    for i, (name, color) in enumerate(reversed(color_map_ct.items())):  # Reverse order to match plot
+        rect_height = 0.8
+        rect_y = i - rect_height/2  # Center the rectangle vertically
+        ax[0].add_patch(plt.Rectangle((0, rect_y), 0.5, rect_height, color=color))
+        ax[0].text(0.7, i, name, va='center', ha='left', fontsize=10)
+    ax[0].axis('off')
+
+    ax[0].set_title('legend: cell types')
+    ax[1].set_title('labelled by cell type')
+    ax[2].set_title('labelled by modality')
 
     fig.tight_layout()
 
