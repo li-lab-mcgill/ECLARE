@@ -896,7 +896,7 @@ def mdd_setup(args, pretrain=None, cell_groups=dict({'atac':'ClustersMapped','rn
         return rna, atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
     
 def pfc_zhu_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_Zhu', \
-    keep_group=['Fet', 'Inf', 'Child', 'Adol', 'Adult']):
+    keep_group=['Inf', 'Child', 'Adol', 'Adult']):
 
     rna_datapath = atac_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu')
 
