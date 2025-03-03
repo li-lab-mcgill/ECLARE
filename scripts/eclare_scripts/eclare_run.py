@@ -1,5 +1,4 @@
 #%%
-import sys
 import os
 
 from argparse import ArgumentParser
@@ -9,9 +8,6 @@ import torch
 import pandas as pd
 from glob import glob
 
-from ott.geometry.geometry import Geometry
-import jax.numpy as jnp
-
 from eclare import \
     CLIP, Knowledge_distillation_fn, load_CLIP_model, return_setup_func_from_dataset, align_metrics, fetch_data_from_loaders, teachers_setup, ct_losses, save_latents
 
@@ -19,7 +15,7 @@ from eclare import \
 if __name__ == "__main__":
 
     parser = ArgumentParser(description='')
-    parser.add_argument('--outdir', type=str, default=os.environ.get('OUTPATH', None),
+    parser.add_argument('--outdir', type=str, default=os.environ.get('OUTPATH', ''),
                         help='output directory')
     parser.add_argument('--clip_job_id', type=str, default=None,
                         help='Job ID of CLIP training')
@@ -339,7 +335,7 @@ if __name__ == "__main__":
             student_atac_latents, _ = student_model(student_atac_cells, modality='atac', task='align')
             student_atac_celltypes = student_atac_dat.obs['cell_type'].to_list()
 
-            ## Initialize lit of dataset distil losses
+            ## Initialize list of dataset distil losses
             distil_losses, distil_losses_T = [], []
             align_losses, align_losses_T = [], []
             offsets, offsets_T = [], []
@@ -486,6 +482,7 @@ if __name__ == "__main__":
         teacher_foscttm_per_ct_valid.T.to_csv(os.path.join(args.outdir, 'teacher_foscttm_per_ct_valid.csv'))
 
     ## Save student model
+    '''
     student_model_args_dict = {
         'n_peaks': n_peaks,
         'n_genes': n_genes,
@@ -498,6 +495,7 @@ if __name__ == "__main__":
         'rna_valid_idx': rna_valid_idx,
         'atac_valid_idx': atac_valid_idx,
     }
+    '''
 
     student_model.eval()
     student_model_args_dict['model_state_dict'] = student_model.state_dict()

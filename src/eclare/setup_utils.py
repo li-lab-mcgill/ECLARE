@@ -30,16 +30,16 @@ def return_setup_func_from_dataset(dataset_name):
     if dataset_name == 'mdd':
         setup_func = mdd_setup
 
-    elif dataset_name == 'PFC_Zhu':
+    elif (dataset_name == 'PFC_Zhu') or (dataset_name == 'roussos'):
         setup_func = pfc_zhu_setup
 
-    elif dataset_name == 'DLPFC_Anderson':
+    elif (dataset_name == 'DLPFC_Anderson') or (dataset_name == 'AD_Anderson_et_al'):
         setup_func = dlpfc_anderson_setup
 
-    elif dataset_name == 'Midbrain_Adams':
+    elif (dataset_name == 'Midbrain_Adams') or (dataset_name == 'PD_Adams_et_al'):
         setup_func = midbrain_adams_setup
 
-    elif dataset_name == 'DLPFC_Ma':
+    elif (dataset_name == 'DLPFC_Ma') or (dataset_name == 'human_dlpfc'):
         setup_func = dlpfc_ma_setup
 
     return setup_func
