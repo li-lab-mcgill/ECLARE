@@ -1,6 +1,10 @@
 #!/bin/bash
 
-echo "Exporting environment variables from config.yaml - script needs to be sourced"
+echo '''
+Exporting environment variables from config.yaml - script needs to be sourced and path to config.yaml needs to be provided as argument. For example:
+
+>> source config/export_env_variables.sh config/config.yaml
+'''
 
 # Use Python to generate the export commands and capture them
 export_commands=$(python -c """

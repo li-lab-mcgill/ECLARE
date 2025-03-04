@@ -499,6 +499,7 @@ if __name__ == "__main__":
 
     student_model.eval()
     student_model_args_dict['model_state_dict'] = student_model.state_dict()
+    student_model_args_dict['args'] = args
     torch.save(student_model_args_dict, os.path.join(args.outdir,'student_model.pt'))
 
     print('done!')
