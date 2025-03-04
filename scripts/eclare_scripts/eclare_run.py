@@ -497,9 +497,16 @@ if __name__ == "__main__":
     }
     '''
 
+    ## save student model state dict
     student_model.eval()
     student_model_args_dict['model_state_dict'] = student_model.state_dict()
+
+    ## set args to make student model instantiation work
     student_model_args_dict['args'] = args
+    student_model_args_dict['args'].tune_hyperparameters = False
+    student_model_args_dict['tuned_hyperparameters']['params_num_layers'] = 2
+
+    ## save student model
     torch.save(student_model_args_dict, os.path.join(args.outdir,'student_model.pt'))
 
     print('done!')
