@@ -8,7 +8,7 @@ sys.path.insert(0, config_path)
 from export_env_variables import export_env_variables
 export_env_variables(config_path)
 
-#%%
+#%% import libraries
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
@@ -20,9 +20,9 @@ from collections import defaultdict
 from string import ascii_uppercase
 import pybedtools
 
-from models import load_scTripletgrate_model, scTripletgrate
-from setup_utils import mdd_setup
-from post_hoc_utils import get_latents, sample_proportional_celltypes_and_condition, plot_umap_embeddings
+from eclare.models import load_CLIP_model, CLIP
+from eclare.setup_utils import mdd_setup
+from eclare.post_hoc_utils import get_latents, sample_proportional_celltypes_and_condition, plot_umap_embeddings, create_celltype_palette
 
 from datetime import datetime
 from glob import glob
@@ -30,7 +30,7 @@ from glob import glob
 def get_metrics(method, job_id, target_only=False):
 
     method_job_id = f'{method}_{job_id}'
-    paths_root = os.path.join(default_outdir, method_job_id)
+    paths_root = os.path.join(os.environ['OUTPATH'], method_job_id)
 
     ## retain leaf directories only
     paths, all_data_source, all_data_target = [], [], []
@@ -503,28 +503,6 @@ def combined_plot_target_only(target_dataframes, value_column, dataset_labels):
     plt.tight_layout()
     plt.show()
 
-def load_scMulticlip_mdd_model(student_model_path):
-    student_model_args_dict = torch.load(student_model_path, map_location='cpu')
-
-    slurm_job_id = student_model_args_dict['args'].slurm_job_ids
-    model_path = glob(os.path.join(os.environ['outdir'], f'clip_mdd_{slurm_job_id}/mdd/AD_Anderson_et_al/{best_multiclip_mdd}/model.pt'))[0]
-    _, clip_model_args_dict = load_scTripletgrate_model(model_path, device='cpu')
-
-    clip_model_args_dict['args'].source_dataset = 'mdd'
-    clip_model_args_dict['args'].target_dataset = None
-
-    clip_model_args_dict['args'].genes_by_peaks_str = '17563_by_100000'
-    clip_model_args_dict['n_genes'] = 17563
-    clip_model_args_dict['n_peaks'] = 100000
-    clip_model_args_dict['tuned_hyperparameters']['params_num_layers'] = 2
-    clip_model_args_dict['pretrain'] = clip_model_args_dict['rna_valid_idx']  = clip_model_args_dict['atac_valid_idx'] = None
-
-    clip_model_args_dict['model_state_dict'] = student_model_args_dict['model_state_dict']
-
-    student_model = scTripletgrate(**clip_model_args_dict, trial=None)
-
-    return student_model
-
 cuda_available = torch.cuda.is_available()
 
 #%%
@@ -639,19 +617,45 @@ fig4_clips_mdd.savefig(os.path.join(figpath, 'fig4_clips_mdd.png'), bbox_inches=
 
 #%%
 ## MDD GRN analysis
+device = 'cuda' if cuda_available else 'cpu'
 
+## Load student state_dict into memory
 best_multiclip_mdd = str(mdd_df_multiclip['ilisis'].droplevel(0).argmax())
-method_job_id = f'scMulticlip_mdd_{methods_id_dict["scMulticlip_mdd"]}'
-paths_root = os.path.join(default_outdir, method_job_id)
+student_job_id = f'scMulticlip_mdd_{methods_id_dict["scMulticlip_mdd"]}'
+paths_root = os.path.join(os.environ['OUTPATH'], student_job_id)
 student_model_path = os.path.join(paths_root, 'mdd', best_multiclip_mdd, 'student_model.pt')
-#model, model_args_dict = load_scTripletgrate_model(model_path, device='cpu')
+student_model_args_dict = torch.load(student_model_path, map_location='cpu')
 
-student_model = load_scMulticlip_mdd_model(student_model_path)
+## Instantiate student model args dict from one of the source datasets, later overwrite with target dataset
+teachers_job_id = 'clip_mdd_15155920'
+paths_root = os.path.join(os.environ['OUTPATH'], teachers_job_id)
+model_paths = glob(os.path.join(paths_root, 'mdd', '*', '*', 'model.pt'))
+model_path = model_paths[0]
+
+_, teacher_model_args_dict = load_CLIP_model(model_path, device=device)
+
+## Get number of genes and peaks from genes_by_peaks_str
+teacher_model_args_dict['args'].genes_by_peaks_str = student_model_args_dict['args'].genes_by_peaks_str
+teacher_model_args_dict['n_genes'] = student_model_args_dict['n_genes']
+teacher_model_args_dict['n_peaks'] = student_model_args_dict['n_peaks']
+teacher_model_args_dict['tuned_hyperparameters']['params_num_layers'] = student_model_args_dict['tuned_hyperparameters']['params_num_layers']
+teacher_model_args_dict['pretrain'] = teacher_model_args_dict['rna_valid_idx']  = teacher_model_args_dict['atac_valid_idx'] = None
+#student_model_args_dict['args'].genes_by_peaks_str = None  # setting genes_by_peaks to None creates large processing overhead, can just use one of the preset configs for now
+
+## Create student model
+student_model = CLIP(**teacher_model_args_dict, trial=None).to(device=device)
+
+## Load student state_dict into student model
+student_model.load_state_dict(student_model_args_dict['model_state_dict'])
 student_model.eval()
 
-## load data
+#%% load data
 
 #student_model.args.genes_by_peaks_str = None
+
+student_model.args.source_dataset = 'mdd'
+student_model.args.target_dataset = None
+
 mdd_rna, mdd_atac, mdd_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, _, _ = \
     mdd_setup(student_model.args, pretrain=None, return_raw_data=True, return_type='data',\
     overlapping_subjects_only=False)
@@ -675,11 +679,15 @@ unique_sexes = ['Female', 'Male']
 #%% project MDD nuclei into latent space
 
 mdd_rna_sampled, mdd_atac_sampled, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition = \
-   sample_proportional_celltypes_and_condition(mdd_rna, mdd_atac, batch_size=50000)
+   sample_proportional_celltypes_and_condition(mdd_rna, mdd_atac, batch_size=5000)
 
-rna_latents, atac_latents = get_latents(student_model.train(), mdd_rna_sampled, mdd_atac_sampled, return_tensor=True)
+rna_latents, atac_latents = get_latents(student_model, mdd_rna_sampled, mdd_atac_sampled, return_tensor=True)
 
-plot_umap_embeddings(rna_latents, atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=None, umap_embedding=None)
+rna_latents = rna_latents.cpu().numpy()
+atac_latents = atac_latents.cpu().numpy()
+
+color_map_ct = create_celltype_palette(unique_celltypes, unique_celltypes, plot_color_palette=False)
+plot_umap_embeddings(rna_latents, atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=color_map_ct, umap_embedding=None)
 
 #%% define function for computing corrected Pearson correlation coefficient based on BigSur paper
 
@@ -727,7 +735,7 @@ def c_sweep(X, Y, c_range=[0.1, 0.5, 2, 10]):
     ax.legend()
     plt.show()
 
-#%%
+#%% get peak-gene correlations
 
 def tree(): return defaultdict(tree)
 genes_by_peaks_corrs_dict = tree()
@@ -738,9 +746,11 @@ cutoff = 1300  # 1300 for Mic
 ## sex='Female'; celltype='Mic'
 ## sex='Female'; celltype='InN'
 
-maitra_female_degs_df   = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData6', header=2)
-doruk_peaks_df          = pd.read_csv(os.path.join(datapath, 'combined', 'cluster_DAR_0.05.tsv'), sep='\t')
+maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData6', header=2)
+doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.05.tsv'), sep='\t')
 #maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
+
+do_corrs_or_cosines = 'cosines'
 
 for sex in unique_sexes:
     for celltype in unique_celltypes:
@@ -777,6 +787,8 @@ for sex in unique_sexes:
 
             ## get latents
             rna_latents, atac_latents = get_latents(student_model, mdd_rna_sampled_group, mdd_atac_sampled_group, return_tensor=True)
+            rna_latents = rna_latents.cpu()
+            atac_latents = atac_latents.cpu()
 
             ## trim latents to smallest size
             min_size = min(rna_latents.shape[0], atac_latents.shape[0])
@@ -818,25 +830,30 @@ for sex in unique_sexes:
             X_rna = X_rna.T
             X_atac = X_atac.T
 
-            ## concatenate
-            X_rna_atac = torch.cat([X_rna, X_atac], dim=0)
+            if do_corrs_or_cosines == 'correlations':
+                ## concatenate
+                X_rna_atac = torch.cat([X_rna, X_atac], dim=0)
 
-            corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
-            corr = corr[0:genes_indices.sum(), genes_indices.sum():]
+                corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
+                corr = corr[0:genes_indices.sum(), genes_indices.sum():]
 
-            genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.cpu().numpy()
-            n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
+                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+                n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
 
-            ## normalize gene expression and chromatin accessibility
-            #X_rna = torch.nn.functional.normalize(X_rna, p=2, dim=1)
-            #X_atac = torch.nn.functional.normalize(X_atac, p=2, dim=1)
+            elif do_corrs_or_cosines == 'cosines':
 
-            ## correlate gene expression with chromatin accessibility
-            #cosine = torch.matmul(X_atac, X_rna.T)
-            #genes_by_peaks_cosines_dict[sex][celltype][condition] = cosine
+                ## normalize gene expression and chromatin accessibility
+                X_rna = torch.nn.functional.normalize(X_rna, p=2, dim=1)
+                X_atac = torch.nn.functional.normalize(X_atac, p=2, dim=1)
+
+                ## correlate gene expression with chromatin accessibility
+                cosine = torch.matmul(X_atac, X_rna.T)
+                genes_by_peaks_corrs_dict[sex][celltype][condition] = cosine
 
         break
     break
+
+#%% get MDD-association gene scores
 
 gene_candidates_dict = tree()
 gene_candidates_dict['Female']['Mic'] = ['ROBO2', 'SLIT3', 'ADAMSTL1', 'THSD4', 'SPP1', 'SOCS3', 'GAS6', 'MERTK']
@@ -848,8 +865,14 @@ from scipy.stats import norm
 for sex in unique_sexes:
     for celltype in unique_celltypes:
 
+        celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id'].str.startswith(celltype)]
+        genes_names = mdd_rna.var_names[mdd_rna.var_names.isin(celltype_degs_df['gene'])]
+
         corr_case = genes_by_peaks_corrs_dict[sex][celltype]['Case']
         corr_control = genes_by_peaks_corrs_dict[sex][celltype]['Control']
+
+        corr_case = corr_case.numpy()
+        corr_control = corr_control.numpy()
 
         fisher_case = np.arctanh(corr_case)
         fisher_control = np.arctanh(corr_control)
@@ -887,11 +910,11 @@ for sex in unique_sexes:
         genes_where_valid_idxs = where_valid[1]
         logfc_sum_per_gene = np.bincount(genes_where_valid_idxs, weights=log1p_fold_change.abs())
         logfc_mean_per_gene = logfc_sum_per_gene / np.bincount(genes_where_valid_idxs)
-        assert len(logfc_sum_per_gene) == mdd_rna.n_vars
 
         logfc_sum_per_gene_ranked_idxs = np.argsort(logfc_sum_per_gene)[::-1]
-        logfc_sum_per_gene_ranked_gene_names = mdd_rna.var_names[logfc_sum_per_gene_ranked_idxs]
-        logfc_sum_per_gene_matches = np.concatenate([logfc_sum_per_gene[mdd_rna.var_names == gene] for gene in gene_candidates_dict['Female']['Mic'] if logfc_sum_per_gene[mdd_rna.var_names == gene].size > 0])
+        logfc_sum_per_gene_ranked_gene_names = mdd_rna.var_names[genes_indices][logfc_sum_per_gene_ranked_idxs]
+        logfc_sum_per_gene_matches = np.concatenate([logfc_sum_per_gene[genes_names == gene] for gene in gene_candidates_dict['Female']['Mic'] if logfc_sum_per_gene[genes_names == gene].size > 0])
+        #logfc_sum_per_gene_matches = np.concatenate([logfc_sum_per_gene[mdd_rna.var_names == gene] for gene in gene_candidates_dict['Female']['Mic'] if logfc_sum_per_gene[mdd_rna.var_names == gene].size > 0])
 
         from scipy import stats
         percentiles = [stats.percentileofscore(logfc_sum_per_gene, gene) for gene in logfc_sum_per_gene_matches]
@@ -932,8 +955,10 @@ for sex in unique_sexes:
             offsety = 0.025 if percentile == np.min([lp[0] for lp in lower_percentiles]) else 0
             plt.axvline(logfc_sum, color='black', linestyle='--', label=f'{gene}: {percentile:.0f}th percentile')
             plt.annotate(f'{gene}\n{percentile:.0f}%',  # Gene name with percentile below
-                        xy=(logfc_sum, (plt.gca().get_ylim()[1] * percentile / 100) * 0.8 - offsety) ,
-                        xytext=(logfc_sum + 2 + offsetx, (plt.gca().get_ylim()[1] * percentile / 100) - offsety) ,
+                        #xy=(logfc_sum, (plt.gca().get_ylim()[1] * percentile / 100) * 0.8 - offsety) ,
+                        #xytext=(logfc_sum + 2 + offsetx, (plt.gca().get_ylim()[1] * percentile / 100) - offsety) ,
+                        xy=(logfc_sum, plt.gca().get_ylim()[1] * 0.7),
+                        xytext=(logfc_sum + 5, plt.gca().get_ylim()[1] * 0.8),
                         arrowprops=dict(facecolor='black', arrowstyle='->'),
                         fontsize=12, color='black')
 
@@ -974,3 +999,4 @@ for sex in unique_sexes:
         '''
         break
     break
+# %%

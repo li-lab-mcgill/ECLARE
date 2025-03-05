@@ -81,12 +81,20 @@ def sample_proportional_celltypes_and_condition(rna, atac, \
 
 def get_latents(model, rna, atac, return_tensor=False):
 
-    rna = torch.from_numpy(rna.X.toarray()).float()
-    atac = torch.from_numpy(atac.X.toarray()).float()
+    device = next(model.parameters()).device
+
+    ## convert to torch
+    rna = torch.from_numpy(rna.X.toarray()).float().to(device)
+    atac = torch.from_numpy(atac.X.toarray()).float().to(device)
+
+    ## normalize
+    rna = torch.nn.functional.normalize(rna, p=2, dim=1)
+    atac = torch.nn.functional.normalize(atac, p=2, dim=1)
 
     #with torch.inference_mode():
-    _, rna_latent = model(rna, modality='rna', task='pretrain')
-    _, atac_latent = model(atac, modality='atac', task='pretrain')
+    rna_latent = model(rna, modality='rna', task='align')[0].detach()
+    atac_latent = model(atac, modality='atac', task='align')[0].detach()
+
 
     if return_tensor:
         rna_latent, atac_latent = rna_latent.detach(), atac_latent.detach()
@@ -704,33 +712,3 @@ def combined_plot(target_dataframes, value_columns, dataset_labels, target_sourc
     plt.show()
 
     return fig
-
-def load_clip_and_eclare_model(student_model_path, best_multiclip_idx, device='cpu', genes_by_peaks_str='6816_by_55284'):
-    student_model_args_dict = torch.load(student_model_path, map_location=device)
-
-    clip_job_id = student_model_args_dict['args'].clip_job_id
-    model_paths = glob(os.path.join(os.environ['OUTPATH'], f'clip_{clip_job_id}/PFC_Zhu/**/{best_multiclip_idx}/model.pt'))
-
-    teacher_models = {}
-    for model_path in model_paths:  
-        teacher_model, teacher_clip_model_args_dict = load_CLIP_model(model_path, device=device)
-        teacher_models[teacher_model.args.source_dataset] = teacher_model.eval()
-
-    # student copies from last teacher model, makes no difference
-    student_clip_model_args_dict = copy.deepcopy(teacher_clip_model_args_dict)
-
-    student_clip_model_args_dict['args'].source_dataset = 'PFC_Zhu'
-    student_clip_model_args_dict['args'].target_dataset = 'mdd'
-
-    student_clip_model_args_dict['args'].genes_by_peaks_str = genes_by_peaks_str
-    student_clip_model_args_dict['n_genes'] = int(genes_by_peaks_str.split('_')[0])
-    student_clip_model_args_dict['n_peaks'] = int(genes_by_peaks_str.split('_')[-1])
-    student_clip_model_args_dict['tuned_hyperparameters']['params_num_layers'] = 2
-    student_clip_model_args_dict['pretrain'] = student_clip_model_args_dict['rna_valid_idx']  = student_clip_model_args_dict['atac_valid_idx'] = None
-
-    student_model = CLIP(**student_clip_model_args_dict, trial=None)
-    
-    student_model.load_state_dict(student_model_args_dict['model_state_dict'])
-    student_model.eval()
-
-    return teacher_models, student_model

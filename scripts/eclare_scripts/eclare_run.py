@@ -1,6 +1,6 @@
 #%%
 import os
-
+from copy import deepcopy
 from argparse import ArgumentParser
 import numpy as np
 from tqdm import tqdm
@@ -92,7 +92,10 @@ if __name__ == "__main__":
     n_genes = int(args.genes_by_peaks_str.split('_')[0])
     n_peaks = int(args.genes_by_peaks_str.split('_')[-1])
 
-    ## Overwrite
+    ## copy args to teacher_args
+    student_model_args_dict['args'] = deepcopy(student_model_args_dict['args'])
+
+    ## Overwrite args
     if target_dataset_og == 'mdd':
         student_model_args_dict['args'].source_dataset = 'mdd'
         student_model_args_dict['args'].target_dataset = None
@@ -504,7 +507,6 @@ if __name__ == "__main__":
     ## set args to make student model instantiation work
     student_model_args_dict['args'] = args
     student_model_args_dict['args'].tune_hyperparameters = False
-    student_model_args_dict['tuned_hyperparameters']['params_num_layers'] = 2
 
     ## save student model
     torch.save(student_model_args_dict, os.path.join(args.outdir,'student_model.pt'))
