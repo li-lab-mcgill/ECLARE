@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 
 import numpy as np
+from copy import deepcopy
+import glob
+
 #from sparselinear import SparseLinear
 
 import sys
@@ -261,9 +264,41 @@ def load_CLIP_model(model_path, device, **kwargs):
 
     if 'tune_hyperparameters' in kwargs:
         model_args_dict['args'].tune_hyperparameters = kwargs['tune_hyperparameters']
+    else:
+        model_args_dict['args'].tune_hyperparameters = False
 
     model = CLIP(**model_args_dict).to(device=device)
     model.load_state_dict(model_args_dict['model_state_dict'])
     model.eval()
     
     return model, model_args_dict
+
+
+def load_CLIP_and_ECLARE_model(student_model_path, best_multiclip_idx, device='cpu', genes_by_peaks_str='6816_by_55284'):
+    student_model_args_dict = torch.load(student_model_path, map_location=device)
+
+    clip_job_id = student_model_args_dict['args'].clip_job_id
+    model_paths = glob(os.path.join(os.environ['OUTPATH'], f'clip_{clip_job_id}/PFC_Zhu/**/{best_multiclip_idx}/model.pt'))
+
+    teacher_models = {}
+    for model_path in model_paths:  
+        teacher_model, teacher_clip_model_args_dict = load_CLIP_model(model_path, device=device)
+        teacher_models[teacher_model.args.source_dataset] = teacher_model.eval()
+
+    # student copies from last teacher model, makes no difference
+    student_clip_model_args_dict = deepcopy(teacher_clip_model_args_dict)
+
+    student_clip_model_args_dict['args'].source_dataset = 'PFC_Zhu'
+    student_clip_model_args_dict['args'].target_dataset = 'mdd'
+
+    student_clip_model_args_dict['args'].genes_by_peaks_str = genes_by_peaks_str
+    student_clip_model_args_dict['n_genes'] = int(genes_by_peaks_str.split('_')[0])
+    student_clip_model_args_dict['n_peaks'] = int(genes_by_peaks_str.split('_')[-1])
+    student_clip_model_args_dict['tuned_hyperparameters']['params_num_layers'] = 2
+    student_clip_model_args_dict['pretrain'] = student_clip_model_args_dict['rna_valid_idx']  = student_clip_model_args_dict['atac_valid_idx'] = None
+
+    student_model = CLIP(**student_clip_model_args_dict, trial=None)
+    student_model.load_state_dict(student_model_args_dict['model_state_dict'])
+    student_model.eval()
+
+    return teacher_models, student_model
