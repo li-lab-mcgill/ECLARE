@@ -652,6 +652,7 @@ student_model.eval()
 #%% load data
 
 #student_model.args.genes_by_peaks_str = None
+student_model.args.genes_by_peaks_str = '17563_by_100000'
 
 student_model.args.source_dataset = 'mdd'
 student_model.args.target_dataset = None
@@ -681,6 +682,7 @@ unique_sexes = ['Female', 'Male']
 mdd_rna_sampled, mdd_atac_sampled, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition = \
    sample_proportional_celltypes_and_condition(mdd_rna, mdd_atac, batch_size=5000)
 
+student_model = student_model.to('cpu')
 rna_latents, atac_latents = get_latents(student_model, mdd_rna_sampled, mdd_atac_sampled, return_tensor=True)
 
 rna_latents = rna_latents.cpu().numpy()
@@ -735,6 +737,68 @@ def c_sweep(X, Y, c_range=[0.1, 0.5, 2, 10]):
     ax.legend()
     plt.show()
 
+
+#%%
+import SEACells
+import scanpy as sc
+
+def run_SEACells(adata, build_kernel_on, redo_umap=False, key='X_umap'):
+
+    # Copy the counts to ".raw" attribute of the anndata since it is necessary for downstream analysis
+    # This step should be performed after filtering 
+    raw_ad = sc.AnnData(adata.X)
+    raw_ad.obs_names, raw_ad.var_names = adata.obs_names, adata.var_names
+    adata.raw = raw_ad
+
+    # Normalize cells, log transform and compute highly variable genes
+    sc.pp.normalize_per_cell(adata)
+    sc.pp.log1p(adata)
+    sc.pp.highly_variable_genes(adata, n_top_genes=1500)
+
+    ## User defined parameters
+
+    ## Core parameters 
+    n_SEACells = max(adata.n_obs // 75, 30)
+    print(f'Number of SEACells: {n_SEACells}')
+    n_waypoint_eigs = 15 # Number of eigenvalues to consider when initializing metacells
+
+    ## Initialize SEACells model
+    model = SEACells.core.SEACells(adata, 
+                    build_kernel_on=build_kernel_on, 
+                    n_SEACells=n_SEACells, 
+                    n_waypoint_eigs=n_waypoint_eigs,
+                    convergence_epsilon = 1e-5,
+                    use_gpu=False)
+
+    model.construct_kernel_matrix()
+    M = model.kernel_matrix
+
+    # Initialize archetypes
+    model.initialize_archetypes()
+
+    # Fit SEACells model
+    model.fit(min_iter=10, max_iter=50)
+
+    ## summarize by SEACell
+    SEACell_ad = SEACells.core.summarize_by_SEACell(adata, SEACells_label='SEACell', summarize_layer='raw')
+
+    if redo_umap:
+        #sc.pp.pca(adata, n_comps=15)
+        sc.pp.neighbors(adata)
+        sc.tl.umap(adata)
+
+        SEACells.plot.plot_2D(adata, key='X_umap', colour_metacells=False)
+        SEACells.plot.plot_2D(adata, key='X_umap', colour_metacells=True)
+
+    else:
+        SEACells.plot.plot_2D(adata, key=key, colour_metacells=False)
+        SEACells.plot.plot_2D(adata, key=key, colour_metacells=True)
+
+    return SEACell_ad
+
+
+
+
 #%% get peak-gene correlations
 
 def tree(): return defaultdict(tree)
@@ -750,7 +814,7 @@ maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Ma
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.05.tsv'), sep='\t')
 #maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
 
-do_corrs_or_cosines = 'cosines'
+do_corrs_or_cosines = 'correlations'
 
 for sex in unique_sexes:
     for celltype in unique_celltypes:
@@ -782,6 +846,9 @@ for sex in unique_sexes:
             mdd_rna_sampled_group = mdd_rna[rna_indices]
             mdd_atac_sampled_group = mdd_atac[atac_indices]
 
+            mdd_rna_sampled_group_seacells = run_SEACells(mdd_rna_sampled_group, build_kernel_on='X_pca', key='X_UMAP_Harmony_Batch_Sample_Chemistry')
+            mdd_atac_sampled_group_seacells = run_SEACells(mdd_atac_sampled_group, build_kernel_on='X_lsi')
+
             if len(rna_indices) == 0 or len(atac_indices) == 0:
                 print(f'No indices')
 
@@ -810,8 +877,11 @@ for sex in unique_sexes:
             rna_latents = rna_latents[plan.argmax(axis=1)]
             mdd_rna_sampled_group = mdd_rna_sampled_group[plan.argmax(axis=1).numpy()]
 
-            X_rna = torch.from_numpy(mdd_rna_sampled_group.X.toarray())
-            X_atac = torch.from_numpy(mdd_atac_sampled_group.X.toarray())
+            X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
+            X_atac = torch.from_numpy(mdd_atac_sampled_group_seacells.X.toarray())
+
+            #X_rna = torch.from_numpy(mdd_rna_sampled_group.X.toarray())
+            #X_atac = torch.from_numpy(mdd_atac_sampled_group.X.toarray())
 
             ## select DEG genes and DAR peaks
             X_rna = X_rna[:,genes_indices]
