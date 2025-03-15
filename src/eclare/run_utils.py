@@ -1,15 +1,15 @@
 from argparse import Namespace
 import os
-import warnings
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 from tqdm import tqdm
 from optuna import TrialPruned
+from scipy.spatial.distance import squareform
 
-from eclare.models import CLIP
-from eclare.losses_and_distances_utils import clip_loss
+from eclare.models import CLIP, SpatialCLIP
+from eclare.losses_and_distances_utils import spatial_clip_loss, rbf_from_distance
 from eclare.eval_utils import align_metrics, compute_mdd_eval_metrics
 from eclare.data_utils import fetch_data_from_loaders
 from eclare.eval_utils import foscttm_moscot
@@ -274,8 +274,58 @@ def run_spatial_CLIP(
     outdir: str = None,
     ):
 
-    pass
-   
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    n_genes = rna_train_loader.dataset.shape[1]
+
+    model = SpatialCLIP(n_genes=n_genes).to(device=device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
+
+    for epoch in (epochs_pbar := tqdm(range(args.total_epochs))):
+        epochs_pbar.set_description('EPOCHS')
+
+        spatial_pass(rna_train_loader, model, device, optimizer)
+
+
+def spatial_pass(rna_loader, model, device, optimizer):
+    
+    for rna_dat in (align_itr_pbar := tqdm(rna_loader)):
+
+        ## project RNA data
+        rna_cells = rna_dat.X.float() # already float32
+        #rna_celltypes = rna_dat.obs['cell_type'].tolist()
+
+        rna_cells.requires_grad_()
+        rna_latents = model(rna_cells)
+
+        ## get spatial coordinates of spots
+        array_row = rna_dat.obs['array_row']
+        array_col = rna_dat.obs['array_col']
+        array_coords = torch.stack((array_row, array_col), dim=1).float()
+
+        ## get spatial adjacency matrix
+        Ds_flat = nn.functional.pdist(array_coords, p=2)
+        gamma = 1 / (2 * torch.median(Ds_flat)**2)  # better to derive median from full distance matrix
+        As_flat = rbf_from_distance(Ds_flat, gamma=gamma)
+        As = squareform(As_flat.cpu().numpy())
+        As = torch.from_numpy(As).to(device=device).detach()
+
+        ## get logits
+        rna_latents = torch.nn.functional.normalize(rna_latents, dim=1)
+        logits = torch.matmul(rna_latents, rna_latents.T)
+        logits[torch.eye(logits.shape[0], dtype=torch.bool)] = 0
+
+        ## get loss
+        loss_rows, loss_cols = spatial_clip_loss(logits, As)
+        loss = 0.5 * (loss_rows + loss_cols)
+
+        ## backprop
+        if optimizer is not None:
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        ## update progress bar
+        align_itr_pbar.set_description(f'TRAIN itr -- SPATIAL (loss: {loss.item():.4f})')
 
 def align_and_reconstruction_pass(rna_loader,
                                 atac_loader,

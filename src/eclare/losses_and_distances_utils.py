@@ -105,6 +105,16 @@ def clip_loss(logits, atac_celltypes=None, rna_celltypes=None, atac_latents=None
         loss_rna_ct = loss_rna_ct.rename(index={loss_rna_ct.index[-1]: 'ALL'})
 
         return loss_atac, loss_rna, loss_atac_ct, loss_rna_ct
+    
+def spatial_clip_loss(logits, spatial_adj, temperature=1):
+
+    labels_rows = F.softmax(spatial_adj, dim=1)
+    labels_cols = F.softmax(spatial_adj, dim=0)
+
+    loss_rows = torch.nn.functional.cross_entropy(logits, labels_rows)
+    loss_cols = torch.nn.functional.cross_entropy(logits.T, labels_cols)
+
+    return loss_rows, loss_cols
 
 def clip_loss_split_by_ct(atac_latents, rna_latents, atac_celltypes, rna_celltypes, temperature=1):
     
