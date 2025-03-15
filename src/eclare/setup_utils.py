@@ -1644,7 +1644,7 @@ def spatialLIBD_setup(batch_size, total_epochs, cell_group='Cluster', hvg_only=T
     
     if return_type == 'loaders':
         sp_train_loader, sp_valid_loader, sp_valid_idx, sp_train_num_batches, sp_valid_num_batches, sp_train_n_batches_str_length, sp_valid_n_batches_str_length, sp_train_n_epochs_str_length, sp_valid_n_epochs_str_length = create_loaders(sp, dataset, batch_size, total_epochs, cell_group_key=cell_group)
-        return sp_train_loader, None, sp_train_num_batches, sp_train_n_batches_str_length, sp_train_n_epochs_str_length, sp_valid_loader, None, sp_valid_num_batches, sp_valid_n_batches_str_length, sp_valid_n_epochs_str_length, None, sp.n_vars, None, sp_valid_idx, None
+        return sp_train_loader, sp_train_num_batches, sp_train_n_batches_str_length, sp_train_n_epochs_str_length, sp_valid_loader, sp_valid_num_batches, sp_valid_n_batches_str_length, sp_valid_n_epochs_str_length, sp.n_vars, sp_valid_idx
         
     
     elif return_type == 'data':
