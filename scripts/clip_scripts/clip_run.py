@@ -12,7 +12,7 @@ from eclare.run_utils import run_CLIP
 
 if __name__ == "__main__":
 
-    parser = ArgumentParser(description='CAtlas_celltyping')
+    parser = ArgumentParser(description='CLIP')
     parser.add_argument('--outdir', type=str, default=os.environ.get('OUTPATH', None),
                         help='output directory')
     parser.add_argument('--source_dataset', type=str, default='AD_Anderson_et_al',
@@ -77,8 +77,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     #args, _ = parser.parse_known_args()
-
-    os.environ['target_dataset'] = args.target_dataset
     
     if torch.cuda.is_available():
         print('CUDA available')
@@ -89,48 +87,26 @@ if __name__ == "__main__":
         device   = 'cpu'
 
     ## Check number of cpus (does not work in interactive SALLOC environment)
-    cpus_per_task = os.environ.get('SLURM_CPUS_PER_TASK')
-    if cpus_per_task:
-        cpus_per_task = int(cpus_per_task)
-    else:
-        cpus_per_task = 1  # Default to 1 if not set
-
+    cpus_per_task = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
     print(f"Allocated CPUs: {cpus_per_task}")
 
-
-    ## Setup
-    align_setup_completed = False
+    ## set target dataset as env variable so easier to access in setup functions
+    os.environ['target_dataset'] = args.target_dataset
 
     ## SOURCE dataset setup function
-    if 'merged' in args.source_dataset:  # in process_datasets.py, difference between merged & imputed_merged. not here
-        #args.source_dataset = args.source_dataset.replace('merged_', '')  # or else, not able to find proper subdirectory and data due to how subdirectory saved in merge_datasets.py
-        #args.source_dataset = args.source_dataset.replace('imputed_', '')
-        source_setup_func = merged_dataset_setup
-
-    else:
-        source_setup_func = return_setup_func_from_dataset(args.source_dataset)
-
+    source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
     ## TARGET dataset setup function
-    if 'merged' in args.target_dataset:
-        #args.target_dataset = args.target_dataset.replace('merged_', '')
-        #args.target_dataset = args.target_dataset.replace('imputed_', '')
-        target_setup_func = merged_dataset_setup
-
-    else:
-        target_setup_func = return_setup_func_from_dataset(args.target_dataset)
+    target_setup_func = return_setup_func_from_dataset(args.target_dataset)
     
 
     ## get data loaders
     rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
-        source_setup_func(args, pretrain=None, return_type='loaders', dataset=args.source_dataset)
+        source_setup_func(args, return_type='loaders', dataset=args.source_dataset)
     
-    if (args.source_dataset == 'roussos') and (args.target_dataset == 'mdd'):
-        _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
-            target_setup_func(args, pretrain=None, return_type='loaders', dataset=args.target_dataset, overlapping_subjects_only=True)
-    else:
-        _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
-            target_setup_func(args, pretrain=None, return_type='loaders', dataset=args.target_dataset)
+    ## missing overlapping_subjects argument if target is MDD (False by default)
+    _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
+        target_setup_func(args, return_type='loaders', dataset=args.target_dataset)
             
     ## Run training loops
     if (not args.tune_hyperparameters) and (args.tune_id is None):
