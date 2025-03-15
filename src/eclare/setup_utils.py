@@ -42,6 +42,9 @@ def return_setup_func_from_dataset(dataset_name):
     elif (dataset_name == 'DLPFC_Ma') or (dataset_name == 'human_dlpfc'):
         setup_func = dlpfc_ma_setup
 
+    elif (dataset_name == 'spatialLIBD'):
+        setup_func = spatialLIBD_setup
+
     return setup_func
 
 def get_protein_coding_genes(rna):
@@ -1611,3 +1614,41 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
         target_atac_valid_loaders[dataset] = target_atac_valid_loader
 
     return datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders
+
+
+def spatialLIBD_setup(batch_size, total_epochs, cell_group='Cluster', hvg_only=True, protein_coding_only=True, return_type='loaders', return_raw_data=False, dataset='spatialLIBD'):
+
+    datapath = os.path.join(os.environ['DATAPATH'], 'spatialLIBD')
+
+    ## Load the data
+    sp = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'spatialLIBD', 'spatialLIBD.h5ad'))
+    coords = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'spatialLIBD', 'spatialCoords.csv'))
+
+    ## Change ENSG to gene name
+    sp.var_names = sp.var['gene_name']
+
+    ## Subset to protein-coding genes
+    if protein_coding_only:
+        sp = get_protein_coding_genes(sp)
+
+    if hvg_only:
+        sp = sp[:, sp.var['is_top_hvg'].astype(bool)]
+
+    if return_raw_data and return_type == 'data':
+        return sp.to_memory(), cell_group, datapath
+    
+    if not return_raw_data:
+        sc.pp.normalize_total(sp, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(sp)
+        sc.pp.scale(sp, zero_center=False,  max_value=10) # min-max scaling
+    
+    if return_type == 'loaders':
+        sp_train_loader, sp_valid_loader, sp_valid_idx, sp_train_num_batches, sp_valid_num_batches, sp_train_n_batches_str_length, sp_valid_n_batches_str_length, sp_train_n_epochs_str_length, sp_valid_n_epochs_str_length = create_loaders(sp, dataset, batch_size, total_epochs, cell_group_key=cell_group)
+        return sp_train_loader, None, sp_train_num_batches, sp_train_n_batches_str_length, sp_train_n_epochs_str_length, sp_valid_loader, None, sp_valid_num_batches, sp_valid_n_batches_str_length, sp_valid_n_epochs_str_length, None, sp.n_vars, None, sp_valid_idx, None
+        
+    
+    elif return_type == 'data':
+        return sp.to_memory(), cell_group, datapath
+
+    return sp, cell_group, datapath
+

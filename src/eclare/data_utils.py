@@ -176,7 +176,8 @@ def create_loaders(
         batches = None
 
     train_len = (int(0.8*len(data)))
-    valid_len = (len(data) - train_len)
+    valid_len = int(0.2 * train_len)
+    test_len = int(len(data) - (train_len + valid_len))
 
     ## reduce data size to keep CPU RAM memory below 62G
     if dataset == 'mdd':
@@ -239,14 +240,6 @@ def create_loaders(
             valid_loader = AnnLoader(valid_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False, indices=valid_loader_indices)
         else:
             valid_loader = AnnLoader(valid_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False)
-
-        converter = {
-            'X': lambda x: x.float(), # not work for csr matrix
-            'obs': {
-                'subject': lambda s: s.tolist(),
-                'cell_type': lambda ct: ct.tolist()
-            }
-        }
 
         if not valid_only:
             train_data = data[train_idx].copy()

@@ -257,6 +257,25 @@ def run_CLIP(trial,
 
         return optuna_obj
 
+def run_spatial_CLIP(
+    args: Namespace,
+    rna_train_loader,
+    rna_valid_loader,
+    train_num_batches,
+    train_n_batches_str_length,
+    train_n_epochs_str_length,
+    valid_num_batches,
+    valid_n_batches_str_length,
+    valid_n_epochs_str_length,
+    target_rna_loader,
+    do_align_train: bool = True,
+    do_align_valid: bool = True,
+    do_align_train_eval: bool = False,
+    outdir: str = None,
+    ):
+
+    pass
+   
 
 def align_and_reconstruction_pass(rna_loader,
                                 atac_loader,
