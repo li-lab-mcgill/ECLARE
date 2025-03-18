@@ -257,21 +257,41 @@ class CLIP(nn.Module):
                 return core, genes
 
 class SpatialCLIP(nn.Module):
+    DEFAULT_HPARAMS = {
+        'num_units': 256,
+        'num_layers': 2,
+        'dropout_p': 0.2,
+    }
+    PROPOSED_HPARAMS = {
+        'num_units': [128, 256, 512],
+        'num_layers': [1, 2, 3],
+        'dropout_p': [0.1, 0.2, 0.3],
+    }
+
     def __init__(self, n_genes, **kwargs):
         super().__init__()
 
         self.n_genes = n_genes
-        num_units = 256
-        num_layers = 2
-        dropout_p = 0.3
 
-        rna_encoder = [nn.Linear(n_genes, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] + [nn.Linear(num_units, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] * (num_layers-1)
+        num_units = kwargs['num_units']
+        num_layers = kwargs['num_layers']
+        dropout_p = kwargs['dropout_p']
+
+        rna_encoder = [nn.Linear(n_genes, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] \
+            + [nn.Linear(num_units, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] * (num_layers-1)
+        
         self.rna_to_core = nn.Sequential(*rna_encoder)
 
+    @classmethod
+    def get_hparams(cls):
+        return cls.DEFAULT_HPARAMS, cls.PROPOSED_HPARAMS
+    
     def forward(self, x):
         core = self.rna_to_core(x)
         return core
-
+    
+# Expose the method separately as a standalone function
+get_hparams = SpatialCLIP.get_hparams
 
 def load_CLIP_model(model_path, device, **kwargs):
 

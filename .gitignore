@@ -2,6 +2,7 @@ config/config.yaml
 *slurm.sh
 MCB_bash_scripts/
 build/
+mlruns/
 
 benchmark_*/**/*_env
 **/.git
