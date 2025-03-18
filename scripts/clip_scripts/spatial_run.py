@@ -103,8 +103,9 @@ if __name__ == "__main__":
         source_setup_func(args.batch_size, args.total_epochs, return_type='loaders', dataset=args.source_dataset)
     
     ## missing overlapping_subjects argument if target is MDD (False by default)
-    _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
-        target_setup_func(args, return_type='loaders', dataset=args.target_dataset)
+    #_, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
+    #    target_setup_func(args, return_type='loaders', dataset=args.target_dataset)
+    target_rna_valid_loader = None
             
     ## Run training loops
     model = run_spatial_CLIP(
