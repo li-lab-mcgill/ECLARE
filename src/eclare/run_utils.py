@@ -273,22 +273,28 @@ def run_spatial_CLIP(
     do_align_valid: bool = True,
     do_align_train_eval: bool = False,
     outdir: str = None,
+    params: dict = {},
     ):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     n_genes = rna_train_loader.dataset.shape[1]
 
-    model = SpatialCLIP(n_genes=n_genes).to(device=device)
+    model = SpatialCLIP(n_genes=n_genes, **params).to(device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
 
-    with mlflow.start_run():
-        for epoch in (epochs_pbar := tqdm(range(args.total_epochs))):
-            epochs_pbar.set_description('EPOCHS')
+    for epoch in (epochs_pbar := tqdm(range(args.total_epochs))):
+        epochs_pbar.set_description('EPOCHS')
 
+        model.train()
+        train_loss = spatial_pass(rna_train_loader, model, device, optimizer)
+
+        model.eval()
+        with torch.inference_mode():
             valid_loss = spatial_pass(rna_valid_loader, model, device, None)
-            train_loss = spatial_pass(rna_train_loader, model, device, optimizer)
 
-            mlflow.log_metrics({'valid_loss': valid_loss, 'train_loss': train_loss}, step=epoch)
+        mlflow.log_metrics({'valid_loss': valid_loss, 'train_loss': train_loss}, step=epoch)
+
+    return model, valid_loss
 
 def spatial_pass(rna_loader, model, device, optimizer):
 
