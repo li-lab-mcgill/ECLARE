@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 from optuna import TrialPruned
+import mlflow
 from scipy.spatial.distance import squareform
 
 from eclare.models import CLIP, SpatialCLIP
@@ -280,13 +281,18 @@ def run_spatial_CLIP(
     model = SpatialCLIP(n_genes=n_genes).to(device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
 
-    for epoch in (epochs_pbar := tqdm(range(args.total_epochs))):
-        epochs_pbar.set_description('EPOCHS')
+    with mlflow.start_run():
+        for epoch in (epochs_pbar := tqdm(range(args.total_epochs))):
+            epochs_pbar.set_description('EPOCHS')
 
-        spatial_pass(rna_train_loader, model, device, optimizer)
+            valid_loss = spatial_pass(rna_valid_loader, model, device, None)
+            train_loss = spatial_pass(rna_train_loader, model, device, optimizer)
 
+            mlflow.log_metrics({'valid_loss': valid_loss, 'train_loss': train_loss}, step=epoch)
 
 def spatial_pass(rna_loader, model, device, optimizer):
+
+    epoch_loss = []
     
     for rna_dat in (align_itr_pbar := tqdm(rna_loader)):
 
@@ -318,6 +324,9 @@ def spatial_pass(rna_loader, model, device, optimizer):
         loss_rows, loss_cols = spatial_clip_loss(logits, As)
         loss = 0.5 * (loss_rows + loss_cols)
 
+        ## update epoch loss
+        epoch_loss.append(loss.item())
+
         ## backprop
         if optimizer is not None:
             optimizer.zero_grad()
@@ -325,7 +334,9 @@ def spatial_pass(rna_loader, model, device, optimizer):
             optimizer.step()
 
         ## update progress bar
-        align_itr_pbar.set_description(f'TRAIN itr -- SPATIAL (loss: {loss.item():.4f})')
+        align_itr_pbar.set_description(f"{'VALID' if optimizer is None else 'TRAIN'} itr -- SPATIAL (loss: {loss.item():.4f})")
+
+    return np.mean(epoch_loss)
 
 def align_and_reconstruction_pass(rna_loader,
                                 atac_loader,
@@ -490,7 +501,6 @@ def align_and_reconstruction_pass(rna_loader,
         align_metrics_dict, target_align_metrics_dict, clip_loss_, clip_loss_censored,\
         acc_ct, acc_top5_ct, clip_loss_ct, clip_loss_ct_split
 
-
 def save_latents(student_rna_latents_valid, student_atac_latents_valid, student_rna_celltypes_valid, student_atac_celltypes_valid, epoch, n_epochs, outdir):
     ## in reality, only a single batch of valid latents per epoch, so no need to accumulate
 
@@ -510,3 +520,23 @@ def save_latents(student_rna_latents_valid, student_atac_latents_valid, student_
 
         filepath = os.path.join(outdir, filename)
         np.savez_compressed(filepath, rna=all_rna_latents_valid, atac=all_atac_latents_valid, rna_celltypes=all_rna_celltypes_valid, atac_celltypes=all_atac_celltypes_valid)
+
+def get_or_create_experiment(experiment_name):
+  """
+  Retrieve the ID of an existing MLflow experiment or create a new one if it doesn't exist.
+
+  This function checks if an experiment with the given name exists within MLflow.
+  If it does, the function returns its ID. If not, it creates a new experiment
+  with the provided name and returns its ID.
+
+  Parameters:
+  - experiment_name (str): Name of the MLflow experiment.
+
+  Returns:
+  - str: ID of the existing or newly created MLflow experiment.
+  """
+
+  if experiment := mlflow.get_experiment_by_name(experiment_name):
+      return experiment.experiment_id
+  else:
+      return mlflow.create_experiment(experiment_name)
