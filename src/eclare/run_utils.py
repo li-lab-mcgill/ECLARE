@@ -5,7 +5,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-from optuna import TrialPruned
+from optuna import TrialPruned, Trial
 import mlflow
 from scipy.spatial.distance import squareform
 
@@ -262,6 +262,7 @@ def run_spatial_CLIP(
     args: Namespace,
     rna_train_loader,
     rna_valid_loader,
+    trial: Trial = None,
     params: dict = {},
     ):
 
@@ -291,6 +292,12 @@ def run_spatial_CLIP(
             valid_loss = spatial_pass(rna_valid_loader, model, device, None)
 
         mlflow.log_metrics({'valid_loss': valid_loss, 'train_loss': train_loss}, step=epoch+1)
+
+        ## early stopping with Optuna pruner
+        if trial is not None:
+            trial.report(valid_loss, step=epoch+1)
+            if trial.should_prune():
+                raise TrialPruned()
 
     return model, valid_loss
 
