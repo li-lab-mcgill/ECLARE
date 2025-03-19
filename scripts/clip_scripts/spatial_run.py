@@ -4,13 +4,61 @@ import torch
 import pandas as pd
 import optuna
 import mlflow
-from shutil import copy2
+from shutil import copy2        
 
 #from eclare import merged_dataset_setup, return_setup_func_from_dataset, run_CLIP, study_summary
 from eclare import return_setup_func_from_dataset
 from eclare.run_utils import run_spatial_CLIP, get_or_create_experiment
 from eclare.tune_utils import Optuna_propose_hyperparameters, champion_callback
 from eclare.models import get_hparams
+
+def tune_spatial_CLIP(args, experiment_id, device):
+
+    # override Optuna's default logging to ERROR only
+    optuna.logging.set_verbosity(optuna.logging.ERROR)
+
+    with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else 'Hyperparameter tuning'):
+
+        default_hyperparameters, proposed_hyperparameters = get_hparams()
+
+        def run_spatial_CLIP_wrapper(trial, run_args):
+            with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else f'Run {trial.number}', nested=True):
+                params = Optuna_propose_hyperparameters(trial, proposed_hyperparameters=proposed_hyperparameters, default_hyperparameters_keys=default_hyperparameters.keys())
+                _, valid_loss = run_spatial_CLIP(**run_args, params=params)
+                mlflow.log_params(params)
+                return valid_loss
+
+        ## create study and run optimization
+        study = optuna.create_study(direction='minimize')
+        Optuna_objective = lambda trial: run_spatial_CLIP_wrapper(trial, run_args)
+        study.optimize(Optuna_objective, n_trials=args.n_trials, callbacks=[champion_callback])
+
+        ## log best trial
+        mlflow.log_params(study.best_params)
+        mlflow.log_metrics({"best_valid_loss": study.best_trial.value})
+
+        ## log metadata
+        mlflow.set_tags(tags={
+            'default_hyperparameters': default_hyperparameters,
+            'proposed_hyperparameters': proposed_hyperparameters
+        })
+
+        ## run best model
+        model, _ = run_spatial_CLIP(**run_args, params=study.best_params)
+
+        ## infer signature
+        x = torch.from_numpy(valid_loader.dataset.adatas[0].X[0].toarray()).to(device=device, dtype=torch.float32).detach()
+        signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x).detach().cpu().numpy())
+
+        ## script model
+        script_model = torch.jit.script(model)
+
+        ## log model and signature
+        mlflow.pytorch.log_model(script_model, "best_model", signature=signature)
+        model_uri = mlflow.get_artifact_uri("best_model")
+
+        return model_uri
+    
 
 if __name__ == "__main__":
 
@@ -81,49 +129,7 @@ if __name__ == "__main__":
     mlflow.set_experiment(experiment_id)
 
     if args.tune_hyperparameters:
-
-        # override Optuna's default logging to ERROR only
-        optuna.logging.set_verbosity(optuna.logging.ERROR)
-
-        with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else 'Hyperparameter tuning'):
-
-            default_hyperparameters, proposed_hyperparameters = get_hparams()
-
-            def run_spatial_CLIP_wrapper(trial, run_args):
-                with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else f'Hyperparameter tuning - run {trial.number}', nested=True):
-                    params = Optuna_propose_hyperparameters(trial, proposed_hyperparameters=proposed_hyperparameters, default_hyperparameters_keys=default_hyperparameters.keys())
-                    _, valid_loss = run_spatial_CLIP(**run_args, params=params)
-                    return valid_loss
-
-            ## create study and run optimization
-            study = optuna.create_study(direction='minimize')
-            Optuna_objective = lambda trial: run_spatial_CLIP_wrapper(trial, run_args)
-            study.optimize(Optuna_objective, n_trials=args.n_trials, callbacks=[champion_callback])
-
-            ## log best trial
-            mlflow.log_params(study.best_params)
-            mlflow.log_metrics({"best_valid_loss": study.best_trial.value})
-
-            ## log metadata
-            mlflow.set_tags(tags={
-                'default_hyperparameters': default_hyperparameters,
-                'proposed_hyperparameters': proposed_hyperparameters
-            })
-
-            ## run best model
-            model, _ = run_spatial_CLIP(**run_args, params=study.best_params)
-
-            ## infer signature
-            x = torch.from_numpy(valid_loader.dataset.adatas[0].X[0].toarray()).to(device=device, dtype=torch.float32).detach()
-            signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x).detach().cpu().numpy())
-
-            ## script model
-            script_model = torch.jit.script(model)
-
-            ## log model and signature
-            mlflow.pytorch.log_model(script_model, "best_model", signature=signature)
-            model_uri = mlflow.get_artifact_uri("best_model")
-
+        model_uri = tune_spatial_CLIP(args, experiment_id, device)
 
     else:
         tuned_hyperparameters = {}
