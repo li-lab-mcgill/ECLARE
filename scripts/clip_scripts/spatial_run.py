@@ -29,6 +29,8 @@ if __name__ == "__main__":
                         help='tune hyperparameters using Optuna')
     parser.add_argument('--n_trials', type=int, default=1, metavar='R',
                         help='number of trials used for hyperparameter search')
+    parser.add_argument('--batch_size', type=int, default=1000, metavar='B',
+                        help='size of mini-batch')
 
     parser.add_argument('--init_method', default='tcp://127.0.0.1:3456', type=str, help='')
     parser.add_argument('--dist-backend', default='gloo', type=str, help='')

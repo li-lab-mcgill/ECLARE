@@ -265,7 +265,7 @@ class SpatialCLIP(nn.Module):
     PROPOSED_HPARAMS = {
         'num_units': [128, 256, 512],
         'num_layers': [1, 2, 3],
-        'dropout_p': [0.1, 0.2, 0.3],
+        'dropout_p': [0.1, 0.3, 0.5],
     }
 
     def __init__(self, n_genes, **kwargs):
