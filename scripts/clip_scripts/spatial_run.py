@@ -74,17 +74,6 @@ if __name__ == "__main__":
         'args': args,
         'rna_train_loader': train_loader,
         'rna_valid_loader': valid_loader,
-        'train_num_batches': train_num_batches,
-        'train_n_batches_str_length': train_n_batches_str_length,
-        'train_n_epochs_str_length': train_n_epochs_str_length,
-        'valid_num_batches': valid_num_batches,
-        'valid_n_batches_str_length': valid_n_batches_str_length,
-        'valid_n_epochs_str_length': valid_n_epochs_str_length,
-        'target_rna_loader': target_rna_valid_loader,
-        'do_align_train': True,
-        'do_align_valid': True,
-        'do_align_train_eval': False,
-        'outdir': args.outdir
     }
 
     ## get or create experiment
