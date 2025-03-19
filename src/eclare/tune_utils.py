@@ -20,16 +20,15 @@ def study_summary(study):
         print("    {}: {}".format(key, value))
 
 
-def Optuna_propose_hyperparameters(trial, proposed_hyperparameters, default_hyperparameters_keys):
+def Optuna_propose_hyperparameters(trial, suggested_hyperparameters):
     """
     Objective function for Optuna hyperparameter tuning.
     Uses run_spatial_CLIP with parameters proposed by Optuna.
     """
     # Suggest hyperparameters
     tuned_hyperparameters = {
-        'num_units': trial.suggest_categorical("num_units", proposed_hyperparameters['num_units']),
-        'num_layers': trial.suggest_categorical("num_layers", proposed_hyperparameters['num_layers']),
-        'dropout_p': trial.suggest_categorical("dropout_p", proposed_hyperparameters['dropout_p'])
+        param_name: trial._suggest(param_name, param_info['suggest_distribution'])
+        for param_name, param_info in suggested_hyperparameters.items()
     }
 
     #assert set(tuned_hyperparameters.keys()) in set(default_hyperparameters_keys), \

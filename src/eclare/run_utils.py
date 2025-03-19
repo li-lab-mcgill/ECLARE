@@ -11,8 +11,8 @@ from scipy.spatial.distance import squareform
 
 from eclare.models import CLIP, SpatialCLIP
 from eclare.losses_and_distances_utils import spatial_clip_loss, rbf_from_distance
-from eclare.eval_utils import align_metrics, compute_mdd_eval_metrics
-from eclare.data_utils import fetch_data_from_loaders
+from eclare.eval_utils import align_metrics, align_metrics_light, compute_mdd_eval_metrics
+from eclare.data_utils import fetch_data_from_loaders, fetch_data_from_loader_light
 from eclare.eval_utils import foscttm_moscot
 
 def run_CLIP(trial,
@@ -284,22 +284,30 @@ def run_spatial_CLIP(
     for epoch in (epochs_pbar := tqdm(range(args.total_epochs))):
         epochs_pbar.set_description('EPOCHS')
 
+        ## optimize
         model.train()
         train_loss = spatial_pass(rna_train_loader, model, device, optimizer)
 
+        ## evaluate
         model.eval()
         with torch.inference_mode():
             valid_loss = spatial_pass(rna_valid_loader, model, device, None)
 
-        mlflow.log_metrics({'valid_loss': valid_loss, 'train_loss': train_loss}, step=epoch+1)
+        ## get clustering performance
+        rna_cells, rna_labels = fetch_data_from_loader_light(rna_valid_loader, label_key='spatialLIBD')
+        rna_latents = model(rna_cells.to(device=device))
+        nmi, ari = align_metrics_light(rna_latents, rna_labels)
+        nmi_ari_score = 0.5 * (nmi + ari)
+
+        mlflow.log_metrics({'valid_loss': valid_loss, 'train_loss': train_loss, 'nmi': nmi, 'ari': ari}, step=epoch+1)
 
         ## early stopping with Optuna pruner
         if trial is not None:
-            trial.report(valid_loss, step=epoch+1)
+            trial.report(nmi_ari_score, step=epoch+1)
             if trial.should_prune():
                 raise TrialPruned()
 
-    return model, valid_loss
+    return model, nmi_ari_score
 
 def spatial_pass(rna_loader, model, device, optimizer):
 
@@ -324,12 +332,16 @@ def spatial_pass(rna_loader, model, device, optimizer):
         gamma = 1 / (2 * torch.median(Ds_flat)**2)  # better to derive median from full distance matrix
         As_flat = rbf_from_distance(Ds_flat, gamma=gamma)
         As = squareform(As_flat.cpu().numpy())
-        As = torch.from_numpy(As).to(device=device).detach()
+        As = torch.from_numpy(As).to(device=device).detach()  # zero along diagonal
 
-        ## get logits
+        ## get logits and apply temperature
         rna_latents = torch.nn.functional.normalize(rna_latents, dim=1)
         logits = torch.matmul(rna_latents, rna_latents.T)
-        logits[torch.eye(logits.shape[0], dtype=torch.bool)] = 0
+        logits = logits * np.exp(1/model.temperature)
+
+        ## handle diagonal entries
+        As[torch.eye(As.shape[0], dtype=torch.bool)] = -torch.inf
+        logits[torch.eye(logits.shape[0], dtype=torch.bool)] = -torch.inf
 
         ## get loss
         loss_rows, loss_cols = spatial_clip_loss(logits, As)

@@ -106,15 +106,27 @@ def clip_loss(logits, atac_celltypes=None, rna_celltypes=None, atac_latents=None
 
         return loss_atac, loss_rna, loss_atac_ct, loss_rna_ct
     
-def spatial_clip_loss(logits, spatial_adj, temperature=1):
+def spatial_clip_loss(logits, spatial_adj):
 
-    labels_rows = F.softmax(spatial_adj, dim=1)
-    labels_cols = F.softmax(spatial_adj, dim=0)
+    ## row-wise loss
+    logits_log_softmax = F.log_softmax(logits, dim=1)
+    spatial_adj_log_softmax = F.log_softmax(spatial_adj, dim=1)
+    loss = torch.nn.functional.kl_div(logits_log_softmax, spatial_adj_log_softmax.detach(), reduction='none', log_target=True)
 
-    loss_rows = torch.nn.functional.cross_entropy(logits, labels_rows)
-    loss_cols = torch.nn.functional.cross_entropy(logits.T, labels_cols)
+    ## column-wise loss
+    logits_log_softmax_T = F.log_softmax(logits.T, dim=1)
+    spatial_adj_log_softmax_T = F.log_softmax(spatial_adj.T, dim=1)
+    loss_T = torch.nn.functional.kl_div(logits_log_softmax_T, spatial_adj_log_softmax_T.detach(), reduction='none', log_target=True)
 
-    return loss_rows, loss_cols
+    ## zero-out diagonal entries
+    loss[torch.eye(loss.shape[0], dtype=torch.bool)] = 0
+    loss_T[torch.eye(loss_T.shape[0], dtype=torch.bool)] = 0
+
+    ## apply batchmean reduction
+    loss = loss.sum(1).mean()
+    loss_T = loss_T.sum(1).mean()
+
+    return loss, loss_T
 
 def clip_loss_split_by_ct(atac_latents, rna_latents, atac_celltypes, rna_celltypes, temperature=1):
     
