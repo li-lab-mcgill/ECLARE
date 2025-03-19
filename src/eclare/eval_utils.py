@@ -2,12 +2,13 @@ import anndata
 import torch
 import numpy as np
 from scipy.sparse import csr_matrix
-from scib_metrics import ilisi_knn, nmi_ari_cluster_labels_leiden
 from pandas import DataFrame
 
 from scanpy.tl import leiden
 from scanpy.pp import neighbors
-from scib_metrics import silhouette_label
+
+from scib_metrics.nearest_neighbors import jax_approx_min_k
+from scib_metrics import ilisi_knn, nmi_ari_cluster_labels_leiden, silhouette_label
 
 from jax import jit
 import jax.numpy as jnp
@@ -18,6 +19,11 @@ from eclare.losses_and_distances_utils import clip_loss, clip_loss_split_by_ct
 from eclare.data_utils import fetch_data_from_loaders
 from eclare.losses_and_distances_utils import cosine_distance
 
+def align_metrics_light(latents, labels, k=20):
+
+    neighbors = jax_approx_min_k(latents.detach().cpu(), k)
+    nmi_ari_dict = nmi_ari_cluster_labels_leiden(neighbors, labels, optimize_resolution=True)
+    return nmi_ari_dict['nmi'], nmi_ari_dict['ari']
 
 def align_metrics(model, rna_cells, rna_celltypes, atac_cells, atac_celltypes, paired=True, is_latents=False):
             

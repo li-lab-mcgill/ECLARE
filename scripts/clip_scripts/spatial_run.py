@@ -14,23 +14,27 @@ from eclare.models import get_hparams
 
 def tune_spatial_CLIP(args, experiment_id):
 
-    default_hyperparameters, proposed_hyperparameters = get_hparams()
+    suggested_hyperparameters = get_hparams()
 
     def run_spatial_CLIP_wrapper(trial, run_args):
         with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else f'Run {trial.number}', nested=True):
-            params = Optuna_propose_hyperparameters(trial, proposed_hyperparameters=proposed_hyperparameters, default_hyperparameters_keys=default_hyperparameters.keys())
+            params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
             run_args['trial'] = trial
             mlflow.log_params(params)
-            _, valid_loss = run_spatial_CLIP(**run_args, params=params)
-            return valid_loss
+            _, nmi_ari_score = run_spatial_CLIP(**run_args, params=params)
+            return nmi_ari_score
 
     ## create study and run optimization
     study = optuna.create_study(
-        direction='minimize',
+        direction='maximize',
+        sampler=optuna.samplers.TPESampler(
+            consider_prior=False,  # not recommended when sampling from categorical variables
+            n_startup_trials=0,
+        ),
         pruner=optuna.pruners.MedianPruner(
             n_startup_trials=0,  # Don't prune until this many trials have completed
             n_warmup_steps=3,   # Don't prune until this many steps in each trial
-            interval_steps=1     # Check for pruning every this many steps
+            interval_steps=1,     # Check for pruning every this many steps
         )
     )
     Optuna_objective = lambda trial: run_spatial_CLIP_wrapper(trial, run_args)
@@ -38,12 +42,11 @@ def tune_spatial_CLIP(args, experiment_id):
 
     ## log best trial
     mlflow.log_params(study.best_params)
-    mlflow.log_metrics({"best_valid_loss": study.best_trial.value})
+    mlflow.log_metrics({"best_nmi_ari_score": study.best_trial.value})
 
     ## log metadata
     mlflow.set_tags(tags={
-        'default_hyperparameters': default_hyperparameters,
-        'proposed_hyperparameters': proposed_hyperparameters
+        'suggested_hyperparameters': suggested_hyperparameters
     })
 
     return study.best_params
@@ -127,6 +130,7 @@ if __name__ == "__main__":
 
             ## run best model
             run_args['trial'] = None
+            run_args['args'].total_epochs = 25
             model, _ = run_spatial_CLIP(**run_args, params=best_params)
 
             ## infer signature

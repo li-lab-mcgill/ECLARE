@@ -265,8 +265,21 @@ def create_loaders(
 
     return train_loader, valid_loader, valid_idx, train_num_batches, valid_num_batches, train_n_batches_str_length, valid_n_batches_str_length, train_n_epochs_str_length, valid_n_epochs_str_length
 
+def fetch_data_from_loader_light(loader, subsample=2000, label_key='cell_type'):
 
-def fetch_data_from_loaders(rna_loader, atac_loader, paired=True, subsample=2000, rna_cells_idx=None, atac_cells_idx=None):
+    n_splits = np.ceil(loader.dataset.shape[0] / subsample).astype(int)
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True)
+    _, cells_idx = next(skf.split(np.zeros_like(loader.dataset.obs[label_key].values), loader.dataset.obs[label_key].values))
+
+    if issparse(loader.dataset.adatas[0].X):
+        cells  = torch.tensor(loader.dataset.adatas[0].X[cells_idx].toarray() , dtype=torch.float32)
+    else:
+        cells  = torch.tensor(loader.dataset.adatas[0].X[cells_idx] , dtype=torch.float32)
+
+    labels = loader.dataset.obs[label_key].values[cells_idx]
+    return cells, labels
+
+def fetch_data_from_loaders(rna_loader, atac_loader, paired=True, subsample=2000, rna_cells_idx=None, atac_cells_idx=None, label_key='cell_type'):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -281,8 +294,8 @@ def fetch_data_from_loaders(rna_loader, atac_loader, paired=True, subsample=2000
         total_rna_cells = rna_loader.dataset.shape[0]
         total_atac_cells = atac_loader.dataset.shape[0]
 
-        rna_celltypes = rna_loader.dataset.obs['cell_type'].values
-        atac_celltypes = atac_loader.dataset.obs['cell_type'].values
+        rna_celltypes = rna_loader.dataset.obs[label_key].values
+        atac_celltypes = atac_loader.dataset.obs[label_key].values
 
 
     if paired and (rna_cells_idx is None) and (atac_cells_idx is None):
