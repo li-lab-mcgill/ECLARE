@@ -9,7 +9,7 @@ from optuna import TrialPruned, Trial
 import mlflow
 from scipy.spatial.distance import squareform
 
-from eclare.models import CLIP, SpatialCLIP
+from eclare.models import CLIP, SpatialCLIP, get_hparams
 from eclare.losses_and_distances_utils import spatial_clip_loss, rbf_from_distance
 from eclare.eval_utils import align_metrics, align_metrics_light, compute_mdd_eval_metrics
 from eclare.data_utils import fetch_data_from_loaders, fetch_data_from_loader_light
@@ -274,11 +274,15 @@ def run_spatial_CLIP(
     model = SpatialCLIP(n_genes=n_genes, **params).to(device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001, weight_decay=0.01)
 
+    ## add decoder loss function to loaders - can inspect with 'import inspect; print(inspect.getsource(trial.params['decoder_loss']))'
+    rna_train_loader.decoder_loss = params['decoder_loss']
+    rna_valid_loader.decoder_loss = params['decoder_loss']
+
     ## log initial valid loss
-    model.eval()
     with torch.inference_mode():
-        valid_loss = spatial_pass(rna_valid_loader, model, device, None)
-    mlflow.log_metrics({'valid_loss': valid_loss}, step=0)
+        model.eval()
+        valid_losses = spatial_pass(rna_valid_loader, model, device, None)
+        mlflow.log_metrics({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)}, step=0)
 
     ## train model
     for epoch in (epochs_pbar := tqdm(range(args.total_epochs))):
@@ -286,20 +290,26 @@ def run_spatial_CLIP(
 
         ## optimize
         model.train()
-        train_loss = spatial_pass(rna_train_loader, model, device, optimizer)
+        train_losses = spatial_pass(rna_train_loader, model, device, optimizer)
 
         ## evaluate
-        model.eval()
         with torch.inference_mode():
-            valid_loss = spatial_pass(rna_valid_loader, model, device, None)
+            model.eval()
+            valid_losses = spatial_pass(rna_valid_loader, model, device, None)
 
         ## get clustering performance
         rna_cells, rna_labels = fetch_data_from_loader_light(rna_valid_loader, label_key='spatialLIBD')
-        rna_latents = model(rna_cells.to(device=device))
+        rna_latents, _ = model(rna_cells.to(device=device))
         nmi, ari = align_metrics_light(rna_latents, rna_labels)
         nmi_ari_score = 0.5 * (nmi + ari)
 
-        mlflow.log_metrics({'valid_loss': valid_loss, 'train_loss': train_loss, 'nmi': nmi, 'ari': ari}, step=epoch+1)
+        # Combine all metrics into a single dictionary
+        metrics = {'nmi': nmi, 'ari': ari}
+        metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
+        metrics.update({f'train_{k}': v for k, v in train_losses.items() if ~np.isnan(v)})
+        
+        # Log all metrics at once
+        mlflow.log_metrics(metrics, step=epoch+1)
 
         ## early stopping with Optuna pruner
         if trial is not None:
@@ -311,7 +321,7 @@ def run_spatial_CLIP(
 
 def spatial_pass(rna_loader, model, device, optimizer):
 
-    epoch_loss = []
+    epoch_losses = {'sp_loss': [], 'recn_loss': [], 'tot_loss': []}
     
     for rna_dat in (align_itr_pbar := tqdm(rna_loader)):
 
@@ -320,7 +330,7 @@ def spatial_pass(rna_loader, model, device, optimizer):
         #rna_celltypes = rna_dat.obs['cell_type'].tolist()
 
         rna_cells.requires_grad_()
-        rna_latents = model(rna_cells)
+        rna_latents, rna_recon = model(rna_cells)
 
         ## get spatial coordinates of spots
         array_row = rna_dat.obs['array_row']
@@ -343,12 +353,19 @@ def spatial_pass(rna_loader, model, device, optimizer):
         As[torch.eye(As.shape[0], dtype=torch.bool)] = -torch.inf
         logits[torch.eye(logits.shape[0], dtype=torch.bool)] = -torch.inf
 
-        ## get loss
-        loss_rows, loss_cols = spatial_clip_loss(logits, As)
-        loss = 0.5 * (loss_rows + loss_cols)
+        ## get spatial loss
+        spatial_loss_rows, spatial_loss_cols = spatial_clip_loss(logits, As)
+        loss = 0.5 * (spatial_loss_rows + spatial_loss_cols)
+        epoch_losses['sp_loss'].append(loss.item())
 
-        ## update epoch loss
-        epoch_loss.append(loss.item())
+        ## get reconstruction loss
+        if rna_loader.decoder_loss is not None:
+            reconstruction_loss = rna_loader.decoder_loss(rna_recon, rna_cells)
+            loss = loss + (0.01 * reconstruction_loss) # make sure that roughly on same scale as spatial loss
+
+            ## update other epoch losses
+            epoch_losses['recn_loss'].append(reconstruction_loss.item())
+            epoch_losses['tot_loss'].append(loss.item())
 
         ## backprop
         if optimizer is not None:
@@ -359,7 +376,9 @@ def spatial_pass(rna_loader, model, device, optimizer):
         ## update progress bar
         align_itr_pbar.set_description(f"{'VALID' if optimizer is None else 'TRAIN'} itr -- SPATIAL (loss: {loss.item():.4f})")
 
-    return np.mean(epoch_loss)
+    ## replace epoch losses with mean
+    epoch_losses = {k: np.mean(v) for k, v in epoch_losses.items()}
+    return epoch_losses
 
 def align_and_reconstruction_pass(rna_loader,
                                 atac_loader,

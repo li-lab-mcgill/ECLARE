@@ -18,10 +18,13 @@ def tune_spatial_CLIP(args, experiment_id):
 
     def run_spatial_CLIP_wrapper(trial, run_args):
         with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else f'Run {trial.number}', nested=True):
+
             params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
             run_args['trial'] = trial
+
             mlflow.log_params(params)
             _, nmi_ari_score = run_spatial_CLIP(**run_args, params=params)
+
             return nmi_ari_score
 
     ## create study and run optimization
@@ -130,12 +133,12 @@ if __name__ == "__main__":
 
             ## run best model
             run_args['trial'] = None
-            run_args['args'].total_epochs = 25
+            run_args['args'].total_epochs = 100
             model, _ = run_spatial_CLIP(**run_args, params=best_params)
 
             ## infer signature
             x = torch.from_numpy(valid_loader.dataset.adatas[0].X[0].toarray()).to(device=device, dtype=torch.float32).detach()
-            signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x).detach().cpu().numpy())
+            signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x)[0].detach().cpu().numpy()) ## TODO: check if can have multiple output signatures
 
             ## script model
             script_model = torch.jit.script(model)

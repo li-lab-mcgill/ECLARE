@@ -13,6 +13,7 @@ import os
 sys.path.insert(0, os.path.join(os.environ['ECLARE_ROOT'], 'neural-additive-models-pt'))
 
 from nam import NeuralAdditiveModel
+from eclare.data_utils import PrintableLambda
 
 class CLIP(nn.Module):
     def __init__(self, n_peaks, n_genes, args, device, trial=None, **kwargs):
@@ -273,8 +274,17 @@ class SpatialCLIP(nn.Module):
             'default': 0.2
         },
         'temperature': {
-            'suggest_distribution': CategoricalDistribution(choices=[0.1, 0.5, 1, 2, 5]),
+            'suggest_distribution': FloatDistribution(low=0.01, high=5),
             'default': 1
+        },
+        'decoder_loss': {
+            'suggest_distribution': CategoricalDistribution(
+                choices=[
+                    None, 
+                    PrintableLambda(lambda x, y: nn.MSELoss()(x, y), name='MSELoss'), 
+                    PrintableLambda(lambda x, y: nn.PoissonNLLLoss(log_input=False, reduction='mean')(x, y), name='PoissonNLLLoss')
+                ]),
+            'default': None
         }
     }
 
@@ -287,19 +297,35 @@ class SpatialCLIP(nn.Module):
         num_units           = kwargs['num_units']
         num_layers          = kwargs['num_layers']
         dropout_p           = kwargs['dropout_p']
+        decoder_loss        = kwargs['decoder_loss']
 
+        ## create encoder
         rna_encoder = [nn.Linear(n_genes, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] \
             + [nn.Linear(num_units, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] * (num_layers-1)
         
         self.rna_to_core = nn.Sequential(*rna_encoder)
 
+        ## create decoder, if decoder_loss is not None
+        if decoder_loss is not None:
+            self.core_to_rna = nn.Sequential(
+                nn.Linear(num_units, n_genes),
+                nn.ReLU()
+            )
+
     @classmethod
-    def get_hparams(cls):
-        return cls.HPARAMS
+    def get_hparams(cls, key=None):
+        return cls.HPARAMS[key] if key else cls.HPARAMS
     
     def forward(self, x):
-        core = self.rna_to_core(x)
-        return core
+        ## encode
+        latent = self.rna_to_core(x)
+
+        ## decode, if decoder_loss is not None
+        if hasattr(self, 'core_to_rna'):
+            recon = self.core_to_rna(latent)
+            return latent, recon
+        else:
+            return latent, None
     
 # Expose the method separately as a standalone function
 get_hparams = SpatialCLIP.get_hparams

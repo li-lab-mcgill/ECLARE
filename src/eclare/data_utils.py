@@ -400,3 +400,15 @@ def get_memory_usage_h5ad(file_path):
 
         total_usage = print_memory_usage(f)
         print(f"Total Memory Usage: {total_usage / (1024**3):.2f} GB")
+
+
+class PrintableLambda:
+    def __init__(self, func, name="CustomLambda"):
+        self.func = func
+        self.name = name
+
+    def __call__(self, *args, **kwargs):
+        return self.func(*args, **kwargs)
+
+    def __repr__(self):
+        return f"<PrintableLambda: {self.name}>"
