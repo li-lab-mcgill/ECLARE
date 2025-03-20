@@ -19,24 +19,8 @@ if __name__ == "__main__":
                         help='current options: CAtlas_Tabula_Sapiens, pbmc_multiome, pbmc_multiome_setup, splatter_sim, toy_simulation')
     parser.add_argument('--target_dataset', type=str, default='mdd',
                         help='current options: CAtlas_Tabula_Sapiens, pbmc_multiome, pbmc_multiome_setup, splatter_sim, toy_simulation')
-    parser.add_argument('--atac_datapath', type=str, default='/Users/dmannk/cisformer/workspace',
-                        help='path to ATAC data')
-    parser.add_argument('--rna_datapath', type=str, default='/Users/dmannk/cisformer/workspace',
-                        help='path to RNA data')
     parser.add_argument('--genes_by_peaks_str', type=str, default=None,
                         help='indicator of peaks to genes mapping to skip processing')
-    parser.add_argument('--cell_ontology_file', type=str, default='Cell_ontology.tsv',
-                        help='Cell ontology file')  
-    parser.add_argument('--ABC_dummies_file', type=str, default='CRE_to_genes_matrix_tabula_sapiens_HVG_global_max_max.h5ad',
-                        help='ABC dummies file')
-    parser.add_argument('--CAtlas_celltype_annotation_file', type=str, default='CAtlas_celltype_annotation.xlsx',
-                        help='CAtlas celltype annotation file')
-    parser.add_argument('--triplet_type', type=str, default='clip',
-                        help='type of triplets to use')
-    parser.add_argument('--num_units', type=int, default=128, metavar='U', nargs="+",
-                        help='number of hidden units in encoders')
-    parser.add_argument('--lr', type=float, default=1e-3, metavar='L', nargs="+",
-                        help='learning rate')
     parser.add_argument('--total_epochs', type=int, default=2, metavar='E',
                         help='number of epochs for training')
     parser.add_argument('--batch_size', type=int, default=1000, metavar='B',
@@ -47,33 +31,10 @@ if __name__ == "__main__":
                         help='tune hyperparameters using Optuna')
     parser.add_argument('--n_trials', type=int, default=1, metavar='R',
                         help='number of trials used for hyperparameter search')
-    parser.add_argument('--CRE_to_genes_file', type=str, default='atac_sl_celltype_predictor_arguments.pkl',
-                        help='Projection matrix to map cCREs to genes')
-    parser.add_argument('--ATAC_file', type=str, default='atac_filt_hvp.h5ad',
-                        help='ATAC data')
-    parser.add_argument('--RNA_file', type=str, default='TabulaSapiens_hvg_genes_aligned_atac.h5ad',
-                        help='RNA data')
-    parser.add_argument('--not_adult_only', action='store_true', default=False,
-                        help='flag to indicate whether only adult cells are considered')
-    parser.add_argument('--valid_freq', type=int, default=1, metavar='V',
-                        help='number of epochs after which performance evaluated on validation set')
     parser.add_argument('--tune_id', type=str, default=None,
                         help='ID of job for Optuna hyperparameter tuning')
-    parser.add_argument('--ddp', action='store_true', default=False,
-                        help='Flag to activate DDP for multi-GPU training')
     parser.add_argument('--subsample', type=int, default=-1,
                         help='number of samples to keep')
-    parser.add_argument('--pretrain', action='store_true', default=False,
-                        help='Flag to enable autoencoder pretraining')
-    parser.add_argument('--use_warmstart', action='store_true', default=False,
-                        help='Flag to use best result from warmstart')
-    parser.add_argument('--use_tune', action='store_true', default=False,
-                        help='Flag to use best result from tune')
-
-    parser.add_argument('--init_method', default='tcp://127.0.0.1:3456', type=str, help='')
-    parser.add_argument('--dist-backend', default='gloo', type=str, help='')
-    parser.add_argument('--world_size', default=1, type=int, help='')
-    parser.add_argument('--distributed', action='store_true', help='')
 
     args = parser.parse_args()
     #args, _ = parser.parse_known_args()
