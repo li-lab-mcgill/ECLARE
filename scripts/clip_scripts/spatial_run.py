@@ -10,11 +10,11 @@ from shutil import copy2
 from eclare import return_setup_func_from_dataset
 from eclare.run_utils import run_spatial_CLIP, get_or_create_experiment
 from eclare.tune_utils import Optuna_propose_hyperparameters, champion_callback
-from eclare.models import get_hparams
+from eclare.models import get_spatial_clip_hparams
 
 def tune_spatial_CLIP(args, experiment_id):
 
-    suggested_hyperparameters = get_hparams()
+    suggested_hyperparameters = get_spatial_clip_hparams()
 
     def run_spatial_CLIP_wrapper(trial, run_args):
         with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else f'Run {trial.number}', nested=True):

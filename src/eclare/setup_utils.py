@@ -1067,7 +1067,7 @@ def pfc_zhu_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, p
       
 def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Anderson'):
         
-    rna_datapath = atac_datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Anderson')
+    datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Anderson', 'snMultiome')
 
     if args.genes_by_peaks_str is not None:
 
@@ -1077,9 +1077,9 @@ def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_on
             binary_mask_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.npz"
             genes_peaks_dict_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.pkl"
 
-            genes_to_peaks_binary_mask_path = os.path.join(atac_datapath, binary_mask_file)
+            genes_to_peaks_binary_mask_path = os.path.join(datapath, binary_mask_file)
             genes_to_peaks_binary_mask = load_npz(genes_to_peaks_binary_mask_path)
-            pkl_path = os.path.join(atac_datapath, genes_peaks_dict_file)
+            pkl_path = os.path.join(datapath, genes_peaks_dict_file)
             with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
 
         elif args.target_dataset == dataset:
@@ -1087,8 +1087,8 @@ def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_on
             ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_source_{args.source_dataset}.h5ad"
             binary_mask_file = genes_peaks_dict_file = genes_to_peaks_binary_mask = genes_peaks_dict = None
 
-        atac_fullpath = os.path.join(atac_datapath, ATAC_file)
-        rna_fullpath = os.path.join(rna_datapath, RNA_file)
+        atac_fullpath = os.path.join(datapath, ATAC_file)
+        rna_fullpath = os.path.join(datapath, RNA_file)
 
         atac = anndata.read_h5ad(atac_fullpath)
         rna  = anndata.read_h5ad(rna_fullpath)
@@ -1099,8 +1099,8 @@ def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_on
         RNA_file = "rna_ctrl.h5ad"
         ATAC_file = "atac_ctrl.h5ad"
 
-        atac_fullpath = os.path.join(atac_datapath, ATAC_file)
-        rna_fullpath = os.path.join(rna_datapath, RNA_file)
+        atac_fullpath = os.path.join(datapath, ATAC_file)
+        rna_fullpath = os.path.join(datapath, RNA_file)
     
         atac = anndata.read_h5ad(atac_fullpath)
         rna  = anndata.read_h5ad(rna_fullpath)
@@ -1188,7 +1188,7 @@ def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_on
 
 def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='Midbrain_Adams'):
     
-    rna_datapath = atac_datapath = os.path.join(os.environ['DATAPATH'], 'Midbrain_Adams')
+    datapath = os.path.join(os.environ['DATAPATH'], 'Midbrain_Adams')
     celltypist_model_path = os.path.join(os.environ['DATAPATH'], 'Adult_Human_PrefrontalCortex.pkl')
 
     if args.genes_by_peaks_str is not None:
@@ -1199,9 +1199,9 @@ def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=
             binary_mask_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.npz"
             genes_peaks_dict_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.pkl"
 
-            genes_to_peaks_binary_mask_path = os.path.join(atac_datapath, binary_mask_file)
+            genes_to_peaks_binary_mask_path = os.path.join(datapath, binary_mask_file)
             genes_to_peaks_binary_mask = load_npz(genes_to_peaks_binary_mask_path)
-            pkl_path = os.path.join(atac_datapath, genes_peaks_dict_file)
+            pkl_path = os.path.join(datapath, genes_peaks_dict_file)
             with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
 
         elif args.target_dataset == dataset:
@@ -1209,8 +1209,8 @@ def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=
             ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_source_{args.source_dataset}.h5ad"
             binary_mask_file = genes_peaks_dict_file = genes_to_peaks_binary_mask = genes_peaks_dict = None
 
-        atac_fullpath = os.path.join(atac_datapath, ATAC_file)
-        rna_fullpath = os.path.join(rna_datapath, RNA_file)
+        atac_fullpath = os.path.join(datapath, ATAC_file)
+        rna_fullpath = os.path.join(datapath, RNA_file)
 
         atac = anndata.read_h5ad(atac_fullpath)
         rna  = anndata.read_h5ad(rna_fullpath)
@@ -1221,8 +1221,8 @@ def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=
         RNA_file = "rna_ctrl.h5ad"
         ATAC_file = "atac_ctrl.h5ad"
 
-        atac_fullpath = os.path.join(atac_datapath, ATAC_file)
-        rna_fullpath = os.path.join(rna_datapath, RNA_file)
+        atac_fullpath = os.path.join(datapath, ATAC_file)
+        rna_fullpath = os.path.join(datapath, RNA_file)
     
         atac = anndata.read_h5ad(atac_fullpath)
         rna  = anndata.read_h5ad(rna_fullpath)
@@ -1332,7 +1332,7 @@ def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=
 
 def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Ma'):
         
-    datapath = rna_datapath = atac_datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Ma')
+    datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Ma')
 
     if args.genes_by_peaks_str is not None:
 
@@ -1342,9 +1342,9 @@ def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, p
             binary_mask_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.npz"
             genes_peaks_dict_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.pkl"
 
-            genes_to_peaks_binary_mask_path = os.path.join(atac_datapath, binary_mask_file)
+            genes_to_peaks_binary_mask_path = os.path.join(datapath, binary_mask_file)
             genes_to_peaks_binary_mask = load_npz(genes_to_peaks_binary_mask_path)
-            pkl_path = os.path.join(atac_datapath, genes_peaks_dict_file)
+            pkl_path = os.path.join(datapath, genes_peaks_dict_file)
             with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
 
         elif args.target_dataset == dataset:
@@ -1352,8 +1352,8 @@ def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, p
             ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_source_{args.source_dataset}.h5ad"
             binary_mask_file = genes_peaks_dict_file = genes_to_peaks_binary_mask = genes_peaks_dict = None
 
-        atac_fullpath = os.path.join(atac_datapath, ATAC_file)
-        rna_fullpath = os.path.join(rna_datapath, RNA_file)
+        atac_fullpath = os.path.join(datapath, ATAC_file)
+        rna_fullpath = os.path.join(datapath, RNA_file)
 
         atac = anndata.read_h5ad(atac_fullpath)
         rna  = anndata.read_h5ad(rna_fullpath)
@@ -1363,16 +1363,16 @@ def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, p
         RNA_file = "GSE207334_Multiome_rna_counts.mtx.gz"
         ATAC_file = "GSE207334_Multiome_atac_counts.mtx.gz"
 
-        atac_fullpath = os.path.join(atac_datapath, ATAC_file)
-        rna_fullpath = os.path.join(rna_datapath, RNA_file)
+        atac_fullpath = os.path.join(datapath, ATAC_file)
+        rna_fullpath = os.path.join(datapath, RNA_file)
     
         ## Load data
         atac = sc.read_mtx(atac_fullpath).T
         rna  = sc.read_mtx(rna_fullpath).T
 
         ## Load metadata
-        atac_peaks = pd.read_csv(os.path.join(atac_datapath, 'GSE207334_Multiome_atac_peaks.txt.gz'), delimiter=None, header=None)
-        rna_genes = pd.read_csv(os.path.join(rna_datapath, 'GSE207334_Multiome_rna_genes.txt.gz'), delimiter=None, header=None)
+        atac_peaks = pd.read_csv(os.path.join(datapath, 'GSE207334_Multiome_atac_peaks.txt.gz'), delimiter=None, header=None)
+        rna_genes = pd.read_csv(os.path.join(datapath, 'GSE207334_Multiome_rna_genes.txt.gz'), delimiter=None, header=None)
         cell_metadata = pd.read_csv(os.path.join(datapath, 'GSE207334_Multiome_cell_meta.txt.gz'), delimiter='\t')
 
         ## Assign var and obs variables to ATAC and RNA data
@@ -1406,7 +1406,7 @@ def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, p
             rna = rna[:, rna.var['highly_variable'].astype(bool)].to_memory()
 
         ## Save dummy-encoded overlapping intervals, use later as mask
-        genes_to_peaks_binary_mask_path = os.path.join(atac_datapath, f'genes_to_peaks_binary_mask_{rna.n_vars}_by_{atac.n_vars}.npz')
+        genes_to_peaks_binary_mask_path = os.path.join(datapath, f'genes_to_peaks_binary_mask_{rna.n_vars}_by_{atac.n_vars}.npz')
 
         if not os.path.exists(genes_to_peaks_binary_mask_path):
             print(f'peaks to genes mask not found, saving to {os.path.splitext(genes_to_peaks_binary_mask_path)[-1]}')
@@ -1462,7 +1462,7 @@ def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, p
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
     elif return_type == 'data':
-        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
+        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, datapath
 
 
 def gene_activity_score_adata(atac, rna):

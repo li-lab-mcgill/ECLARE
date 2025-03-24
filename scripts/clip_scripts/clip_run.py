@@ -5,10 +5,56 @@ import torch
 import pandas as pd
 import optuna
 from shutil import copy2
+import mlflow
 
-#from eclare import merged_dataset_setup, return_setup_func_from_dataset, run_CLIP, study_summary
-from eclare import merged_dataset_setup, return_setup_func_from_dataset, study_summary
-from eclare.run_utils import run_CLIP
+from eclare import return_setup_func_from_dataset
+from eclare.tune_utils import Optuna_propose_hyperparameters, champion_callback
+from eclare.run_utils import run_CLIP, get_or_create_experiment
+from eclare.models import get_clip_hparams
+
+def tune_CLIP(args, experiment_id):
+
+    suggested_hyperparameters = get_clip_hparams()
+
+    def run_CLIP_wrapper(trial, run_args):
+        with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else f'Run {trial.number}', nested=True):
+
+            params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
+            run_args['trial'] = trial
+
+            mlflow.log_params(params)
+            _, nmi_ari_score = run_CLIP(**run_args, params=params)
+
+            return nmi_ari_score
+
+    ## create study and run optimization
+    study = optuna.create_study(
+        direction='maximize',
+        sampler=optuna.samplers.TPESampler(
+            consider_prior=False,  # not recommended when sampling from categorical variables
+            n_startup_trials=0,
+        ),
+        pruner=optuna.pruners.MedianPruner(
+            n_startup_trials=0,  # Don't prune until this many trials have completed
+            n_warmup_steps=3,   # Don't prune until this many steps in each trial
+            interval_steps=1,     # Check for pruning every this many steps
+        )
+    )
+    Optuna_objective = lambda trial: run_CLIP_wrapper(trial, run_args)
+    study.optimize(Optuna_objective, n_trials=args.n_trials, callbacks=[champion_callback])
+
+    ## log best trial
+    mlflow.log_params(study.best_params)
+    mlflow.log_metrics({"best_nmi_ari_score": study.best_trial.value})
+
+    ## log metadata
+    mlflow.set_tags(tags={
+        'suggested_hyperparameters': suggested_hyperparameters
+    })
+
+    return study.best_params
+    
+
 
 if __name__ == "__main__":
 
@@ -19,7 +65,7 @@ if __name__ == "__main__":
                         help='current options: CAtlas_Tabula_Sapiens, pbmc_multiome, pbmc_multiome_setup, splatter_sim, toy_simulation')
     parser.add_argument('--target_dataset', type=str, default='mdd',
                         help='current options: CAtlas_Tabula_Sapiens, pbmc_multiome, pbmc_multiome_setup, splatter_sim, toy_simulation')
-    parser.add_argument('--genes_by_peaks_str', type=str, default=None,
+    parser.add_argument('--genes_by_peaks_str', type=str, default='9918_by_43840',
                         help='indicator of peaks to genes mapping to skip processing')
     parser.add_argument('--total_epochs', type=int, default=2, metavar='E',
                         help='number of epochs for training')
@@ -66,98 +112,52 @@ if __name__ == "__main__":
         source_setup_func(args, return_type='loaders', dataset=args.source_dataset)
     
     ## missing overlapping_subjects argument if target is MDD (False by default)
-    _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
-        target_setup_func(args, return_type='loaders', dataset=args.target_dataset)
+    #_, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
+    #    target_setup_func(args, return_type='loaders', dataset=args.target_dataset)
+    
+    run_args = {
+        'args': args,
+        'rna_train_loader': rna_train_loader,
+        'rna_valid_loader': rna_valid_loader,
+        'atac_train_loader': atac_train_loader,
+        'atac_valid_loader': atac_valid_loader,
+    }
+
+    ## get or create mlflow experiment
+    experiment_id = get_or_create_experiment('CLIP')
+    mlflow.set_experiment(experiment_id)
             
     ## Run training loops
-    if (not args.tune_hyperparameters) and (args.tune_id is None):
+    if (not args.tune_hyperparameters):
 
         tuned_hyperparameters = {}
+        model = run_CLIP(**run_args, params=tuned_hyperparameters)
 
-        model = run_CLIP(None, args, genes_to_peaks_binary_mask,
-                               rna_train_loader, atac_train_loader, rna_valid_loader, atac_valid_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length,\
-                               target_atac_valid_loader, target_rna_valid_loader, \
-                               tuned_hyperparameters, outdir=args.outdir, \
-                                do_pretrain_train=False, do_pretrain_valid=False, do_align_train=True, do_align_valid=True)
-                         
-    elif (not args.tune_hyperparameters) and (args.tune_id is not None):
+    else:
 
-        tune_id = str(args.tune_id)
-        tune_job = 'clip_tune_' + tune_id
-        tune_job_path = os.path.join(os.environ.get('OUTPATH'), tune_job)
+        optuna.logging.set_verbosity(optuna.logging.ERROR)
+        with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else 'Hyperparameter tuning'):
 
-        if args.use_tune:
-            trial_df_path = os.path.join(tune_job_path, 'tune_optuna_trials.csv')
-            trial_df = pd.read_csv(trial_df_path, index_col=0)
-        elif args.use_warmstart:
-            trial_df_path = os.path.join(tune_job_path, 'warmstart_optuna_trials.csv')
-            trial_df = pd.read_csv(trial_df_path, index_col=0)
-        else:
-            print('warmstart vs tune not specified, default to concat of tune and warmstart trials')
+            best_params = tune_CLIP(args, experiment_id)
 
-            trial_df_path_warmstart = os.path.join(tune_job_path, 'warmstart_optuna_trials.csv')
-            trial_df_warmstart = pd.read_csv(trial_df_path_warmstart, index_col=0)
+            ## run best model
+            run_args['trial'] = None
+            run_args['args'].total_epochs = 100
+            model, _ = run_CLIP(**run_args, params=best_params)
 
-            trial_df_path_tune      = os.path.join(tune_job_path, 'tune_optuna_trials.csv')
-            trial_df_tune = pd.read_csv(trial_df_path_tune, index_col=0)
+            ## infer signature
+            x = torch.from_numpy(rna_valid_loader.dataset.adatas[0].X[0].toarray()).to(device=device, dtype=torch.float32).detach()
+            signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x)[0].detach().cpu().numpy()) ## TODO: check if can have multiple output signatures
 
-            trial_df = pd.concat([trial_df_warmstart, trial_df_tune], axis=0)
-        
-        tuned_hyperparameters = dict(trial_df.iloc[trial_df['value'].argmin()])
+            ## script model
+            script_model = torch.jit.script(model)
 
-        model = run_CLIP(None, args, genes_to_peaks_binary_mask,
-                               rna_train_loader, atac_train_loader, rna_valid_loader, atac_valid_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length,\
-                               target_atac_valid_loader, target_rna_valid_loader, \
-                               tuned_hyperparameters, outdir=args.outdir, \
-                                do_pretrain_train=False, do_pretrain_valid=False, do_align_train=True, do_align_valid=True)
+            ## log model and signature
+            mlflow.pytorch.log_model(script_model, "best_model", signature=signature)
+            model_uri = mlflow.get_artifact_uri("best_model")
 
 
-        try:
-            copy2(os.path.join(tune_job_path, 'tune_optuna_trials.csv'), args.outdir)
-        except FileNotFoundError:
-            pass
 
-        try:
-            copy2(os.path.join(tune_job_path, 'warmstart_optuna_trials.csv'), args.outdir)
-        except FileNotFoundError:
-            pass
-
-
-    elif args.tune_hyperparameters:
-
-        tuned_hyperparameters = None
-
-        run_CLIP_with_args = lambda trial: run_CLIP(trial, args, genes_to_peaks_binary_mask,
-                                                                        rna_train_loader, atac_train_loader, rna_valid_loader, atac_valid_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, target_atac_valid_loader, target_rna_valid_loader, tuned_hyperparameters, outdir=args.outdir, do_pretrain_train=True, do_pretrain_valid=True, do_align_train=False, do_align_valid=False)
-                                                                        
-
-        ## pretrain + warm-up
-        print('pretrain / warm-start')
-
-        #pruner = optuna.pruners.MedianPruner(n_warmup_steps=5)
-        pruner = optuna.pruners.NopPruner()
-        warmstart = optuna.create_study(direction="minimize", pruner=pruner, study_name='tune-align', sampler=optuna.samplers.RandomSampler())
-
-        warmstart.optimize(run_CLIP_with_args, n_trials=args.n_trials, timeout=None)
-
-        if args.n_trials > 0:
-            study_summary(warmstart)
-            warmstart_df = warmstart.trials_dataframe(attrs=('value', 'params', 'user_attrs')) ## extract dataframe containing data of hyperparameter tuning
-            warmstart_df.to_csv(args.outdir + '/warmstart_optuna_trials.csv')
-
-        ## tune
-        print('tune')
-                
-        #pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2)
-        pruner = optuna.pruners.NopPruner()
-        tune = optuna.create_study(direction="minimize", pruner=pruner, study_name=warmstart.study_name, sampler=optuna.samplers.TPESampler(), load_if_exists=True)
-        
-        tune.optimize(run_CLIP_with_args, n_trials=int(args.n_trials / 4) + 1, timeout=None)
-
-        if args.n_trials > 0:
-            study_summary(tune)
-            tune_df = tune.trials_dataframe(attrs=('value', 'params', 'user_attrs'))
-            tune_df.to_csv(args.outdir + '/tune_optuna_trials.csv')
 
 
     ## print output directory
