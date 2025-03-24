@@ -69,9 +69,13 @@ class CLIP(nn.Module):
     def get_hparams(cls, key=None):
         return cls.HPARAMS[key] if key else cls.HPARAMS
 
-    def forward(self, x, modality='rna'):
+    def forward(self, x, modality: int):
+
+        '''
+        modality: 0 for rna, 1 for atac. encode with int to enable model scriptability with torch.jit
+        '''
     
-        if modality == 'rna':
+        if modality == 0:
             latent = self.rna_to_core(x)
 
             if hasattr(self, 'core_to_rna'):
@@ -80,7 +84,7 @@ class CLIP(nn.Module):
             else:
                 return latent, None
         
-        elif modality == 'atac':
+        elif modality == 1:
             latent = self.atac_to_core(x)
 
             if hasattr(self, 'core_to_atac'):

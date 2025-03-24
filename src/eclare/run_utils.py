@@ -57,8 +57,8 @@ def run_CLIP(
         ## get clustering performance
         rna_cells, rna_labels = fetch_data_from_loader_light(rna_valid_loader, label_key='cell_type')
         atac_cells, atac_labels = fetch_data_from_loader_light(atac_valid_loader, label_key='cell_type')
-        rna_latents, _ = model(rna_cells.to(device=device), modality='rna')
-        atac_latents, _ = model(atac_cells.to(device=device), modality='atac')
+        rna_latents, _ = model(rna_cells.to(device=device), modality=0)
+        atac_latents, _ = model(atac_cells.to(device=device), modality=1)
         rna_nmi, rna_ari = align_metrics_light(rna_latents, rna_labels)
         atac_nmi, atac_ari = align_metrics_light(atac_latents, atac_labels)
         nmi_ari_score = 0.25 * (rna_nmi + rna_ari + atac_nmi + atac_ari)
@@ -205,7 +205,7 @@ def spatial_pass(rna_loader, model, device, optimizer):
 
 def clip_pass(rna_loader, atac_loader, model, optimizer):
 
-    epoch_losses = {'align_loss_rna': [], 'align_loss_atac': [], 'recon_loss_rna': [], 'recon_loss_atac': [], 'tot_loss': []}
+    epoch_losses = {'clip_loss_rna': [], 'clip_loss_atac': [], 'recon_loss_rna': [], 'recon_loss_atac': [], 'tot_loss': []}
         
     for rna_dat, atac_dat in (align_itr_pbar := tqdm( zip(rna_loader, atac_loader))):
 
@@ -223,8 +223,8 @@ def clip_pass(rna_loader, atac_loader, model, optimizer):
         atac_celltypes = atac_dat.obs['cell_type'].tolist()
 
         ## project cells/nuclei
-        rna_latents, rna_recon = model(rna_cells, modality='rna')
-        atac_latents, atac_recon = model(atac_cells, modality='atac')
+        rna_latents, rna_recon = model(rna_cells, modality=0)
+        atac_latents, atac_recon = model(atac_cells, modality=1)
 
         ## Align losses
         clip_loss_atac, clip_loss_rna = clip_loss(None,
@@ -234,16 +234,20 @@ def clip_pass(rna_loader, atac_loader, model, optimizer):
                                                 rna_celltypes=rna_celltypes,
                                                 temperature=model.temperature)
 
-        clip_loss_ = 0.5 * (clip_loss_atac + clip_loss_rna)
+        loss = 0.5 * (clip_loss_atac + clip_loss_rna)
+        epoch_losses['clip_loss_rna'].append(clip_loss_rna.item())
+        epoch_losses['clip_loss_atac'].append(clip_loss_atac.item())
 
         ## Reconstruction losses
         if model.decoder_loss:
             recon_loss_rna = model.decoder_loss(rna_recon, rna_cells)
             recon_loss_atac = model.decoder_loss(atac_recon, atac_cells)
             recon_loss = 0.5 * (recon_loss_rna + recon_loss_atac)
-            
-        ## Total loss. Sum losses, but more memory efficient to call backward on each loss separately (not implemented here yet)
-        loss = clip_loss_ + (0.01 * recon_loss) if model.decoder_loss else clip_loss_
+            loss = loss + (0.01 * recon_loss) ## Total loss. Sum losses, but more memory efficient to call backward on each loss separately (not implemented here yet)
+
+            epoch_losses['recon_loss_rna'].append(recon_loss_rna.item())
+            epoch_losses['recon_loss_atac'].append(recon_loss_atac.item())
+            epoch_losses['tot_loss'].append(loss.item())
 
         if (optimizer is not None):
             optimizer.zero_grad()
