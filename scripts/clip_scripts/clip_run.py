@@ -71,7 +71,7 @@ if __name__ == "__main__":
                         help='number of epochs for training')
     parser.add_argument('--batch_size', type=int, default=1000, metavar='B',
                         help='size of mini-batch')
-    parser.add_argument('--feature', type=str, default='None specified', metavar='F',
+    parser.add_argument('--feature', type=str, default=None, metavar='F',
                         help='Distinctive feature for current job')
     parser.add_argument('--tune_hyperparameters', action='store_true', default=False,
                         help='tune hyperparameters using Optuna')
@@ -147,7 +147,7 @@ if __name__ == "__main__":
 
             ## infer signature
             x = torch.from_numpy(rna_valid_loader.dataset.adatas[0].X[0].toarray()).to(device=device, dtype=torch.float32).detach()
-            signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x)[0].detach().cpu().numpy()) ## TODO: check if can have multiple output signatures
+            signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x, 0)[0].detach().cpu().numpy()) ## TODO: check if can have multiple output signatures
 
             ## script model
             script_model = torch.jit.script(model)
@@ -155,9 +155,6 @@ if __name__ == "__main__":
             ## log model and signature
             mlflow.pytorch.log_model(script_model, "best_model", signature=signature)
             model_uri = mlflow.get_artifact_uri("best_model")
-
-
-
 
 
     ## print output directory
