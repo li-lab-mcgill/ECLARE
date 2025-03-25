@@ -23,6 +23,7 @@ def align_metrics_light(latents, labels, k=20):
 
     neighbors = jax_approx_min_k(latents.detach().cpu(), k)
     nmi_ari_dict = nmi_ari_cluster_labels_leiden(neighbors, labels, optimize_resolution=True)
+
     return nmi_ari_dict['nmi'], nmi_ari_dict['ari']
 
 def align_metrics(model, rna_cells, rna_celltypes, atac_cells, atac_celltypes, paired=True, is_latents=False):
