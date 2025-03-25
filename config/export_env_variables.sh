@@ -47,6 +47,7 @@ if __name__ == '__main__':
 eval "$export_commands"
 
 echo "Environment variables set for $ACTIVE_ENV:"
-echo "ECLARE_ROOT=$ECLARE_ROOT"
-echo "OUTPATH=$OUTPATH"
-echo "DATAPATH=$DATAPATH"
+echo -e "\t - ECLARE_ROOT=$ECLARE_ROOT"
+echo -e "\t - OUTPATH=$OUTPATH"
+echo -e "\t - DATAPATH=$DATAPATH"
+echo -e '\n'
