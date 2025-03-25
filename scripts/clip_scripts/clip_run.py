@@ -35,8 +35,8 @@ def tune_CLIP(args, experiment_id):
             n_startup_trials=0,
         ),
         pruner=optuna.pruners.MedianPruner(
-            n_startup_trials=0,  # Don't prune until this many trials have completed
-            n_warmup_steps=3,   # Don't prune until this many steps in each trial
+            n_startup_trials=3,  # Don't prune until this many trials have completed
+            n_warmup_steps=20,   # Don't prune until this many steps in each trial
             interval_steps=1,     # Check for pruning every this many steps
         )
     )

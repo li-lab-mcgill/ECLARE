@@ -8,6 +8,7 @@ from pybedtools import BedTool
 
 #import bbknn
 from muon import atac as ac
+from muon import read_10x_h5 as muon_read_10x_h5
 from scipy.sparse import csr_matrix, save_npz, load_npz
 from pickle import dump as pkl_dump
 from pickle import load as pkl_load
@@ -1652,3 +1653,29 @@ def spatialLIBD_setup(batch_size, total_epochs, cell_group='Cluster', hvg_only=T
 
     return sp, cell_group, datapath
 
+
+def multiome_mouse_brain_setup(args, return_raw_data=False, cell_group='TBD', return_type='loaders', chain_file_name=None):
+
+    datapath = os.path.join(os.environ['DATAPATH'], 'multiome_mouse_brain')
+
+    ## Load the data
+    mudata = muon_read_10x_h5(os.path.join(os.environ['DATAPATH'], 'multiome_mouse_brain', 'M_Brain_Chromium_Nuc_Isolation_vs_SaltyEZ_vs_ComplexTissueDP_filtered_feature_bc_matrix.h5'))
+    
+    if return_raw_data and return_type == 'data':
+        return mudata, cell_group, datapath
+    
+    if chain_file_name is not None:
+        
+        atac_intervals = mudata['atac'].var['interval'].reset_index().drop(columns=['index'])
+        atac_intervals_df = pd.DataFrame(atac_intervals['interval'].str.split(':|-', expand=True).values, columns=['chrom', 'start', 'end'])
+        atac_intervals_df['name'] = [f'peak_{i}' for i in range(atac_intervals_df.shape[0])] # add name column to trace back to original peaks
+        atac_intervals_bed = BedTool.from_dataframe(atac_intervals_df)
+
+        os.environ["PATH"] = os.path.expanduser("~/bin") + ":" + os.environ["PATH"]
+        chain_file_path = os.path.join(os.environ['DATAPATH'], chain_file_name)
+        lifted_intervals_bed = atac_intervals_bed.liftover(chain_file_path, unmapped=os.path.join(datapath, 'multiome_mouse_brain_peak_beds_unmapped_mm10ToHg38.bed'), liftover_args='-minMatch=0.8')
+
+    
+    
+    
+    
