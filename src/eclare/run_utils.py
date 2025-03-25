@@ -15,6 +15,23 @@ from eclare.eval_utils import align_metrics_light
 from eclare.data_utils import fetch_data_from_loader_light
 from eclare.eval_utils import foscttm_moscot
 
+def get_metrics(model, rna_valid_loader, atac_valid_loader, device):
+
+    rna_cells, rna_labels = fetch_data_from_loader_light(rna_valid_loader, label_key='cell_type')
+    atac_cells, atac_labels = fetch_data_from_loader_light(atac_valid_loader, label_key='cell_type')
+
+    rna_latents, _ = model(rna_cells.to(device=device), modality=0)
+    atac_latents, _ = model(atac_cells.to(device=device), modality=1)
+
+    rna_nmi, rna_ari = align_metrics_light(rna_latents, rna_labels)
+    atac_nmi, atac_ari = align_metrics_light(atac_latents, atac_labels)
+    nmi_ari_score = 0.25 * (rna_nmi + rna_ari + atac_nmi + atac_ari)
+    foscttm_score = foscttm_moscot(rna_latents.detach().cpu().numpy(), atac_latents.detach().cpu().numpy()).mean().item()
+    one_minus_foscttm_score = 1 - foscttm_score # the higher the better
+
+    metrics = {'nmi_ari': nmi_ari_score, '1-foscttm': one_minus_foscttm_score}
+    return metrics
+
 def run_CLIP(
     args: Namespace,
     rna_train_loader,
@@ -54,34 +71,20 @@ def run_CLIP(
             model.eval()
             valid_losses = clip_pass(rna_valid_loader, atac_valid_loader, model, None)
 
-        ## get performance metrics
-        rna_cells, rna_labels = fetch_data_from_loader_light(rna_valid_loader, label_key='cell_type')
-        atac_cells, atac_labels = fetch_data_from_loader_light(atac_valid_loader, label_key='cell_type')
-
-        rna_latents, _ = model(rna_cells.to(device=device), modality=0)
-        atac_latents, _ = model(atac_cells.to(device=device), modality=1)
-
-        rna_nmi, rna_ari = align_metrics_light(rna_latents, rna_labels)
-        atac_nmi, atac_ari = align_metrics_light(atac_latents, atac_labels)
-        nmi_ari_score = 0.25 * (rna_nmi + rna_ari + atac_nmi + atac_ari)
-        foscttm_score = foscttm_moscot(rna_latents.detach().cpu().numpy(), atac_latents.detach().cpu().numpy()).mean()
-        one_minus_foscttm_score = 1 - foscttm_score # the higher the better
-
-        # Combine all metrics into a single dictionary
-        metrics = {'nmi_ari': nmi_ari_score, '1-foscttm': one_minus_foscttm_score}
-        metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
-        metrics.update({f'train_{k}': v for k, v in train_losses.items() if ~np.isnan(v)})
-
-        # Log all metrics at once
+        ## get and log performance metrics
+        metrics = get_metrics(model, rna_valid_loader, atac_valid_loader, device)
         mlflow.log_metrics(metrics, step=epoch+1)
+
+        ## get metric to optimize
+        metric_to_optimize = metrics.get(args.metric_to_optimize, None)
 
         ## early stopping with Optuna pruner
         if trial is not None:
-            trial.report(nmi_ari_score, step=epoch+1)
+            trial.report(metric_to_optimize, step=epoch+1)
             if trial.should_prune():
                 raise TrialPruned()
 
-        return model, one_minus_foscttm_score
+    return model, metric_to_optimize
 
 
 def run_spatial_CLIP(

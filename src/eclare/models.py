@@ -45,7 +45,7 @@ class CLIP(nn.Module):
         super().__init__()
         
         self.temperature    = hparams['temperature']
-        self.decoder_loss        = hparams['decoder_loss']
+        self.decoder_loss   = hparams['decoder_loss']
         num_units           = hparams['num_units']
         num_layers          = hparams['num_layers']
         dropout_p           = hparams['dropout_p']

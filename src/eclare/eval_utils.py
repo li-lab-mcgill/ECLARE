@@ -19,6 +19,7 @@ from eclare.losses_and_distances_utils import clip_loss, clip_loss_split_by_ct
 from eclare.data_utils import fetch_data_from_loaders
 from eclare.losses_and_distances_utils import cosine_distance
 
+
 def align_metrics_light(latents, labels, k=20):
 
     neighbors = jax_approx_min_k(latents.detach().cpu(), k)

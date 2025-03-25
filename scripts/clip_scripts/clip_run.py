@@ -17,15 +17,15 @@ def tune_CLIP(args, experiment_id):
     suggested_hyperparameters = get_clip_hparams()
 
     def run_CLIP_wrapper(trial, run_args):
-        with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else f'Run {trial.number}', nested=True):
+        with mlflow.start_run(experiment_id=experiment_id, run_name=f'Trial {trial.number}', nested=True):
 
             params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
             run_args['trial'] = trial
 
             mlflow.log_params(params)
-            _, nmi_ari_score = run_CLIP(**run_args, params=params)
+            _, metric_to_optimize = run_CLIP(**run_args, params=params)
 
-            return nmi_ari_score
+            return metric_to_optimize
 
     ## create study and run optimization
     study = optuna.create_study(
@@ -45,7 +45,7 @@ def tune_CLIP(args, experiment_id):
 
     ## log best trial
     mlflow.log_params(study.best_params)
-    mlflow.log_metrics({"best_nmi_ari_score": study.best_trial.value})
+    mlflow.log_metrics({f"best_{args.metric_to_optimize}": study.best_trial.value})
 
     ## log metadata
     mlflow.set_tags(tags={
@@ -75,6 +75,8 @@ if __name__ == "__main__":
                         help='Distinctive feature for current job')
     parser.add_argument('--tune_hyperparameters', action='store_true', default=False,
                         help='tune hyperparameters using Optuna')
+    parser.add_argument('--metric_to_optimize', type=str, default='1-foscttm', metavar='M',
+                        help='metric to optimize')
     parser.add_argument('--n_trials', type=int, default=1, metavar='R',
                         help='number of trials used for hyperparameter search')
     parser.add_argument('--tune_id', type=str, default=None,
@@ -126,17 +128,24 @@ if __name__ == "__main__":
     ## get or create mlflow experiment
     experiment_id = get_or_create_experiment('CLIP')
     mlflow.set_experiment(experiment_id)
-            
-    ## Run training loops
-    if (not args.tune_hyperparameters):
 
-        tuned_hyperparameters = {}
-        model = run_CLIP(**run_args, params=tuned_hyperparameters)
-
+    if args.feature:
+        run_name = args.feature
     else:
+        run_name = 'Hyperparameter tuning' if args.tune_hyperparameters else 'Training'
 
-        optuna.logging.set_verbosity(optuna.logging.ERROR)
-        with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else 'Hyperparameter tuning'):
+    with mlflow.start_run(experiment_id=experiment_id, run_name=run_name):
+            
+        ## Run training loops
+        if (not args.tune_hyperparameters):
+
+            hyperparameters = get_clip_hparams()
+            tuned_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
+            model = run_CLIP(**run_args, params=tuned_hyperparameters)
+
+        else:
+
+            optuna.logging.set_verbosity(optuna.logging.ERROR)
 
             best_params = tune_CLIP(args, experiment_id)
 
