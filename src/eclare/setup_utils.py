@@ -902,7 +902,9 @@ def mdd_setup(args, pretrain=None, cell_groups=dict({'atac':'ClustersMapped','rn
 def pfc_zhu_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_Zhu', \
     keep_group=['Inf', 'Child', 'Adol', 'Adult']):
 
-    rna_datapath = atac_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu')
+    datapath = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu')
+    rna_datapath = os.path.join(datapath, 'rna')
+    atac_datapath = os.path.join(datapath, 'atac')
 
     if args.genes_by_peaks_str is not None:
 
