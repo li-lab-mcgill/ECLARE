@@ -79,15 +79,15 @@ run_clip_task_on_gpu() {
 
     echo "Running task $task_idx on GPU $gpu_id"
     CUDA_VISIBLE_DEVICES=$gpu_id \
-    python ./scripts/clip_scripts/clip_run.py \
+    python ${ECLARE_ROOT}/scripts/clip_scripts/clip_run.py \
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
     --source_dataset=$source_dataset \
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --feature='$feature' \
+    --feature="'$feature'" \
     --tune_hyperparameters \
-    --n_trials=2 &
+    --n_trials=3 &
 }
 
 ## Train CLARE from source datasets

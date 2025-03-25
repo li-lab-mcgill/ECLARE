@@ -30,8 +30,8 @@ done
 idle_cuda_devices=$(nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader,nounits | awk -F',' '$2 < 100 && $3 == 0 {print $1}')
 
 ## Define total number of epochs
-total_epochs=100
- 
+total_epochs=2
+n_trials=2
 ## Train CLARE from source datasets
 
 ## Outer loop: iterate over datasets as the target_dataset
@@ -43,7 +43,7 @@ for target_dataset in "${datasets[@]}"; do
  
         # Skip the case where source and target datasets are the same
         if [ "$source_dataset" != "$target_dataset" ]; then
-            feature="Align nuclei from $source_dataset data to $target_dataset data."
+            feature="$source_dataset data to $target_dataset data."
             echo "~~ $feature ~~"
  
             ## Extract the value of `genes_by_peaks_str` for the current source and target
@@ -71,6 +71,8 @@ for target_dataset in "${datasets[@]}"; do
             export genes_by_peaks_str
             export total_epochs
             export idle_cuda_devices
+            export feature
+            export n_trials
 
             # Prepare arguments for xargs
             seq 0 $((N - 1)) | xargs -n1 -P$N -I{} bash -c '
@@ -85,13 +87,26 @@ for target_dataset in "${datasets[@]}"; do
                 ## Cast as array
                 idle_array=($idle_cuda_devices)
 
+                ## echo all arguments
+                echo "=== All arguments: ==="
+                echo "feature: $feature"
+                echo "n_trials: $n_trials"
+                echo "target_dataset: $target_dataset"
+                echo "source_dataset: $source_dataset"
+                echo "genes_by_peaks_str: $genes_by_peaks_str"
+                echo "total_epochs: $total_epochs"
+
                 # Run the python script
-                CUDA_VISIBLE_DEVICES=${idle_array[${i}]} python ATAC_RNA_triplet_loss_align.py \
+                CUDA_VISIBLE_DEVICES=${idle_array[${i}]} \
+                python ${ECLARE_ROOT}/scripts/clip_scripts/clip_run.py \
                     --outdir $TMPDIR/$target_dataset/$source_dataset/${i} \
                     --source_dataset=$source_dataset \
                     --target_dataset=$target_dataset \
                     --genes_by_peaks_str=$genes_by_peaks_str \
-                    --total_epochs=$total_epochs
+                    --total_epochs=$total_epochs \
+                    --feature='${feature}' \
+                    --tune_hyperparameters \
+                    --n_trials=$n_trials
             '
 
         fi
