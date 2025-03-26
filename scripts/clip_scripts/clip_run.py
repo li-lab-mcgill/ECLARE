@@ -141,6 +141,8 @@ if __name__ == "__main__":
         run_name = 'Hyperparameter tuning' if args.tune_hyperparameters else 'Training'
 
     with mlflow.start_run(experiment_id=experiment_id, run_name=run_name):
+
+        mlflow.set_tag("outdir", args.outdir)
             
         hyperparameters = get_clip_hparams()
         default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
@@ -187,11 +189,11 @@ if __name__ == "__main__":
         log_model(script_model,
             model_str,
             signature=signature,
-            input_example=x,
             metadata={
                 "modalities": ["rna", "atac"],
                 "modality_feature_sizes": [n_genes, n_peaks],
             })
+            #input_example=x,
 
         ## get model uri and save to file
         model_uri = get_artifact_uri(model_str)
