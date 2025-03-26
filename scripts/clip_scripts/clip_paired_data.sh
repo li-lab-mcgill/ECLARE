@@ -97,7 +97,6 @@ run_clip_task_on_gpu() {
 task_idx=0
 for target_dataset in "${datasets[@]}"; do
     random_state=${random_states[$task_idx]}
-    task_idx=$((task_idx + 1))
     
     ## Inner loop: iterate over datasets as the source_dataset
     for source_dataset in "${datasets[@]}"; do
@@ -133,6 +132,7 @@ for target_dataset in "${datasets[@]}"; do
             run_clip_task_on_gpu $gpu_id $target_dataset $source_dataset $task_idx $random_state $genes_by_peaks_str $feature
         fi
     done
+    task_idx=$((task_idx + 1))
 done
 
 # Wait for all tasks to complete
