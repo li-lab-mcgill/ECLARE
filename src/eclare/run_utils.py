@@ -55,7 +55,10 @@ def run_CLIP(
     with torch.inference_mode():
         model.eval()
         valid_losses = clip_pass(rna_valid_loader, atac_valid_loader, model, None)
-        mlflow.log_metrics({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)}, step=0)
+        
+        metrics = get_metrics(model, rna_valid_loader, atac_valid_loader, device)
+        metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
+        mlflow.log_metrics(metrics, step=0)
 
     ## Train model
 
@@ -73,6 +76,8 @@ def run_CLIP(
 
         ## get and log performance metrics
         metrics = get_metrics(model, rna_valid_loader, atac_valid_loader, device)
+        metrics.update({f'train_{k}': v for k, v in train_losses.items() if ~np.isnan(v)})
+        metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
         mlflow.log_metrics(metrics, step=epoch+1)
 
         ## get metric to optimize

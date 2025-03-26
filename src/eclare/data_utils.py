@@ -267,9 +267,15 @@ def create_loaders(
 
 def fetch_data_from_loader_light(loader, subsample=2000, label_key='cell_type'):
 
-    n_splits = np.ceil(loader.dataset.shape[0] / subsample).astype(int)
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True)
-    _, cells_idx = next(skf.split(np.zeros_like(loader.dataset.obs[label_key].values), loader.dataset.obs[label_key].values))
+    n_cells = loader.dataset.shape[0]
+    n_splits = np.ceil(n_cells / subsample).astype(int)
+
+    ## if more cells than subsample, use stratified k-fold to sample
+    if n_cells > subsample:
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True)
+        _, cells_idx = next(skf.split(np.zeros_like(loader.dataset.obs[label_key].values), loader.dataset.obs[label_key].values))
+    else:
+        cells_idx = np.arange(n_cells)
 
     if issparse(loader.dataset.adatas[0].X):
         cells  = torch.tensor(loader.dataset.adatas[0].X[cells_idx].toarray() , dtype=torch.float32)
