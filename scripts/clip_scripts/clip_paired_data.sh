@@ -4,7 +4,7 @@ conda activate eclare_env
 cd $ECLARE_ROOT
  
 ## Make new sub-directory for current job ID and assign to "TMPDIR" variable
-JOB_ID=$(date +%Y%m%d_%H%M%S)
+JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
 mkdir -p ${OUTPATH}/clip_${JOB_ID}
 TMPDIR=${OUTPATH}/clip_${JOB_ID}
  
