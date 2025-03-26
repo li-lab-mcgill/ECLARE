@@ -11,6 +11,7 @@ from glob import glob
 from eclare import \
     CLIP, Knowledge_distillation_fn, load_CLIP_model, return_setup_func_from_dataset, align_metrics, fetch_data_from_loaders, teachers_setup, ct_losses, save_latents
 
+from eclare.models import get_clip_hparams
 
 if __name__ == "__main__":
 
@@ -72,17 +73,31 @@ if __name__ == "__main__":
         target_dataset_og = args.target_dataset
         replicate_idx = str(args.replicate_idx)
 
+        '''
         if args.source_dataset is not None:
             source_dataset_og = args.source_dataset
             model_paths = glob(os.path.join(outpath, f'clip_*{args.clip_job_id}/{target_dataset_og}/{source_dataset_og}/{replicate_idx}/model.pt'))
         else:
             model_paths = glob(os.path.join(outpath, f'clip_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model.pt'))
+        '''
 
-        if len(model_paths) == 0:
-            model_paths = glob(os.path.join(outpath, f'clip_*{args.clip_job_id}/{target_dataset_og}/{source_dataset_og}/{replicate_idx}/model.pt'))
+        if args.source_dataset is not None:
+            NotImplementedError('Need to specify source dataset')
+        else:
+            model_uri_paths = glob(os.path.join(outpath, f'clip_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'))
+
     else:
         raise ValueError(f'Need to specify target dataset')
+    
+    ## Get number of genes and peaks from genes_by_peaks_str
+    n_genes = int(args.genes_by_peaks_str.split('_')[0])
+    n_peaks = int(args.genes_by_peaks_str.split('_')[-1])
 
+    hyperparameters = get_clip_hparams()
+    default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
+    student_model = CLIP(n_peaks=n_peaks, n_genes=n_genes, **default_hyperparameters).to(device=device)
+
+    '''
     ## Instantiate student model args dict from one of the source datasets, later overwrite with target dataset
     _, student_model_args_dict = load_CLIP_model(model_paths[0], device=device)
     target_dataset_og = student_model_args_dict['args'].target_dataset
@@ -115,6 +130,7 @@ if __name__ == "__main__":
 
     ## Create student model
     student_model = CLIP(**student_model_args_dict, trial=None).to(device=device)
+    '''
     
     ## Setup teachers
     datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders = \

@@ -185,14 +185,20 @@ if __name__ == "__main__":
         ## script model
         script_model = torch.jit.script(model)
 
+        ## create metadata dict
+        metadata = {
+            "modalities": ["rna", "atac"],
+            "modality_feature_sizes": [n_genes, n_peaks],
+            "genes_by_peaks_str": args.genes_by_peaks_str,
+            "source_dataset": args.source_dataset,
+            "target_dataset": args.target_dataset,
+        }
+
         ## log model with mlflow.pytorch.log_model
         log_model(script_model,
             model_str,
             signature=signature,
-            metadata={
-                "modalities": ["rna", "atac"],
-                "modality_feature_sizes": [n_genes, n_peaks],
-            })
+            metadata=metadata)
             #input_example=x,
 
         ## get model uri and save to file

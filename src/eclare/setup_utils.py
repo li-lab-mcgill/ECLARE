@@ -1575,6 +1575,7 @@ def get_genes_by_peaks_str(datasets = ["Roussos_lab", "AD_Anderson_et_al", "huma
 
 
 def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
+    
     datasets = []
     models = {}
     target_rna_train_loaders = {}
@@ -1591,9 +1592,7 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
 
         ## Determine the dataset
         dataset = model_args_dict['args'].source_dataset
-        source_setup_func = return_setup_func_from_dataset(dataset)
         target_setup_func = return_setup_func_from_dataset(model_args_dict['args'].target_dataset)
-        genes_by_peaks_str = model_args_dict['args'].genes_by_peaks_str
 
         print(dataset)
         datasets.append(dataset)
