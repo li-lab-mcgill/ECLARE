@@ -5,7 +5,13 @@ import torch
 import pandas as pd
 import optuna
 from shutil import copy2
+import json
+
 import mlflow
+from mlflow import get_artifact_uri
+from mlflow.pytorch import log_model
+from mlflow.models.signature import ModelSignature
+from mlflow.types import Schema, TensorSpec, ParamSchema, ParamSpec
 
 from eclare import return_setup_func_from_dataset
 from eclare.tune_utils import Optuna_propose_hyperparameters, champion_callback
@@ -136,12 +142,14 @@ if __name__ == "__main__":
 
     with mlflow.start_run(experiment_id=experiment_id, run_name=run_name):
             
+        hyperparameters = get_clip_hparams()
+        default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
+
         ## Run training loops
         if (not args.tune_hyperparameters):
 
-            hyperparameters = get_clip_hparams()
-            tuned_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
-            model = run_CLIP(**run_args, params=tuned_hyperparameters)
+            model, _ = run_CLIP(**run_args, params=default_hyperparameters)
+            model_str = "trained_model"
 
         else:
 
@@ -153,17 +161,42 @@ if __name__ == "__main__":
             run_args['trial'] = None
             run_args['args'].total_epochs = 100
             model, _ = run_CLIP(**run_args, params=best_params)
+            model_str = "best_model"
 
-            ## infer signature
-            x = torch.from_numpy(rna_valid_loader.dataset.adatas[0].X[0].toarray()).to(device=device, dtype=torch.float32).detach()
-            signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x, 0)[0].detach().cpu().numpy()) ## TODO: check if can have multiple output signatures
+        ## infer signature
+        x = rna_valid_loader.dataset.adatas[0].X[0].toarray()
+        params = best_params if args.tune_hyperparameters else default_hyperparameters
+        num_units = best_params['num_units'] if args.tune_hyperparameters else default_hyperparameters['num_units']
+        
+        #signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x, 0)[0].detach().cpu().numpy()) ## TODO: check if can have multiple output signatures
+        #param_specs_list = [ParamSpec(name=k, dtype=v.dtype, default=default_hyperparameters[k]) for k, v in params.items()]
 
-            ## script model
-            script_model = torch.jit.script(model)
+        signature = ModelSignature(
+            inputs=Schema([TensorSpec(name="cell", type=x.dtype, shape=(-1, None))]),
+            outputs=Schema([
+                    TensorSpec(name="latent", type=x.dtype, shape=(-1, num_units)),
+                    TensorSpec(name="recon", type=x.dtype, shape=(-1, None)),
+                ]),
+            #params=ParamSchema(param_specs_list)
+        )
 
-            ## log model and signature
-            mlflow.pytorch.log_model(script_model, "best_model", signature=signature)
-            model_uri = mlflow.get_artifact_uri("best_model")
+        ## script model
+        script_model = torch.jit.script(model)
+
+        ## log model with mlflow.pytorch.log_model
+        log_model(script_model,
+            model_str,
+            signature=signature,
+            input_example=x,
+            metadata={
+                "modalities": ["rna", "atac"],
+                "modality_feature_sizes": [n_genes, n_peaks],
+            })
+
+        ## get model uri and save to file
+        model_uri = get_artifact_uri(model_str)
+        with open(os.path.join(args.outdir, 'model_uri.txt'), 'w') as f:
+            f.write(model_uri)
 
 
     ## print output directory

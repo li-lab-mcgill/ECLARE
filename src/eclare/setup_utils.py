@@ -46,6 +46,9 @@ def return_setup_func_from_dataset(dataset_name):
     elif (dataset_name == 'spatialLIBD'):
         setup_func = spatialLIBD_setup
 
+    elif (dataset_name == 'pbmc_multiome'):
+        setup_func = pbmc_multiome_setup
+
     return setup_func
 
 def get_protein_coding_genes(rna):
@@ -59,7 +62,7 @@ def get_protein_coding_genes(rna):
     rna = rna[:, rna.var.index.isin(protein_coding_genes_list)].to_memory()
     return rna
 
-def get_genes_by_peaks(rna, atac, genes_to_peaks_binary_mask_path, window_size = 1e6, feature_selection_method = 'gradient boosting regression'):
+def get_genes_by_peaks(rna, atac, genes_to_peaks_binary_mask_path, window_size = 1e6, feature_selection_method = None):
 
         ## Merge gene coordinates to RNA
         if np.isin( ['Chromosome/scaffold name', 'Gene start (bp)', 'Gene end (bp)'] , rna.var.columns ).all():
@@ -158,7 +161,7 @@ def get_genes_by_peaks(rna, atac, genes_to_peaks_binary_mask_path, window_size =
             for g, peaks_in_cis_with_gene_match, keep_peaks in results:
                 significant_associations_mask[peaks_in_cis_with_gene_match] = keep_peaks
 
-            ## Save variables needed to create mask, for troubleshooting
+            ## Save variables needed to create mask, for troubleshooting - wrong path definition
             pkl_dump({'r':r, 'c':c, 'i':i, 'j':j, 'significant_associations_mask':significant_associations_mask, 'results':results}, open( \
                 os.path.join(genes_to_peaks_binary_mask_path, 'tmp_gbr_params.pkl') \
                     , 'wb'))
@@ -1677,36 +1680,37 @@ def multiome_mouse_brain_setup(args, return_raw_data=False, cell_group='TBD', re
         chain_file_path = os.path.join(os.environ['DATAPATH'], chain_file_name)
         lifted_intervals_bed = atac_intervals_bed.liftover(chain_file_path, unmapped=os.path.join(datapath, 'multiome_mouse_brain_peak_beds_unmapped_mm10ToHg38.bed'), liftover_args='-minMatch=0.8')
 
-    
-def pbmc_multiome_setup(args, pretrain=False, cell_group='seurat_annotations', hvg_only=False, protein_coding_only=True, do_gas=False, return_type='loaders'):
+def pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='pbmc_multiome'):
 
-    args.rna_datapath = args.atac_datapath = os.path.join(os.environ['datapath'], '10x_pbmc')
-
-    args.RNA_file = "pbmcMultiome_rna.h5ad"
-    args.ATAC_file = "pbmcMultiome_atac.h5ad"
-    
-    atac = anndata.read_h5ad( os.path.join(args.atac_datapath, args.ATAC_file))
-    rna  = anndata.read_h5ad( os.path.join(args.rna_datapath, args.RNA_file) )
-
+    datapath = os.path.join(os.environ['DATAPATH'], '10x_pbmc')
 
     if args.genes_by_peaks_str is not None:
 
-        args.RNA_file = f"rna_{args.genes_by_peaks_str}_aligned_mdd.h5ad"
-        args.ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_mdd.h5ad"
+        RNA_file = f"rna_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
+        ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
 
-        atac = anndata.read_h5ad( os.path.join(args.atac_datapath, args.ATAC_file))
-        rna  = anndata.read_h5ad( os.path.join(args.rna_datapath, args.RNA_file) )
+        atac = anndata.read_h5ad( os.path.join(datapath, ATAC_file))
+        rna  = anndata.read_h5ad( os.path.join(datapath, RNA_file) )
         
-        genes_to_peaks_binary_mask_path = os.path.join(args.atac_datapath, f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_mdd.npz")
+        genes_to_peaks_binary_mask_path = os.path.join(datapath, f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.npz")
         genes_to_peaks_binary_mask = load_npz(genes_to_peaks_binary_mask_path)
         pkl_path = os.path.splitext(genes_to_peaks_binary_mask_path)[0] + '.pkl'
         with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
 
     elif args.genes_by_peaks_str is None:
 
+        RNA_file = "pbmcMultiome_rna.h5ad"
+        ATAC_file = "pbmcMultiome_atac.h5ad"
+        
+        atac = anndata.read_h5ad( os.path.join(datapath, ATAC_file))
+        rna  = anndata.read_h5ad( os.path.join(datapath, RNA_file) )
+
         ## Subset to protein-coding genes
         if protein_coding_only:
             rna = get_protein_coding_genes(rna)
+
+        if return_raw_data and return_type == 'data':
+            return rna, atac, cell_group, datapath
 
         ## Preprocess data, usually in preparation for HVG
         ac.pp.tfidf(atac, scale_factor=1e4)
@@ -1739,7 +1743,7 @@ def pbmc_multiome_setup(args, pretrain=False, cell_group='seurat_annotations', h
             print('Genes in RNA subset and ATAC_gas match:', (rna.var.index[rna.var['in_ATAC_gas']] == atac_gas.var.index).all())
 
         ## Save dummy-encoded overlapping intervals, use later as mask
-        genes_to_peaks_binary_mask_path = os.path.join(args.atac_datapath, f'genes_to_peaks_binary_mask_{rna.n_vars}_by_{atac.n_vars}.npz')
+        genes_to_peaks_binary_mask_path = os.path.join(datapath, f'genes_to_peaks_binary_mask_{rna.n_vars}_by_{atac.n_vars}.npz')
 
         if not os.path.exists(genes_to_peaks_binary_mask_path):
             print(f'peaks to genes mask not found, saving to {os.path.splitext(genes_to_peaks_binary_mask_path)[-1]}')
@@ -1785,21 +1789,12 @@ def pbmc_multiome_setup(args, pretrain=False, cell_group='seurat_annotations', h
         print('Genes match:', (rna.var.index == genes_peaks_dict['genes']).all())
         print('Peaks match:', (atac.var.index == genes_peaks_dict['peaks']).all())
 
-    '''
-    if pretrain:
-        rna_train_loader, rna_valid_loader, _, rna_train_num_batches, rna_valid_num_batches, _, _, _, _ = create_loaders(rna, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        atac_train_loader, atac_valid_loader, _, atac_train_num_batches, atac_valid_num_batches, _, _, _, _ = create_loaders(atac, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        return align_setup_completed, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx
-
-    elif not pretrain:
-    '''
-
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     if return_type == 'loaders':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
 
     elif return_type == 'data':
