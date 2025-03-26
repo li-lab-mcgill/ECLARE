@@ -86,8 +86,9 @@ run_clip_task_on_gpu() {
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
     --feature="'$feature'" \
-    --tune_hyperparameters \
-    --n_trials=3 &
+    --metric_to_optimize="1-foscttm" &
+    #--tune_hyperparameters \
+    #--n_trials=3 &
 }
 
 ## Train CLARE from source datasets
