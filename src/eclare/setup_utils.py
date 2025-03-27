@@ -1592,12 +1592,12 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
         with open(model_path, 'r') as f:
             model_uris = f.read().strip().splitlines()
             model_uri = model_uris[0]
-        #model_uri = model_uri_full.split('/')[-1]
+        
         model = mlflow.pytorch.load_model(model_uri)
         model_metadata = Model.load(model_uri)
 
         ## Determine the dataset
-        dataset = model_metadata.metadata['source_dataset']
+        dataset = model_metadata.metadata['source_dataset']; genes_by_peaks_str = model_metadata.metadata['genes_by_peaks_str']
         target_setup_func = return_setup_func_from_dataset(args.target_dataset)
 
         print(dataset)
@@ -1610,13 +1610,14 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
         ## TMP - create deepcopy of args
         args_tmp = deepcopy(args)
         args_tmp.source_dataset = dataset
+        args_tmp.genes_by_peaks_str = genes_by_peaks_str
         
         overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
         target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
             target_setup_func(args_tmp, pretrain=None, return_type='loaders')
         
-        if args.train_encoders:
-            model.train()
+        #if args.train_encoders:
+        #    model.train()
 
         models[dataset] = model
 
