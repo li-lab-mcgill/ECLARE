@@ -9,9 +9,11 @@ import pandas as pd
 from glob import glob
 
 from eclare import \
-    CLIP, Knowledge_distillation_fn, load_CLIP_model, return_setup_func_from_dataset, align_metrics, fetch_data_from_loaders, teachers_setup, ct_losses, save_latents
+    CLIP, Knowledge_distillation_fn, load_CLIP_model, return_setup_func_from_dataset, teachers_setup, ct_losses, save_latents, fetch_data_from_loaders
 
+from eclare.eval_utils import align_metrics_light
 from eclare.models import get_clip_hparams
+from eclare.run_utils import get_metrics
 
 if __name__ == "__main__":
 
@@ -20,12 +22,12 @@ if __name__ == "__main__":
                         help='output directory')
     parser.add_argument('--clip_job_id', type=str, default=None,
                         help='Job ID of CLIP training')
-    parser.add_argument('--n_epochs', type=int, default=2,
+    parser.add_argument('--total_epochs', type=int, default=2,
                         help='number of epochs')
+    parser.add_argument('--batch_size', type=int, default=1000,
+                        help='batch size')
     parser.add_argument('--loss_type', type=str, default='knowledge_distillation',
                         help='type of loss to use for training')
-    parser.add_argument('--train_encoders', action='store_true',
-                        help='train the encoders during training (name starting with letter f returns error)')
     parser.add_argument('--loop_order', type=str, default='batches_first',
                         help='order of loops in training')
     parser.add_argument('--save_latents', action='store_true',
@@ -36,7 +38,7 @@ if __name__ == "__main__":
                         help='use a dataset embedder')
     parser.add_argument('--distil_lambda', type=float, default=0.1,
                         help='lambda value for MobileCLIP loss')
-    parser.add_argument('--valid_subsample', type=int, default=5000,
+    parser.add_argument('--valid_subsample', type=int, default=2000,
                         help='number of nuclei to subsample for validation')
     parser.add_argument('--source_dataset', type=str, default=None,
                         help='source dataset')
@@ -85,7 +87,7 @@ if __name__ == "__main__":
             NotImplementedError('Need to specify source dataset')
         else:
             model_uri_paths = glob(os.path.join(outpath, f'clip_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'))
-
+            assert len(model_uri_paths) > 0, f'Model URI path not found for {target_dataset_og} ({replicate_idx})'
     else:
         raise ValueError(f'Need to specify target dataset')
     
@@ -126,12 +128,20 @@ if __name__ == "__main__":
     student_model_args_dict['pretrain'] = student_model_args_dict['rna_valid_idx']  = student_model_args_dict['atac_valid_idx'] = None
     #student_model_args_dict['args'].genes_by_peaks_str = None  # setting genes_by_peaks to None creates large processing overhead, can just use one of the preset configs for now
 
-    student_rna_train_loader, student_atac_train_loader, student_atac_train_num_batches, student_atac_train_n_batches_str_length, student_atac_train_n_epochs_str_length, student_rna_valid_loader, student_atac_valid_loader, student_atac_valid_num_batches, student_atac_valid_n_batches_str_length, student_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
+    student_rna_train_loader, student_atac_train_loader, student_atac_train_num_batches, student_atac_train_n_batches_str_length, student_atac_train_total_epochs_str_length, student_rna_valid_loader, student_atac_valid_loader, student_atac_valid_num_batches, student_atac_valid_n_batches_str_length, student_atac_valid_total_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
         student_setup_func(student_model_args_dict['args'], pretrain=None, return_type='loaders')
 
     ## Create student model
     student_model = CLIP(**student_model_args_dict, trial=None).to(device=device)
     '''
+    ##Get student loaders
+    args_tmp = deepcopy(args)
+    args_tmp.source_dataset = args.target_dataset
+    args_tmp.target_dataset = 'MDD'
+
+    student_setup_func = return_setup_func_from_dataset(args.target_dataset)
+    student_rna_train_loader, student_atac_train_loader, student_atac_train_num_batches, student_atac_train_n_batches_str_length, student_atac_train_total_epochs_str_length, student_rna_valid_loader, student_atac_valid_loader, student_atac_valid_num_batches, student_atac_valid_n_batches_str_length, student_atac_valid_total_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
+        student_setup_func(args_tmp, pretrain=None, return_type='loaders')
     
     ## Setup teachers
     datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders = \
@@ -139,14 +149,10 @@ if __name__ == "__main__":
 
     # Define the optimized parameters
     optimized_parameters = list(student_model.parameters())
-
-    if args.train_encoders:
-        optimized_parameters += [param for model in models.values() for param in model.parameters()]
-
     optimizer = torch.optim.AdamW(optimized_parameters, lr=1e-3, weight_decay=0.01)
 
     # Instantiate the knowledge distillation loss function
-    paired = (student_model_args_dict['args'].source_dataset != 'mdd')
+    paired = (args.target_dataset != 'MDD')
     knowledge_distillation_fn = Knowledge_distillation_fn(device=device, kd_loss='KL', student_temperature=1, target_temperature=1, paired=paired, weigh_distil_by_align_type='none')
 
     # Initialize main logger DataFrame
@@ -167,7 +173,7 @@ if __name__ == "__main__":
     loop_order = args.loop_order  # 'datasets_first' or 'batches_first'
 
     print('Iterating over epochs, batches & datasets')
-    for epoch in range(args.n_epochs):
+    for epoch in range(args.total_epochs):
 
         # Initialize dictionaries to accumulate losses
         epoch_losses, epoch_align_loss, epoch_distil_loss = [{dataset: 0.0 for dataset in datasets+[target_dataset_og]} for _ in range(3)]
@@ -186,9 +192,11 @@ if __name__ == "__main__":
             offsets_valid, offsets_T_valid = [], []
 
             ## Get student data and latents
-            student_rna_cells_valid, student_rna_celltypes_valid, student_atac_cells_valid, student_atac_celltypes_valid, rna_nuclei_idx_valid, atac_nuclei_idxs_valid    = fetch_data_from_loaders(student_rna_valid_loader, student_atac_valid_loader, paired=paired, subsample=args.valid_subsample) # reuse same nuclei indices for all student and teacher datasets, or else distillation loss not sensible
-            student_rna_latents_valid   = student_model(student_rna_cells_valid, modality='rna', task='align')[0]
-            student_atac_latents_valid  = student_model(student_atac_cells_valid, modality='atac', task='align')[0]
+            student_rna_cells_valid, student_rna_celltypes_valid, student_atac_cells_valid, student_atac_celltypes_valid, rna_nuclei_idx_valid, atac_nuclei_idxs_valid =\
+                fetch_data_from_loaders(student_rna_valid_loader, student_atac_valid_loader, paired=paired, subsample=args.valid_subsample) # reuse same nuclei indices for all student and teacher datasets, or else distillation loss not sensible
+
+            student_rna_latents_valid, _ = student_model(student_rna_cells_valid, modality=0)
+            student_atac_latents_valid, _ = student_model(student_atac_cells_valid, modality=1)
 
             ## normalize latents (already being normalized in loss_fn)
             student_rna_latents_valid = torch.nn.functional.normalize(student_rna_latents_valid, p=2, dim=1)
@@ -197,19 +205,20 @@ if __name__ == "__main__":
             ## loop through teachers
             for dataset in datasets:
 
-
                 dataset_embedding = None
 
                 model = models[dataset]
-
                 target_rna_valid_loader = target_rna_valid_loaders[dataset]
                 target_atac_valid_loader = target_atac_valid_loaders[dataset]
-                target_rna_cells_valid, target_rna_celltypes_valid, target_atac_cells_valid, target_atac_celltypes_valid, _, _        = fetch_data_from_loaders(target_rna_valid_loader, target_atac_valid_loader, paired=paired, subsample=args.valid_subsample, rna_cells_idx=rna_nuclei_idx_valid, atac_cells_idx=atac_nuclei_idxs_valid)
 
-                target_rna_latents_valid    = model(target_rna_cells_valid, modality='rna', task='align')[0].detach()
-                target_atac_latents_valid   = model(target_atac_cells_valid, modality='atac', task='align')[0].detach()
+                target_rna_cells_valid, target_rna_celltypes_valid, target_atac_cells_valid, target_atac_celltypes_valid, _, _        =\
+                    fetch_data_from_loaders(target_rna_valid_loader, target_atac_valid_loader, paired=paired, subsample=args.valid_subsample, rna_cells_idx=rna_nuclei_idx_valid, atac_cells_idx=atac_nuclei_idxs_valid)
 
-                distil_loss_valid, distil_loss_valid_T, align_loss_valid, align_loss_T_valid, offset_valid, offset_T_valid = knowledge_distillation_fn(student_rna_latents_valid, student_atac_latents_valid, target_rna_latents_valid, target_atac_latents_valid, 'teacher')
+                target_rna_latents_valid, _ = model(target_rna_cells_valid, modality=0)
+                target_atac_latents_valid, _ = model(target_atac_cells_valid, modality=1)
+
+                distil_loss_valid, distil_loss_valid_T, align_loss_valid, align_loss_T_valid, offset_valid, offset_T_valid =\
+                    knowledge_distillation_fn(student_rna_latents_valid, student_atac_latents_valid, target_rna_latents_valid, target_atac_latents_valid, 'teacher')
 
                 ## update losses for teacher
                 align_losses_valid.append(align_loss_valid)
@@ -228,15 +237,20 @@ if __name__ == "__main__":
                 epoch_losses_valid[dataset] = args.distil_lambda*epoch_distil_losses_valid[dataset] + (1-args.distil_lambda)*epoch_align_losses_valid[dataset]
 
                 if epoch == 0:
+                    metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device)
+                    '''
                     ilisis, clisis, nmi, ari, diag_concentration_minimizer, foscttm_score, rank_score_, acc, acc_top5, clip_loss_, clip_loss_censored, \
                     foscttm_score_ct, accuracy_ct, accuracy_top5_ct, clip_loss_ct, clip_loss_ct_split = \
                         align_metrics(model, target_rna_latents_valid, target_rna_celltypes_valid, target_atac_latents_valid, target_atac_celltypes_valid, paired=paired, is_latents=True)
+                    
                     epoch_ilisis[dataset], epoch_clisis[dataset], epoch_nmi[dataset], epoch_ari[dataset] = ilisis, clisis, nmi, ari
                     epoch_rank_score[dataset] = rank_score_
 
                     if paired:
                         epoch_foscttm[dataset] = foscttm_score.item()
                         teacher_foscttm_per_ct_valid[dataset] = foscttm_score_ct
+                    '''
+
 
 
             ## Compute mean distillation loss
@@ -248,12 +262,14 @@ if __name__ == "__main__":
             offsets_T_valid         = torch.stack(offsets_T_valid)
             
             ## Compute losses per cell type
+            '''
             distil_losses_atac_per_ct_valid, distil_losses_rna_per_ct_valid, align_losses_atac_per_ct_valid, align_losses_rna_per_ct_valid = ct_losses(distil_losses_valid, distil_losses_T_valid, align_losses_valid, align_losses_T_valid, target_atac_celltypes_valid, target_rna_celltypes_valid, datasets)
             distil_losses_atac_per_ct_valid.name = distil_losses_rna_per_ct_valid.name = align_losses_atac_per_ct_valid.name = align_losses_rna_per_ct_valid.name = f'{epoch+1}'
             all_distil_losses_atac_per_ct_valid = pd.concat([all_distil_losses_atac_per_ct_valid, distil_losses_atac_per_ct_valid], axis=1)
             all_distil_losses_rna_per_ct_valid  = pd.concat([all_distil_losses_rna_per_ct_valid, distil_losses_rna_per_ct_valid], axis=1)
             all_align_losses_atac_per_ct_valid  = pd.concat([all_align_losses_atac_per_ct_valid, align_losses_atac_per_ct_valid], axis=1)
             all_align_losses_rna_per_ct_valid   = pd.concat([all_align_losses_rna_per_ct_valid, align_losses_rna_per_ct_valid], axis=1)
+            '''
 
             ## Compute distillation loss weighted by alignment loss, if more than one teacher
             mean_distil_loss_valid, _ = knowledge_distillation_fn.distil_loss_weighting( distil_losses_valid, distil_losses_T_valid, (offsets_valid - align_losses_valid), (offsets_T_valid - align_losses_T_valid))
@@ -272,23 +288,26 @@ if __name__ == "__main__":
                 epoch_losses_valid          = {dataset: args.distil_lambda * epoch_distil_losses_valid[dataset] + (1-args.distil_lambda) * epoch_align_losses_valid[dataset] for dataset in datasets}
                 align_loss_scaled_valid     = align_loss_scale * align_loss_scaled_valid
 
-                all_align_losses_atac_per_ct_valid.iloc[:,0] *= align_loss_scale
-                all_align_losses_rna_per_ct_valid.iloc[:,0] *= align_loss_scale
+                #all_align_losses_atac_per_ct_valid.iloc[:,0] *= align_loss_scale
+                #all_align_losses_rna_per_ct_valid.iloc[:,0] *= align_loss_scale
 
             ## Compute total loss as convex combination of CLIP loss and average distillation loss
             total_loss_valid = (args.distil_lambda * mean_distil_loss_valid) + ((1-args.distil_lambda) * align_loss_scaled_valid)
 
             ## Get metrics for student
+            metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device)
+            '''
             ilisis, clisis, nmi, ari, diag_concentration_minimizer, foscttm_score, rank_score_, acc, acc_top5, clip_loss_, clip_loss_censored, \
             foscttm_score_ct, accuracy_ct, accuracy_top5_ct, clip_loss_ct, clip_loss_ct_split = \
                 align_metrics(student_model, student_rna_latents_valid, student_rna_celltypes_valid, student_atac_latents_valid, student_atac_celltypes_valid, paired=paired, is_latents=True)
-            
+            '''
 
             ## Log validation losses for student
             epoch_align_losses_valid[target_dataset_og] = align_loss_scaled_valid.item()
             epoch_distil_losses_valid[target_dataset_og] = mean_distil_loss_valid.item()
             epoch_losses_valid[target_dataset_og] = total_loss_valid.item()
 
+            '''
             epoch_ilisis[target_dataset_og], epoch_clisis[target_dataset_og], epoch_nmi[target_dataset_og], epoch_ari[target_dataset_og] = ilisis, clisis, nmi, ari
             epoch_rank_score[target_dataset_og] = rank_score_
 
@@ -296,9 +315,10 @@ if __name__ == "__main__":
                 foscttm_score_ct.name = f'{epoch+1}'
                 student_foscttm_per_ct_valid = pd.concat([student_foscttm_per_ct_valid, foscttm_score_ct], axis=1)
                 epoch_foscttm[target_dataset_og] = foscttm_score.item()
+            '''
 
             if args.save_latents:
-                save_latents(student_rna_latents_valid, student_atac_latents_valid, student_rna_celltypes_valid, student_atac_celltypes_valid, epoch, args.n_epochs, args.outdir)
+                save_latents(student_rna_latents_valid, student_atac_latents_valid, student_rna_celltypes_valid, student_atac_celltypes_valid, epoch, args.total_epochs, args.outdir)
 
         ## Set gradients to zero
         optimizer.zero_grad()
@@ -347,12 +367,12 @@ if __name__ == "__main__":
 
             ## Project student RNA data (target)
             student_rna_cells = student_rna_dat.X.float().to(device)
-            student_rna_latents, _ = student_model(student_rna_cells, modality='rna', task='align')
+            student_rna_latents, _ = student_model(student_rna_cells, modality=0)
             student_rna_celltypes = student_rna_dat.obs['cell_type'].to_list()
 
             ## Project student ATAC data (target)
             student_atac_cells = student_atac_dat.X.float().to(device)
-            student_atac_latents, _ = student_model(student_atac_cells, modality='atac', task='align')
+            student_atac_latents, _ = student_model(student_atac_cells, modality=1)
             student_atac_celltypes = student_atac_dat.obs['cell_type'].to_list()
 
             ## Initialize list of dataset distil losses
@@ -382,12 +402,12 @@ if __name__ == "__main__":
 
                 # Project target RNA data
                 target_rna_cells = target_rna_dat.X.float().to(device)
-                target_rna_latents, _ = model(target_rna_cells, modality='rna', task='align')
+                target_rna_latents, _ = model(target_rna_cells, modality=0)
                 target_rna_celltypes = target_rna_dat.obs['cell_type'].to_list()
 
                 # Project target ATAC data
                 target_atac_cells = target_atac_dat.X.float().to(device)
-                target_atac_latents, _ = model(target_atac_cells, modality='atac', task='align')
+                target_atac_latents, _ = model(target_atac_cells, modality=1)
                 target_atac_celltypes = target_atac_dat.obs['cell_type'].to_list()
 
                 ## Ensure that the target latents are detached
@@ -456,6 +476,7 @@ if __name__ == "__main__":
             row[f'Loss_align_valid-{dataset}'] = epoch_align_losses_valid[dataset]
             row[f'Loss_distil_valid-{dataset}'] = epoch_distil_losses_valid[dataset]
             
+            '''
             if (epoch == 0) or np.isin(dataset, [target_dataset_og]).item():
                 row[f'iLISI-{dataset}'] = epoch_ilisis[dataset]
                 row[f'cLISI-{dataset}'] = epoch_clisis[dataset]
@@ -465,6 +486,7 @@ if __name__ == "__main__":
                 if paired:
                     row[f'FOSCTTM-{dataset}'] = epoch_foscttm[dataset]
                     row[f'Rank_score-{dataset}'] = epoch_rank_score[dataset]
+            '''
             
         # Append the row to the DataFrame
         log_df = pd.concat([log_df, pd.DataFrame([row])], ignore_index=True)
@@ -497,7 +519,7 @@ if __name__ == "__main__":
     all_align_losses_rna_per_ct_valid.T.to_csv(os.path.join(args.outdir, 'all_align_losses_rna_per_ct_valid.csv'))
 
     if paired:
-        student_foscttm_per_ct_valid.columns = np.arange(1, args.n_epochs+1)
+        student_foscttm_per_ct_valid.columns = np.arange(1, args.total_epochs+1)
         student_foscttm_per_ct_valid.T.to_csv(os.path.join(args.outdir, 'student_foscttm_per_ct_valid.csv'))
         teacher_foscttm_per_ct_valid.T.to_csv(os.path.join(args.outdir, 'teacher_foscttm_per_ct_valid.csv'))
 
