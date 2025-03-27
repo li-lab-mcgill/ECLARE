@@ -201,11 +201,14 @@ if __name__ == "__main__":
             metadata=metadata)
             #input_example=x,
 
-        ## get model uri and save to file
-        model_uri = get_artifact_uri(model_str)
-        with open(os.path.join(args.outdir, 'model_uri.txt'), 'w') as f:
-            f.write(model_uri)
+        ## save both model uri and file uri
+        file_uri = get_artifact_uri(model_str)
+        run_id = mlflow.active_run().info.run_id
+        runs_uri = f"runs:/{run_id}/{model_str}"
 
+        with open(os.path.join(args.outdir, 'model_uri.txt'), 'w') as f:
+            f.write(f"{runs_uri}\n")
+            f.write(f"{file_uri}\n")
 
     ## print output directory
     print('\n', args.outdir)

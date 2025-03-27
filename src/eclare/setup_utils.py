@@ -19,10 +19,11 @@ from anndata import AnnData
 from glob import glob
 from datetime import datetime
 import re
-
+import mlflow.pytorch
+from mlflow.models import Model
 from sklearn.ensemble import GradientBoostingRegressor
 from joblib import Parallel, delayed
-
+from copy import deepcopy
 from eclare.models import load_CLIP_model
 from eclare.data_utils import create_loaders
 
@@ -1588,11 +1589,16 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
         print(model_path)
 
         ## Load the model
-        model, model_args_dict = load_CLIP_model(model_path, device=device)
+        with open(model_path, 'r') as f:
+            model_uris = f.read().strip().splitlines()
+            model_uri = model_uris[0]
+        #model_uri = model_uri_full.split('/')[-1]
+        model = mlflow.pytorch.load_model(model_uri)
+        model_metadata = Model.load(model_uri)
 
         ## Determine the dataset
-        dataset = model_args_dict['args'].source_dataset
-        target_setup_func = return_setup_func_from_dataset(model_args_dict['args'].target_dataset)
+        dataset = model_metadata.metadata['source_dataset']
+        target_setup_func = return_setup_func_from_dataset(args.target_dataset)
 
         print(dataset)
         datasets.append(dataset)
@@ -1600,10 +1606,14 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
         ## Load the data loaders
         #rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
         #    source_setup_func(model_args_dict['args'], pretrain=None, return_type='loaders', dataset=dataset)
+
+        ## TMP - create deepcopy of args
+        args_tmp = deepcopy(args)
+        args_tmp.source_dataset = dataset
         
         overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
         target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
-            target_setup_func(model_args_dict['args'], pretrain=None, return_type='loaders')
+            target_setup_func(args_tmp, pretrain=None, return_type='loaders')
         
         if args.train_encoders:
             model.train()

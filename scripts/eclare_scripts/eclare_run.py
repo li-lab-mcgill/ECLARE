@@ -93,6 +93,7 @@ if __name__ == "__main__":
     n_genes = int(args.genes_by_peaks_str.split('_')[0])
     n_peaks = int(args.genes_by_peaks_str.split('_')[-1])
 
+    ## Setup student model
     hyperparameters = get_clip_hparams()
     default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
     student_model = CLIP(n_peaks=n_peaks, n_genes=n_genes, **default_hyperparameters).to(device=device)
@@ -134,7 +135,7 @@ if __name__ == "__main__":
     
     ## Setup teachers
     datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders = \
-        teachers_setup(model_paths, device, args)
+        teachers_setup(model_uri_paths, device, args)
 
     # Define the optimized parameters
     optimized_parameters = list(student_model.parameters())
