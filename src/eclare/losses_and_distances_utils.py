@@ -149,10 +149,9 @@ def clip_loss_split_by_ct(atac_latents, rna_latents, atac_celltypes, rna_celltyp
 
 class Knowledge_distillation_fn(torch.nn.Module):
 
-    def __init__(self, device='cpu', kd_loss='KL', paired=True, student_temperature=1, target_temperature=1, weigh_distil_by_align_type='none'):
+    def __init__(self, device='cpu', paired=True, student_temperature=1, target_temperature=1, weigh_distil_by_align_type='none'):
         super(Knowledge_distillation_fn, self).__init__()
         self.device = device
-        self.kd_loss = kd_loss
         self.paired = paired
         self.align_loss_scale = 1 # to be updated later in script
         self.weigh_distil_by_align_type = weigh_distil_by_align_type
@@ -160,21 +159,6 @@ class Knowledge_distillation_fn(torch.nn.Module):
         ## lower temperature = lower entropy, and vice versa
         self.student_temperature = torch.tensor(student_temperature, requires_grad=False).to(device)
         self.target_temperature = torch.tensor(target_temperature, requires_grad=False).to(device)
-
-        ## set distillation loss function    
-        if kd_loss == 'CE':
-            self.distil_loss_fn = self.ce_forward
-        elif kd_loss == 'KL':
-            self.distil_loss_fn = self.kl_forward
-
-        ## set alignment loss function for target latents
-        if not paired:
-            #self.geom_loss_fn = SamplesLoss(loss='gaussian', blur=0.05)
-            #self.align_loss_forward = self.geom_loss_forward
-            self.align_loss_forward = self.ot_clip_loss_forward
-            #self.solve_fn = jax.jit(linear.solve)
-        else:
-            self.align_loss_forward = self.ot_clip_loss_forward # for now, use OT-CLIP in all cases
 
         self.all_teacher_ot_plans = []
         self.all_teacher_ot_values = []
@@ -194,54 +178,31 @@ class Knowledge_distillation_fn(torch.nn.Module):
         loss_T = loss_T.sum(1)
 
         return loss, loss_T
-
-    def ce_forward(self, student_logits, target_logits):
-        target_softmax = F.softmax(target_logits, dim=1)
-        loss = torch.nn.functional.cross_entropy(student_logits, target_softmax.detach(), weight=None)
-
-        target_softmax_T = F.softmax(target_logits.T, dim=1)
-        loss_T = torch.nn.functional.cross_entropy(student_logits.T, target_softmax_T.detach(), weight=None)
-        return loss, loss_T
-
-    ## forward functions for different alignment losses
-    def clip_loss_forward(self, teacher_logits, student_logits, reduce=False):
-
-        if teacher_logits is not None:
-            logits = teacher_logits
-        elif student_logits is not None:
-            logits = student_logits
-        else:
-            raise ValueError('One of teacher_logits or student_logits must be provided')
-        
-        clip_loss_atac, clip_loss_rna = clip_loss(logits, None, None, temperature=self.student_temperature, return_logits=False, reduce=reduce) # for now, using self.student_temperature for both student and target
-        #clip_loss_ = 0.5 * (clip_loss_rna + clip_loss_atac)
-        return clip_loss_atac, clip_loss_rna 
     
-    def geom_loss_forward(self, atac_latents, rna_latents):
-        geom_loss = self.geom_loss_fn(atac_latents, rna_latents)
-        return geom_loss
-    
-    def ot_clip_loss_forward(self, teacher_logits, student_logits=None, solver='pot'):
+    def ot_clip_loss_forward(self, teacher_logits, student_logits=None):
 
         # student loss
         if (student_logits is not None):
 
-            ## obtain teacher weights
+            ## obtain teacher weights - without temperature scaling, teacher weights very uniform
             ot_clip_loss_weights = (1 - torch.stack(self.all_teacher_ot_values)).softmax(dim=0).to(device=self.device)  # in principle, would also have values & weights for plan_T
             ot_clip_loss = torch.zeros(len(student_logits), device=self.device)
             ot_clip_loss_T = torch.zeros(len(student_logits), device=self.device)
 
             ## obtain weighted align loss per teacher
             for t, teacher_ot_plan in enumerate(self.all_teacher_ot_plans):
+
                 labels = torch.argmax(teacher_ot_plan, dim=1)
                 labels_T = torch.argmax(teacher_ot_plan.T, dim=1)
 
                 ot_clip_loss = torch.nn.functional.cross_entropy(student_logits, labels, reduction='none')
                 ot_clip_loss_T = torch.nn.functional.cross_entropy(student_logits.T, labels_T, reduction='none')
 
+                ## apply teacher weight
                 ot_clip_loss = ot_clip_loss + (ot_clip_loss_weights[t] * ot_clip_loss)
                 ot_clip_loss_T = ot_clip_loss_T + (ot_clip_loss_weights[t] * ot_clip_loss_T)
 
+            ## reset teacher plans and values, update in next forward pass
             self.all_teacher_ot_plans = []
             self.all_teacher_ot_values = []
 
@@ -250,22 +211,11 @@ class Knowledge_distillation_fn(torch.nn.Module):
         else:
             teacher_cost = 1 - (teacher_logits / torch.exp(1/self.target_temperature))
 
-            if solver == 'pot':
-                ot_res = ot_solve(teacher_cost)
-                plan = ot_res.plan
-                plan_T = plan.T
-                #plan_T = ot_solve(teacher_cost.T).plan  # empirically, plan_T != plan.T
-                value = ot_res.value_linear
-
-            elif solver == 'jax-ot':
-                geom = Geometry(cost_matrix = jnp.asarray(teacher_cost.cpu()))
-                geom_T = Geometry(cost_matrix = jnp.asarray(teacher_cost_T.cpu()))
-
-                ot_output = self.solve_fn(geom)
-                ot_output_T = self.solve_fn(geom_T)
-
-                plan = torch.from_numpy(np.asarray(ot_output.matrix)).to(device=device)
-                plan_T = torch.from_numpy(np.asarray(ot_output_T.matrix)).to(device=device)
+            ot_res = ot_solve(teacher_cost)
+            plan = ot_res.plan
+            plan_T = plan.T
+            #plan_T = ot_solve(teacher_cost.T).plan  # empirically, plan_T != plan.T
+            value = ot_res.value_linear
 
             self.all_teacher_ot_plans.append(plan)
             self.all_teacher_ot_values.append(value)
@@ -281,12 +231,6 @@ class Knowledge_distillation_fn(torch.nn.Module):
 
     def forward(self, student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, teacher_or_student, dataset_embedding=None):
 
-        ## beware, since adjusting target latents contradicts the teacher-student paradigm
-        #target_rna_latents = target_rna_latents + dataset_embedding
-        #target_atac_latents = target_atac_latents + dataset_embedding
-        #student_rna_latents = student_rna_latents + dataset_embedding
-        #student_atac_latents = student_atac_latents + dataset_embedding
-
         ## already normalized during clip loss, but need to normalize before to be consistent with Concerto
         target_rna_latents = torch.nn.functional.normalize(target_rna_latents, p=2, dim=1)
         target_atac_latents = torch.nn.functional.normalize(target_atac_latents, p=2, dim=1)
@@ -298,20 +242,20 @@ class Knowledge_distillation_fn(torch.nn.Module):
         target_logits = torch.matmul(target_atac_latents, target_rna_latents.T) * torch.exp(1/self.target_temperature)
 
         ## get distillation loss
-        distil_loss, distil_loss_T = self.distil_loss_fn(student_logits, target_logits)
+        distil_loss, distil_loss_T = self.kl_forward(student_logits, target_logits)
 
         ## get alignment loss
         if teacher_or_student == 'student':
-            align_loss, align_loss_T = self.align_loss_forward(None, student_logits)
+            align_loss, align_loss_T = self.ot_clip_loss_forward(None, student_logits)
             align_loss = 0.5 * (align_loss + align_loss_T).mean()
             offset = student_logits.exp().sum(1).log().mean()
             offset_T = student_logits.T.exp().sum(1).log().mean()
             align_loss_T_scaled = None
 
         elif teacher_or_student == 'teacher':
-            align_loss, align_loss_T = self.align_loss_forward(target_logits, None)
-            offset = target_logits.exp().sum(1).log()
-            offset_T = target_logits.T.exp().sum(1).log()
+            align_loss, align_loss_T = self.ot_clip_loss_forward(target_logits, None)
+            offset = target_logits.exp().sum(1).log()       # dim: batch size
+            offset_T = target_logits.T.exp().sum(1).log()   # dim: batch size
             align_loss_T_scaled = self.align_loss_scale * align_loss_T
 
         ## scale alignment loss
@@ -352,35 +296,3 @@ class Knowledge_distillation_fn(torch.nn.Module):
         align_loss_scaled   = 0.5 * torch.stack([align_losses_scaled_offset, align_losses_T_scaled_offset]).sum(0).mean()
 
         return distil_loss, align_loss_scaled
-
-def ct_losses(distil_losses_valid, distil_losses_T_valid, align_losses_valid, align_losses_T_valid, target_atac_celltypes_valid, target_rna_celltypes_valid, datasets, rank=False, stack=True):
-
-    distil_losses_atac_valid_df = pd.DataFrame(distil_losses_valid.cpu().detach().numpy().T, columns=datasets)
-    distil_losses_atac_valid_df['cell-types'] = target_atac_celltypes_valid  # should be same cell-types across teachers and students since batches are synced
-    distil_losses_atac_per_ct_valid = distil_losses_atac_valid_df.groupby('cell-types').mean()
-
-    distil_losses_rna_valid_df = pd.DataFrame(distil_losses_T_valid.cpu().detach().numpy().T, columns=datasets)
-    distil_losses_rna_valid_df['cell-types'] = target_rna_celltypes_valid  # should be same cell-types across teachers and students since batches are synced
-    distil_losses_rna_per_ct_valid = distil_losses_rna_valid_df.groupby('cell-types').mean()
-
-    align_losses_atac_valid_df = pd.DataFrame(align_losses_valid.cpu().detach().numpy().T, columns=datasets)
-    align_losses_atac_valid_df['cell-types'] = target_atac_celltypes_valid  # should be same cell-types across teachers and students since batches are synced
-    align_losses_atac_per_ct_valid = align_losses_atac_valid_df.groupby('cell-types').mean()
-
-    align_losses_rna_valid_df = pd.DataFrame(align_losses_T_valid.cpu().detach().numpy().T, columns=datasets)
-    align_losses_rna_valid_df['cell-types'] = target_rna_celltypes_valid  # should be same cell-types across teachers and students since batches are synced
-    align_losses_rna_per_ct_valid = align_losses_rna_valid_df.groupby('cell-types').mean()
-
-    if rank:
-        distil_losses_atac_per_ct_valid = distil_losses_atac_per_ct_valid.rank(axis=1)
-        distil_losses_rna_per_ct_valid = distil_losses_rna_per_ct_valid.rank(axis=1)
-        align_losses_atac_per_ct_valid = align_losses_atac_per_ct_valid.rank(axis=1)
-        align_losses_rna_per_ct_valid = align_losses_rna_per_ct_valid.rank(axis=1)
-
-    if stack:
-        distil_losses_atac_per_ct_valid = distil_losses_atac_per_ct_valid.stack()
-        distil_losses_rna_per_ct_valid = distil_losses_rna_per_ct_valid.stack()
-        align_losses_atac_per_ct_valid = align_losses_atac_per_ct_valid.stack()
-        align_losses_rna_per_ct_valid = align_losses_rna_per_ct_valid.stack()
-
-    return distil_losses_atac_per_ct_valid, distil_losses_rna_per_ct_valid, align_losses_atac_per_ct_valid, align_losses_rna_per_ct_valid

@@ -8,12 +8,62 @@ import torch
 import pandas as pd
 from glob import glob
 
-from eclare import \
-    CLIP, Knowledge_distillation_fn, load_CLIP_model, return_setup_func_from_dataset, teachers_setup, ct_losses, save_latents, fetch_data_from_loaders
+import mlflow
+from mlflow import get_artifact_uri
+from mlflow.pytorch import log_model
+from mlflow.models.signature import ModelSignature
+from mlflow.types import Schema, TensorSpec, ParamSchema, ParamSpec
 
-from eclare.eval_utils import align_metrics_light
+from eclare import \
+    CLIP, Knowledge_distillation_fn, return_setup_func_from_dataset, teachers_setup, save_latents, fetch_data_from_loaders
+
 from eclare.models import get_clip_hparams
-from eclare.run_utils import get_metrics
+from eclare.run_utils import get_metrics, get_or_create_experiment
+from eclare.tune_utils import Optuna_propose_hyperparameters, champion_callback
+
+import optuna
+from optuna import Trial, TrialPruned
+
+def tune_ECLARE(args, experiment_id):
+    suggested_hyperparameters = get_clip_hparams()
+
+    def run_CLIP_wrapper(trial, run_args):
+        with mlflow.start_run(experiment_id=experiment_id, run_name=f'Trial {trial.number}', nested=True):
+
+            params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
+            run_args['trial'] = trial
+
+            mlflow.log_params(params)
+            _, metric_to_optimize = run_ECLARE(**run_args, params=params)
+
+            return metric_to_optimize
+
+    ## create study and run optimization
+    study = optuna.create_study(
+        direction='maximize',
+        sampler=optuna.samplers.TPESampler(
+            consider_prior=False,  # not recommended when sampling from categorical variables
+            n_startup_trials=0,
+        ),
+        pruner=optuna.pruners.MedianPruner(
+            n_startup_trials=3,  # Don't prune until this many trials have completed
+            n_warmup_steps=20,   # Don't prune until this many steps in each trial
+            interval_steps=1,     # Check for pruning every this many steps
+        )
+    )
+    Optuna_objective = lambda trial: run_CLIP_wrapper(trial, run_args)
+    study.optimize(Optuna_objective, n_trials=args.n_trials, callbacks=[champion_callback])
+
+    ## log best trial
+    mlflow.log_params(study.best_params)
+    mlflow.log_metrics({f"best_{args.metric_to_optimize}": study.best_trial.value})
+
+    ## log metadata
+    mlflow.set_tags(tags={
+        'suggested_hyperparameters': suggested_hyperparameters
+    })
+
+    return study.best_params
 
 if __name__ == "__main__":
 
@@ -46,6 +96,10 @@ if __name__ == "__main__":
                         help='target dataset')
     parser.add_argument('--replicate_idx', type=int, default=0,
                         help='replicate index')
+    parser.add_argument('--feature', type=str, default=None,
+                        help='feature to run')
+    parser.add_argument('--tune_hyperparameters', action='store_true', default=False,
+                        help='tune hyperparameters')
     args = parser.parse_args()
     #args = parser.parse_known_args()[0]
 
@@ -110,6 +164,7 @@ if __name__ == "__main__":
         target_atac_valid_loaders,
         trial: Trial = None,
         params: dict = {},
+        device: str = 'cpu',
         ):
 
         ## Get number of genes and peaks from genes_by_peaks_str
@@ -122,11 +177,17 @@ if __name__ == "__main__":
 
         # Instantiate the knowledge distillation loss function
         paired = (args.target_dataset != 'MDD')
-        knowledge_distillation_fn = Knowledge_distillation_fn(device=device, kd_loss='KL', student_temperature=1, target_temperature=1, paired=paired, weigh_distil_by_align_type='none')
+        knowledge_distillation_fn = Knowledge_distillation_fn(device=device, student_temperature=1, target_temperature=1, paired=paired, weigh_distil_by_align_type='none')
 
-        # Initialize main logger DataFrame
-        columns = ['Epoch']
-        log_df = pd.DataFrame(columns=columns)
+        # Define loop_order parameter
+        loop_order = args.loop_order  # 'datasets_first' or 'batches_first'
+
+        # Log model parameters with MLflow
+        mlflow.log_params(params)
+        mlflow.log_param("paired", paired)
+        mlflow.log_param("loop_order", loop_order)
+        mlflow.log_param("n_genes", n_genes)
+        mlflow.log_param("n_peaks", n_peaks)
 
         if paired:
             student_foscttm_per_ct_valid = pd.DataFrame()
@@ -180,6 +241,7 @@ if __name__ == "__main__":
                     target_rna_latents_valid, _ = model(target_rna_cells_valid, modality=0)
                     target_atac_latents_valid, _ = model(target_atac_cells_valid, modality=1)
 
+                    ## compute teacher losses, in principle no need to recompute align losses for teachers since fixed
                     distil_loss_valid, distil_loss_valid_T, align_loss_valid, align_loss_T_valid, offset_valid, offset_T_valid =\
                         knowledge_distillation_fn(student_rna_latents_valid, student_atac_latents_valid, target_rna_latents_valid, target_atac_latents_valid, 'teacher')
 
@@ -209,16 +271,6 @@ if __name__ == "__main__":
                 align_losses_T_valid    = torch.stack(align_losses_T_valid)
                 offsets_valid           = torch.stack(offsets_valid)
                 offsets_T_valid         = torch.stack(offsets_T_valid)
-                
-                ## Compute losses per cell type
-                '''
-                distil_losses_atac_per_ct_valid, distil_losses_rna_per_ct_valid, align_losses_atac_per_ct_valid, align_losses_rna_per_ct_valid = ct_losses(distil_losses_valid, distil_losses_T_valid, align_losses_valid, align_losses_T_valid, target_atac_celltypes_valid, target_rna_celltypes_valid, datasets)
-                distil_losses_atac_per_ct_valid.name = distil_losses_rna_per_ct_valid.name = align_losses_atac_per_ct_valid.name = align_losses_rna_per_ct_valid.name = f'{epoch+1}'
-                all_distil_losses_atac_per_ct_valid = pd.concat([all_distil_losses_atac_per_ct_valid, distil_losses_atac_per_ct_valid], axis=1)
-                all_distil_losses_rna_per_ct_valid  = pd.concat([all_distil_losses_rna_per_ct_valid, distil_losses_rna_per_ct_valid], axis=1)
-                all_align_losses_atac_per_ct_valid  = pd.concat([all_align_losses_atac_per_ct_valid, align_losses_atac_per_ct_valid], axis=1)
-                all_align_losses_rna_per_ct_valid   = pd.concat([all_align_losses_rna_per_ct_valid, align_losses_rna_per_ct_valid], axis=1)
-                '''
 
                 ## Compute distillation loss weighted by alignment loss, if more than one teacher
                 mean_distil_loss_valid, _ = knowledge_distillation_fn.distil_loss_weighting( distil_losses_valid, distil_losses_T_valid, (offsets_valid - align_losses_valid), (offsets_T_valid - align_losses_T_valid))
@@ -231,14 +283,13 @@ if __name__ == "__main__":
                     align_loss_scale = (mean_distil_loss_valid / align_loss_scaled_valid).detach().cpu().numpy().item()
                     knowledge_distillation_fn.align_loss_scale = align_loss_scale
                     print(f'Align loss scale: {align_loss_scale}')
+                    mlflow.log_param("align_loss_scale", align_loss_scale)
 
                     ## Retroactively scale teacher & student CLIP losses
                     epoch_align_losses_valid    = {dataset: align_loss_scale * epoch_align_losses_valid[dataset] for dataset in datasets} # not sure if updating correctly
                     epoch_losses_valid          = {dataset: args.distil_lambda * epoch_distil_losses_valid[dataset] + (1-args.distil_lambda) * epoch_align_losses_valid[dataset] for dataset in datasets}
                     align_loss_scaled_valid     = align_loss_scale * align_loss_scaled_valid
 
-                    #all_align_losses_atac_per_ct_valid.iloc[:,0] *= align_loss_scale
-                    #all_align_losses_rna_per_ct_valid.iloc[:,0] *= align_loss_scale
 
                 ## Compute total loss as convex combination of CLIP loss and average distillation loss
                 total_loss_valid = (args.distil_lambda * mean_distil_loss_valid) + ((1-args.distil_lambda) * align_loss_scaled_valid)
@@ -354,7 +405,8 @@ if __name__ == "__main__":
                     assert (student_atac_dat.obs_names == target_atac_dat.obs_names).all()
 
                     ## compute teacher losses
-                    distil_loss, distil_loss_T, align_loss_scaled, align_loss_T_scaled, offset, offset_T = knowledge_distillation_fn(student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, 'teacher')
+                    distil_loss, distil_loss_T, align_loss_scaled, align_loss_T_scaled, offset, offset_T = \
+                        knowledge_distillation_fn(student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, 'teacher')
 
                     distil_losses.append(distil_loss)
                     align_losses.append(align_loss_scaled)
@@ -393,107 +445,129 @@ if __name__ == "__main__":
                 optimizer.step()
                 optimizer.zero_grad()
                 
-                epoch_align_loss[target_dataset_og] += align_loss_scaled.item()
                 epoch_distil_loss[target_dataset_og] += mean_distil_loss.item()
                 epoch_losses[target_dataset_og] += total_loss.item()
 
-
-            # Log the average loss per dataset
-            row = {'Epoch': epoch + 1}
+            # Prepare metrics dictionary for MLflow logging
+            metrics_dict = {}
+            
+            # Add training metrics
             for dataset in datasets+[target_dataset_og]:
-
-                row[f'Loss-{dataset}'] = epoch_losses[dataset] / num_batches
-                row[f'Loss_align-{dataset}'] = epoch_align_loss[dataset] / num_batches
-                row[f'Loss_distil-{dataset}'] = epoch_distil_loss[dataset] / num_batches
-
-                row[f'Loss_valid-{dataset}'] = epoch_losses_valid[dataset]
-                row[f'Loss_align_valid-{dataset}'] = epoch_align_losses_valid[dataset]
-                row[f'Loss_distil_valid-{dataset}'] = epoch_distil_losses_valid[dataset]
-                
-                '''
-                if (epoch == 0) or np.isin(dataset, [target_dataset_og]).item():
-                    row[f'iLISI-{dataset}'] = epoch_ilisis[dataset]
-                    row[f'cLISI-{dataset}'] = epoch_clisis[dataset]
-                    row[f'NMI-{dataset}'] = epoch_nmi[dataset]
-                    row[f'ARI-{dataset}'] = epoch_ari[dataset]
-
-                    if paired:
-                        row[f'FOSCTTM-{dataset}'] = epoch_foscttm[dataset]
-                        row[f'Rank_score-{dataset}'] = epoch_rank_score[dataset]
-                '''
-                
-            # Append the row to the DataFrame
-            log_df = pd.concat([log_df, pd.DataFrame([row])], ignore_index=True)
+                metrics_dict[f'train_loss_{dataset}'] = epoch_losses[dataset] / num_batches
+                metrics_dict[f'train_distil_loss_{dataset}'] = epoch_distil_loss[dataset] / num_batches
+            
+            # Add validation metrics
+            metrics_dict[f'valid_loss_{target_dataset_og}'] = epoch_losses_valid[target_dataset_og]
+            metrics_dict[f'valid_align_loss_{target_dataset_og}'] = epoch_align_losses_valid[target_dataset_og]
+            metrics_dict[f'valid_distil_loss_{target_dataset_og}'] = epoch_distil_losses_valid[target_dataset_og]
+            
+            # Add performance metrics from get_metrics
+            metrics_dict.update(metrics)
+            
+            # Log all metrics at once with MLflow
+            mlflow.log_metrics(metrics_dict, step=epoch+1)
 
             ## early stopping with Optuna pruner
             if trial is not None:
+                metric_to_optimize = metrics.get('nmi_ari', 0)  # Default to nmi_ari if not specified
                 trial.report(metric_to_optimize, step=epoch+1)
                 if trial.should_prune():
                     raise TrialPruned()
 
-        return student_model, log_df
-        
-    student_model, log_df = run_ECLARE(args, student_model, student_rna_train_loader, student_atac_train_loader, student_rna_valid_loader, student_atac_valid_loader, device)
-
-
-    # Define the CSV file path
-    csv_file_path = os.path.join(args.outdir, 'training_log.csv')
-    log_df.to_csv(csv_file_path, index=False)
-    print(f"Training log saved to {csv_file_path}")
-
-    ## Extract important metrics from last epoch for target dataset adn save separately
-    core_metrics = ['iLISI', 'cLISI', 'NMI', 'ARI', 'FOSCTTM']
-    core_metrics_target = [f'{metric}-{target_dataset_og}' for metric in core_metrics if log_df.columns.str.contains(metric).any()]
-    last_epoch_log_df = \
-        log_df.loc[:,log_df.columns.str.contains(target_dataset_og)].loc[:,
-        core_metrics_target].iloc[-1]
+        return student_model, metrics_dict
     
-    last_epoch_log_df = last_epoch_log_df.rename(index={f'{col}': f'{col.split("-")[0].lower()}' for col in last_epoch_log_df.index})
-    last_epoch_log_df = last_epoch_log_df.rename(index={'ilisi': 'ilisis', 'clisi': 'clisis', 'foscttm': 'foscttm_score'})
-
-    if len(datasets) > 1:
-        last_epoch_log_df.to_csv(os.path.join(args.outdir, 'eclare_metrics_target_valid.csv'))
-    else:
-        last_epoch_log_df.to_csv(os.path.join(args.outdir, 'kd_clip_metrics_target_valid.csv'))
-
-    ## Save cell-type losses to CSV
-    all_distil_losses_atac_per_ct_valid.T.to_csv(os.path.join(args.outdir, 'all_distil_losses_atac_per_ct_valid.csv'))
-    all_distil_losses_rna_per_ct_valid.T.to_csv(os.path.join(args.outdir, 'all_distil_losses_rna_per_ct_valid.csv'))
-    all_align_losses_atac_per_ct_valid.T.to_csv(os.path.join(args.outdir, 'all_align_losses_atac_per_ct_valid.csv'))
-    all_align_losses_rna_per_ct_valid.T.to_csv(os.path.join(args.outdir, 'all_align_losses_rna_per_ct_valid.csv'))
-
-    if paired:
-        student_foscttm_per_ct_valid.columns = np.arange(1, args.total_epochs+1)
-        student_foscttm_per_ct_valid.T.to_csv(os.path.join(args.outdir, 'student_foscttm_per_ct_valid.csv'))
-        teacher_foscttm_per_ct_valid.T.to_csv(os.path.join(args.outdir, 'teacher_foscttm_per_ct_valid.csv'))
-
-    ## Save student model
-    '''
-    student_model_args_dict = {
-        'n_peaks': n_peaks,
-        'n_genes': n_genes,
+    run_args = {
         'args': args,
-        'device': device,
-        'nam_type': 'few-to-one',
-        'genes_to_peaks_binary_mask': genes_to_peaks_binary_mask,
-        'pretrain': False,
-        'tuned_hyperparameters': student_model_args_dict['tuned_hyperparameters'],
-        'rna_valid_idx': rna_valid_idx,
-        'atac_valid_idx': atac_valid_idx,
+        'student_rna_train_loader': student_rna_train_loader,
+        'student_rna_valid_loader': student_rna_valid_loader,
+        'student_atac_train_loader': student_atac_train_loader,
+        'student_atac_valid_loader': student_atac_valid_loader,
+        'target_rna_train_loaders': target_rna_train_loaders,
+        'target_atac_train_loaders': target_atac_train_loaders,
+        'target_rna_valid_loaders': target_rna_valid_loaders,
+        'target_atac_valid_loaders': target_atac_valid_loaders,
     }
-    '''
 
-    ## save student model state dict
-    student_model.eval()
-    student_model_args_dict['model_state_dict'] = student_model.state_dict()
+    ## get or create mlflow experiment
+    experiment_id = get_or_create_experiment('ECLARE')
+    mlflow.set_experiment(experiment_id)
 
-    ## set args to make student model instantiation work
-    student_model_args_dict['args'] = args
-    student_model_args_dict['args'].tune_hyperparameters = False
+    if args.feature:
+        run_name = args.feature
+    else:
+        run_name = 'Hyperparameter tuning' if args.tune_hyperparameters else 'Training'
 
-    ## save student model
-    torch.save(student_model_args_dict, os.path.join(args.outdir,'student_model.pt'))
+    ## run experiment
+    with mlflow.start_run(experiment_id=experiment_id, run_name=run_name):
 
-    print('done!')
+        mlflow.set_tag("outdir", args.outdir)
+
+        hyperparameters = get_clip_hparams()
+        default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
+
+        if (not args.tune_hyperparameters):
+            student_model, metrics_dict = run_ECLARE(**run_args, params=default_hyperparameters, device=device)
+            model_str = "trained_model"
+
+        else:
+
+            optuna.logging.set_verbosity(optuna.logging.ERROR)
+
+            best_params = tune_ECLARE(args, experiment_id)
+
+            ## run best model
+            run_args['trial'] = None
+            run_args['args'].total_epochs = 100
+            model, _ = run_ECLARE(**run_args, params=best_params, device=device)
+            model_str = "best_model"
+
+    ## infer signature
+    x = student_rna_valid_loader.dataset.adatas[0].X[0].toarray()
+    params = best_params if args.tune_hyperparameters else default_hyperparameters
+    num_units = best_params['num_units'] if args.tune_hyperparameters else default_hyperparameters['num_units']
+    
+    #signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x, 0)[0].detach().cpu().numpy()) ## TODO: check if can have multiple output signatures
+    #param_specs_list = [ParamSpec(name=k, dtype=v.dtype, default=default_hyperparameters[k]) for k, v in params.items()]
+
+    signature = ModelSignature(
+        inputs=Schema([TensorSpec(name="cell", type=x.dtype, shape=(-1, None))]),
+        outputs=Schema([
+                TensorSpec(name="latent", type=x.dtype, shape=(-1, num_units)),
+                TensorSpec(name="recon", type=x.dtype, shape=(-1, None)),
+            ]),
+        #params=ParamSchema(param_specs_list)
+    )
+
+    ## script model
+    script_model = torch.jit.script(student_model)
+
+    ## create metadata dict
+    metadata = {
+        "modalities": ["rna", "atac"],
+        "modality_feature_sizes": [n_genes, n_peaks],
+        "genes_by_peaks_str": args.genes_by_peaks_str,
+        "source_dataset": args.source_dataset,
+        "target_dataset": args.target_dataset,
+    }
+
+    ## log model with mlflow.pytorch.log_model
+    log_model(script_model,
+        model_str,
+        signature=signature,
+        metadata=metadata)
+        #input_example=x,
+
+    ## save both model uri and file uri
+    file_uri = get_artifact_uri(model_str)
+    run_id = mlflow.active_run().info.run_id
+    runs_uri = f"runs:/{run_id}/{model_str}"
+
+    with open(os.path.join(args.outdir, 'model_uri.txt'), 'w') as f:
+        f.write(f"{runs_uri}\n")
+        f.write(f"{file_uri}\n")
+
+    ## print output directory
+    print('\n', args.outdir)
+    
 
 # %%
