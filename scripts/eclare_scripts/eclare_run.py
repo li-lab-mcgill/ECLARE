@@ -152,6 +152,170 @@ if __name__ == "__main__":
     
     from optuna import Trial, TrialPruned
     from argparse import Namespace
+    def eclare_pass(
+        student_rna_iterator,
+        student_atac_iterator,
+        target_rna_iterators,
+        target_atac_iterators,
+        student_model,
+        optimizer,
+        knowledge_distillation_fn,
+        loop_order
+        ):
+
+        # Initialize iterators for each data loader
+        target_rna_iterators = {dataset: iter(loader) for dataset, loader in target_rna_iterators.items()}
+        target_atac_iterators = {dataset: iter(loader) for dataset, loader in target_atac_iterators.items()}
+
+        student_rna_iterator = iter(student_rna_iterator)
+        student_atac_iterator = iter(student_atac_iterator)
+
+        # Determine the number of batches per dataset
+        num_batches_per_dataset = {
+            dataset: min(
+                len(target_rna_iterators[dataset]), len(target_atac_iterators[dataset]), len(student_rna_iterator), len(student_atac_iterator)
+            )
+            for dataset in datasets
+        }
+
+        # Determine the global minimum number of batches
+        if knowledge_distillation_fn.paired:
+            num_batches = min(num_batches_per_dataset.values())
+        else:
+            num_batches = min(num_batches_per_dataset.values()) - 1  # if not paired, unlikely that last batches have same size. so better to trim by one batch
+
+        # Define outer and inner iterables based on loop_order
+        if loop_order == 'datasets_first':
+            outer_iterable = datasets
+            inner_iterable = range(num_batches)
+
+        elif loop_order == 'batches_first':
+            outer_iterable = range(num_batches)
+            inner_iterable = datasets
+
+
+        # Initialize dictionaries to accumulate losses
+        epoch_losses, epoch_align_loss, epoch_distil_loss = [{dataset: 0.0 for dataset in datasets+[target_dataset_og]} for _ in range(3)]
+
+        for outer in tqdm(outer_iterable):
+
+            ## Extract student data once only for each outer loop iteration, not at every inner loop iteration
+            if loop_order == 'batches_first':
+                try:
+                    student_rna_dat = next(student_rna_iterator)
+                    student_atac_dat = next(student_atac_iterator)
+                except StopIteration:
+                    # If any iterator runs out of data, continue to the next iteration
+                    continue
+
+            ## Project student RNA data (target)
+            student_rna_cells = student_rna_dat.X.float().to(device)
+            student_rna_latents, _ = student_model(student_rna_cells, modality=0)
+            student_rna_celltypes = student_rna_dat.obs['cell_type'].to_list()
+
+            ## Project student ATAC data (target)
+            student_atac_cells = student_atac_dat.X.float().to(device)
+            student_atac_latents, _ = student_model(student_atac_cells, modality=1)
+            student_atac_celltypes = student_atac_dat.obs['cell_type'].to_list()
+
+            ## Initialize list of dataset distil losses
+            distil_losses, distil_losses_T = [], []
+            align_losses, align_losses_T = [], []
+            offsets, offsets_T = [], []
+
+            for inner in (tqdm(inner_iterable, leave=False) if loop_order == 'datasets_first' else inner_iterable):
+                if loop_order == 'datasets_first':
+                    dataset = outer
+                    batch_idx = inner
+                else:
+                    dataset = inner
+                    batch_idx = outer
+
+                # Retrieve the next batch from each iterator
+                try:
+                    target_rna_dat = next(target_rna_iterators[dataset])
+                    target_atac_dat = next(target_atac_iterators[dataset])
+
+                except StopIteration:
+                    # If any iterator runs out of data, continue to the next iteration
+                    continue
+
+                # Load the model for that dataset
+                model = models[dataset]
+
+                # Project target RNA data
+                target_rna_cells = target_rna_dat.X.float().to(device)
+                target_rna_latents, _ = model(target_rna_cells, modality=0)
+                target_rna_celltypes = target_rna_dat.obs['cell_type'].to_list()
+
+                # Project target ATAC data
+                target_atac_cells = target_atac_dat.X.float().to(device)
+                target_atac_latents, _ = model(target_atac_cells, modality=1)
+                target_atac_celltypes = target_atac_dat.obs['cell_type'].to_list()
+
+                ## Ensure that the target latents are detached
+                target_rna_latents = target_rna_latents.detach()
+                target_atac_latents = target_atac_latents.detach()
+
+                assert (student_rna_dat.obs_names == target_rna_dat.obs_names).all()
+                assert (student_atac_dat.obs_names == target_atac_dat.obs_names).all()
+
+                ## compute teacher losses
+                distil_loss, distil_loss_T, align_loss_scaled, align_loss_T_scaled, offset, offset_T = \
+                    knowledge_distillation_fn(student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, 'teacher')
+
+                distil_losses.append(distil_loss)
+                align_losses.append(align_loss_scaled)
+                distil_losses_T.append(distil_loss_T)
+                align_losses_T.append(align_loss_T_scaled)
+                offsets.append(offset)
+                offsets_T.append(offset_T)
+
+                ## get "aggregated" losses for distillation and alignment
+                distil_loss = 0.5 * (distil_loss + distil_loss_T)
+                align_loss_scaled = 0.5 * (align_loss_scaled + align_loss_T_scaled)
+
+                # Accumulate scalar loss values for logging
+                epoch_distil_loss[dataset] += distil_loss.mean().item()
+                epoch_align_loss[dataset] += align_loss_scaled.mean().item()
+                epoch_losses[dataset] += args.distil_lambda*distil_loss.mean().item() + (1-args.distil_lambda)*align_loss_scaled.mean().item()
+
+
+            ## Compute mean distillation loss
+            distil_losses = torch.stack(distil_losses)
+            align_losses = torch.stack(align_losses)
+            distil_losses_T = torch.stack(distil_losses_T)
+            align_losses_T = torch.stack(align_losses_T)
+            offsets = torch.stack(offsets)
+            offsets_T = torch.stack(offsets_T)
+
+            mean_distil_loss, _ = knowledge_distillation_fn.distil_loss_weighting( distil_losses, distil_losses_T, (offsets - align_losses), (offsets_T - align_losses_T))
+
+            ## Get student align loss
+            _, _, align_loss_scaled, _, _, _ = knowledge_distillation_fn(student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, 'student')
+
+            ## Compute total loss as convex combination of CLIP loss and average distillation loss
+            total_loss = (args.distil_lambda * mean_distil_loss) + ((1-args.distil_lambda) * align_loss_scaled)
+            epoch_distil_loss[target_dataset_og] += mean_distil_loss.item()
+            epoch_losses[target_dataset_og] += total_loss.item()
+
+            if (optimizer is not None):
+                optimizer.zero_grad()
+                total_loss.backward()
+                optimizer.step()
+            
+
+        # Prepare metrics dictionary for MLflow logging
+        metrics_dict = {}
+        
+        # Add training metrics
+        for dataset in datasets+[target_dataset_og]:
+            metrics_dict[f'train_loss_{dataset}'] = epoch_losses[dataset] / num_batches
+            metrics_dict[f'train_distil_loss_{dataset}'] = epoch_distil_loss[dataset] / num_batches
+                
+        return metrics_dict
+
+
     def run_ECLARE(
         args: Namespace,
         student_rna_train_loader,
@@ -189,283 +353,67 @@ if __name__ == "__main__":
         mlflow.log_param("n_genes", n_genes)
         mlflow.log_param("n_peaks", n_peaks)
 
-        if paired:
-            student_foscttm_per_ct_valid = pd.DataFrame()
-            teacher_foscttm_per_ct_valid = pd.DataFrame(columns=datasets)
-
         # Define loop_order parameter
         loop_order = args.loop_order  # 'datasets_first' or 'batches_first'
+
+        ## Get metrics -- valid dataset
+        with torch.inference_mode():
+
+            student_model.eval()
+
+            valid_metrics = eclare_pass(
+                student_rna_valid_loader,
+                student_atac_valid_loader,
+                target_rna_valid_loaders,
+                target_atac_valid_loaders,
+                student_model,
+                None,
+                knowledge_distillation_fn,
+                loop_order
+            )
 
         print('Iterating over epochs, batches & datasets')
         for epoch in range(args.total_epochs):
 
-            # Initialize dictionaries to accumulate losses
-            epoch_losses, epoch_align_loss, epoch_distil_loss = [{dataset: 0.0 for dataset in datasets+[target_dataset_og]} for _ in range(3)]
-            epoch_losses_valid, epoch_align_losses_valid, epoch_distil_losses_valid = {}, {}, {}
-            epoch_ilisis, epoch_clisis, epoch_nmi, epoch_ari, epoch_foscttm, epoch_rank_score = {}, {}, {}, {}, {}, {}
-
-            if args.save_latents:
-                all_rna_latents_valid, all_atac_latents_valid = [], []
-                all_rna_celltypes_valid, all_atac_celltypes_valid = [], []
-
-            ## Get metrics -- valid dataset
-            with torch.inference_mode():
-
-                distil_losses_valid, distil_losses_T_valid = [], []
-                align_losses_valid, align_losses_T_valid = [], []
-                offsets_valid, offsets_T_valid = [], []
-
-                ## Get student data and latents
-                student_rna_cells_valid, student_rna_celltypes_valid, student_atac_cells_valid, student_atac_celltypes_valid, rna_nuclei_idx_valid, atac_nuclei_idxs_valid =\
-                    fetch_data_from_loaders(student_rna_valid_loader, student_atac_valid_loader, paired=paired, subsample=args.valid_subsample) # reuse same nuclei indices for all student and teacher datasets, or else distillation loss not sensible
-
-                student_rna_latents_valid, _ = student_model(student_rna_cells_valid, modality=0)
-                student_atac_latents_valid, _ = student_model(student_atac_cells_valid, modality=1)
-
-                ## normalize latents (already being normalized in loss_fn)
-                student_rna_latents_valid = torch.nn.functional.normalize(student_rna_latents_valid, p=2, dim=1)
-                student_atac_latents_valid = torch.nn.functional.normalize(student_atac_latents_valid, p=2, dim=1)    
-                
-                ## loop through teachers
-                for dataset in datasets:
-
-                    dataset_embedding = None
-
-                    model = models[dataset]
-                    target_rna_valid_loader = target_rna_valid_loaders[dataset]
-                    target_atac_valid_loader = target_atac_valid_loaders[dataset]
-
-                    target_rna_cells_valid, target_rna_celltypes_valid, target_atac_cells_valid, target_atac_celltypes_valid, _, _        =\
-                        fetch_data_from_loaders(target_rna_valid_loader, target_atac_valid_loader, paired=paired, subsample=args.valid_subsample, rna_cells_idx=rna_nuclei_idx_valid, atac_cells_idx=atac_nuclei_idxs_valid)
-
-                    target_rna_latents_valid, _ = model(target_rna_cells_valid, modality=0)
-                    target_atac_latents_valid, _ = model(target_atac_cells_valid, modality=1)
-
-                    ## compute teacher losses, in principle no need to recompute align losses for teachers since fixed
-                    distil_loss_valid, distil_loss_valid_T, align_loss_valid, align_loss_T_valid, offset_valid, offset_T_valid =\
-                        knowledge_distillation_fn(student_rna_latents_valid, student_atac_latents_valid, target_rna_latents_valid, target_atac_latents_valid, 'teacher')
-
-                    ## update losses for teacher
-                    align_losses_valid.append(align_loss_valid)
-                    align_losses_T_valid.append(align_loss_valid)
-                    distil_losses_valid.append(distil_loss_valid)
-                    distil_losses_T_valid.append(distil_loss_valid)
-                    offsets_valid.append(offset_valid)
-                    offsets_T_valid.append(offset_T_valid)
-                    
-                    ## get "aggregated" losses for distillation and alignment
-                    distil_loss_valid = 0.5 * (distil_loss_valid + distil_loss_valid_T)
-                    align_loss_valid = 0.5 * (align_loss_valid + align_loss_T_valid)
-
-                    epoch_distil_losses_valid[dataset] = distil_loss_valid.mean().item()
-                    epoch_align_losses_valid[dataset] = align_loss_valid.mean().item()
-                    epoch_losses_valid[dataset] = args.distil_lambda*epoch_distil_losses_valid[dataset] + (1-args.distil_lambda)*epoch_align_losses_valid[dataset]
-
-                    if epoch == 0:
-                        metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device)
-
-                ## Compute mean distillation loss
-                distil_losses_valid     = torch.stack(distil_losses_valid)
-                distil_losses_T_valid   = torch.stack(distil_losses_T_valid)
-                align_losses_valid      = torch.stack(align_losses_valid)
-                align_losses_T_valid    = torch.stack(align_losses_T_valid)
-                offsets_valid           = torch.stack(offsets_valid)
-                offsets_T_valid         = torch.stack(offsets_T_valid)
-
-                ## Compute distillation loss weighted by alignment loss, if more than one teacher
-                mean_distil_loss_valid, _ = knowledge_distillation_fn.distil_loss_weighting( distil_losses_valid, distil_losses_T_valid, (offsets_valid - align_losses_valid), (offsets_T_valid - align_losses_T_valid))
-
-                ## Compute student alignment loss
-                _, _, align_loss_scaled_valid, _, _, _ = knowledge_distillation_fn(student_rna_latents_valid, student_atac_latents_valid, target_rna_latents_valid, target_atac_latents_valid, 'student')
-
-                ## Set align loss scale if first epoch
-                if epoch == 0:
-                    align_loss_scale = (mean_distil_loss_valid / align_loss_scaled_valid).detach().cpu().numpy().item()
-                    knowledge_distillation_fn.align_loss_scale = align_loss_scale
-                    print(f'Align loss scale: {align_loss_scale}')
-                    mlflow.log_param("align_loss_scale", align_loss_scale)
-
-                    ## Retroactively scale teacher & student CLIP losses
-                    epoch_align_losses_valid    = {dataset: align_loss_scale * epoch_align_losses_valid[dataset] for dataset in datasets} # not sure if updating correctly
-                    epoch_losses_valid          = {dataset: args.distil_lambda * epoch_distil_losses_valid[dataset] + (1-args.distil_lambda) * epoch_align_losses_valid[dataset] for dataset in datasets}
-                    align_loss_scaled_valid     = align_loss_scale * align_loss_scaled_valid
-
-
-                ## Compute total loss as convex combination of CLIP loss and average distillation loss
-                total_loss_valid = (args.distil_lambda * mean_distil_loss_valid) + ((1-args.distil_lambda) * align_loss_scaled_valid)
-
-                ## Get metrics for student
-                metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device)
-
-                ## Log validation losses for student
-                epoch_align_losses_valid[target_dataset_og] = align_loss_scaled_valid.item()
-                epoch_distil_losses_valid[target_dataset_og] = mean_distil_loss_valid.item()
-                epoch_losses_valid[target_dataset_og] = total_loss_valid.item()
-
-                if args.save_latents:
-                    save_latents(student_rna_latents_valid, student_atac_latents_valid, student_rna_celltypes_valid, student_atac_celltypes_valid, epoch, args.total_epochs, args.outdir)
-
-            ## Set gradients to zero
+            ## Set gradients to zero, but why??
             optimizer.zero_grad()
 
-            # Initialize iterators for each data loader
-            target_rna_train_iterators = {dataset: iter(loader) for dataset, loader in target_rna_train_loaders.items()}
-            target_atac_train_iterators = {dataset: iter(loader) for dataset, loader in target_atac_train_loaders.items()}
-
-            student_rna_train_iterator = iter(student_rna_train_loader)
-            student_atac_train_iterator = iter(student_atac_train_loader)
-
-            # Determine the number of batches per dataset
-            num_batches_per_dataset = {
-                dataset: min(
-                    len(target_rna_train_loaders[dataset]), len(target_atac_train_loaders[dataset]), len(student_rna_train_loader), len(student_atac_train_loader)
-                )
-                for dataset in datasets
-            }
-
-            # Determine the global minimum number of batches
-            if paired:
-                num_batches = min(num_batches_per_dataset.values())
-            else:
-                num_batches = min(num_batches_per_dataset.values()) - 1  # if not paired, unlikely that last batches have same size. so better to trim by one batch
-
-            # Define outer and inner iterables based on loop_order
-            if loop_order == 'datasets_first':
-                outer_iterable = datasets
-                inner_iterable = range(num_batches)
-
-            elif loop_order == 'batches_first':
-                outer_iterable = range(num_batches)
-                inner_iterable = datasets
-
             # Start the loops -- training data
-            for outer in tqdm(outer_iterable, desc=f"Epoch {epoch+1}"):
+            student_model.train()
 
-                ## Extract student data once only for each outer loop iteration, not at every inner loop iteration
-                if loop_order == 'batches_first':
-                    try:
-                        student_rna_dat = next(student_rna_train_iterator)
-                        student_atac_dat = next(student_atac_train_iterator)
-                    except StopIteration:
-                        # If any iterator runs out of data, continue to the next iteration
-                        continue
+            train_metrics = eclare_pass(
+                student_rna_train_loader,
+                student_atac_train_loader,
+                target_rna_train_loaders,
+                target_atac_train_loaders,
+                student_model,
+                optimizer,
+                knowledge_distillation_fn,
+                loop_order
+            )
 
-                ## Project student RNA data (target)
-                student_rna_cells = student_rna_dat.X.float().to(device)
-                student_rna_latents, _ = student_model(student_rna_cells, modality=0)
-                student_rna_celltypes = student_rna_dat.obs['cell_type'].to_list()
+            with torch.inference_mode():
 
-                ## Project student ATAC data (target)
-                student_atac_cells = student_atac_dat.X.float().to(device)
-                student_atac_latents, _ = student_model(student_atac_cells, modality=1)
-                student_atac_celltypes = student_atac_dat.obs['cell_type'].to_list()
+                student_model.eval()
 
-                ## Initialize list of dataset distil losses
-                distil_losses, distil_losses_T = [], []
-                align_losses, align_losses_T = [], []
-                offsets, offsets_T = [], []
+                valid_metrics = eclare_pass(
+                    student_rna_valid_loader,
+                    student_atac_valid_loader,
+                    target_rna_valid_loaders,
+                    target_atac_valid_loaders,
+                    student_model,
+                    None,
+                    knowledge_distillation_fn,
+                    loop_order
+                )
 
-                for inner in (tqdm(inner_iterable, leave=False) if loop_order == 'datasets_first' else inner_iterable):
-                    if loop_order == 'datasets_first':
-                        dataset = outer
-                        batch_idx = inner
-                    else:
-                        dataset = inner
-                        batch_idx = outer
-
-                    # Retrieve the next batch from each iterator
-                    try:
-                        target_rna_dat = next(target_rna_train_iterators[dataset])
-                        target_atac_dat = next(target_atac_train_iterators[dataset])
-
-                    except StopIteration:
-                        # If any iterator runs out of data, continue to the next iteration
-                        continue
-
-                    # Load the model for that dataset
-                    model = models[dataset]
-
-                    # Project target RNA data
-                    target_rna_cells = target_rna_dat.X.float().to(device)
-                    target_rna_latents, _ = model(target_rna_cells, modality=0)
-                    target_rna_celltypes = target_rna_dat.obs['cell_type'].to_list()
-
-                    # Project target ATAC data
-                    target_atac_cells = target_atac_dat.X.float().to(device)
-                    target_atac_latents, _ = model(target_atac_cells, modality=1)
-                    target_atac_celltypes = target_atac_dat.obs['cell_type'].to_list()
-
-                    ## Ensure that the target latents are detached
-                    target_rna_latents = target_rna_latents.detach()
-                    target_atac_latents = target_atac_latents.detach()
-
-                    dataset_embedding = None
-
-                    assert (student_rna_dat.obs_names == target_rna_dat.obs_names).all()
-                    assert (student_atac_dat.obs_names == target_atac_dat.obs_names).all()
-
-                    ## compute teacher losses
-                    distil_loss, distil_loss_T, align_loss_scaled, align_loss_T_scaled, offset, offset_T = \
-                        knowledge_distillation_fn(student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, 'teacher')
-
-                    distil_losses.append(distil_loss)
-                    align_losses.append(align_loss_scaled)
-                    distil_losses_T.append(distil_loss_T)
-                    align_losses_T.append(align_loss_T_scaled)
-                    offsets.append(offset)
-                    offsets_T.append(offset_T)
-
-                    ## get "aggregated" losses for distillation and alignment
-                    distil_loss = 0.5 * (distil_loss + distil_loss_T)
-                    align_loss_scaled = 0.5 * (align_loss_scaled + align_loss_T_scaled)
-
-                    # Accumulate scalar loss values for logging
-                    epoch_distil_loss[dataset] += distil_loss.mean().item()
-                    epoch_align_loss[dataset] += align_loss_scaled.mean().item()
-                    epoch_losses[dataset] += args.distil_lambda*distil_loss.mean().item() + (1-args.distil_lambda)*align_loss_scaled.mean().item()
-
-
-                ## Compute mean distillation loss
-                distil_losses = torch.stack(distil_losses)
-                align_losses = torch.stack(align_losses)
-                distil_losses_T = torch.stack(distil_losses_T)
-                align_losses_T = torch.stack(align_losses_T)
-                offsets = torch.stack(offsets)
-                offsets_T = torch.stack(offsets_T)
-
-                mean_distil_loss, _ = knowledge_distillation_fn.distil_loss_weighting( distil_losses, distil_losses_T, (offsets - align_losses), (offsets_T - align_losses_T))
-
-                ## Get student align loss
-                _, _, align_loss_scaled, _, _, _ = knowledge_distillation_fn(student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, 'student')
-
-                ## Compute total loss as convex combination of CLIP loss and average distillation loss
-                total_loss = (args.distil_lambda * mean_distil_loss) + ((1-args.distil_lambda) * align_loss_scaled)
-                total_loss.backward()
-
-                optimizer.step()
-                optimizer.zero_grad()
-                
-                epoch_distil_loss[target_dataset_og] += mean_distil_loss.item()
-                epoch_losses[target_dataset_og] += total_loss.item()
-
-            # Prepare metrics dictionary for MLflow logging
-            metrics_dict = {}
-            
-            # Add training metrics
-            for dataset in datasets+[target_dataset_og]:
-                metrics_dict[f'train_loss_{dataset}'] = epoch_losses[dataset] / num_batches
-                metrics_dict[f'train_distil_loss_{dataset}'] = epoch_distil_loss[dataset] / num_batches
-            
-            # Add validation metrics
-            metrics_dict[f'valid_loss_{target_dataset_og}'] = epoch_losses_valid[target_dataset_og]
-            metrics_dict[f'valid_align_loss_{target_dataset_og}'] = epoch_align_losses_valid[target_dataset_og]
-            metrics_dict[f'valid_distil_loss_{target_dataset_og}'] = epoch_distil_losses_valid[target_dataset_og]
-            
             # Add performance metrics from get_metrics
-            metrics_dict.update(metrics)
+            metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device)
+            metrics.update(train_metrics)
+            metrics.update(valid_metrics)
             
             # Log all metrics at once with MLflow
-            mlflow.log_metrics(metrics_dict, step=epoch+1)
+            mlflow.log_metrics(metrics, step=epoch+1)
 
             ## early stopping with Optuna pruner
             if trial is not None:
@@ -474,7 +422,8 @@ if __name__ == "__main__":
                 if trial.should_prune():
                     raise TrialPruned()
 
-        return student_model, metrics_dict
+        return student_model, metrics
+    
     
     run_args = {
         'args': args,
