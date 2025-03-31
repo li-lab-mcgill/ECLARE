@@ -22,7 +22,7 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
-N_CORES=4 # one core for each target dataset
+N_CORES=3 # one core for each target dataset
 
 ## Define random state
 RANDOM=42
@@ -77,7 +77,7 @@ run_clip_task_on_gpu() {
     local genes_by_peaks_str=$6
     local feature=$7
 
-    echo "Running task $task_idx on GPU $gpu_id"
+    echo "Running '${feature}' on GPU $gpu_id"
     CUDA_VISIBLE_DEVICES=$gpu_id \
     python ${ECLARE_ROOT}/scripts/clip_scripts/clip_run.py \
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
@@ -85,58 +85,88 @@ run_clip_task_on_gpu() {
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --feature="'$feature'" \
+    --feature="${feature}" \
     --metric_to_optimize="1-foscttm" &
     #--tune_hyperparameters \
     #--n_trials=3 &
 }
 
-## Train CLARE from source datasets
+# Function to extract genes_by_peaks_str from CSV file
+extract_genes_by_peaks_str() {
+    local csv_file=$1
+    local source_dataset=$2
+    local target_dataset=$3
+    
+    local genes_by_peaks_str=$(awk -F',' -v source="$source_dataset" -v target="$target_dataset" '
+        NR == 1 {
+            for (i = 1; i <= NF; i++) {
+                if ($i == target) target_idx = i
+            }
+        }
+        $1 == source {
+            print $(target_idx)
+        }
+    ' "$csv_file")
+    
+    ## Check if the value was successfully extracted
+    if [ -z "$genes_by_peaks_str" ]; then
+        echo "Warning: No value found for source=$source_dataset, target=$target_dataset"
+
+        ## Check for possible malformed header with extra bracket (e.g., ]mdd)
+        header_check=$(awk -F',' 'NR==1 { for (i=1; i<=NF; i++) if ($i ~ /^\]/) print $i }' "$csv_file")
+        if [ -n "$header_check" ]; then
+            echo "Detected malformed header field(s): $header_check"
+            echo "This may be caused by Windows-style carriage returns (\r)."
+            echo "Suggested fix: Clean the CSV using the following command:"
+            echo "    sed -i 's/\r\$//' \"$csv_file\""
+            echo "Or preprocess with: dos2unix \"$csv_file\""
+        fi
+        
+        return 1
+    fi
+    
+    echo "$genes_by_peaks_str"
+    return 0
+}
+
+## Train CLIP from source datasets
 
 ## Outer loop: iterate over datasets as the target_dataset
-task_idx=0
 for target_dataset in "${datasets[@]}"; do
-    random_state=${random_states[$task_idx]}
-    
-    ## Inner loop: iterate over datasets as the source_dataset
+
+    ## Middle loop: iterate over datasets as the source_dataset
     for source_dataset in "${datasets[@]}"; do
  
         # Skip the case where source and target datasets are the same
         if [ "$source_dataset" != "$target_dataset" ]; then
 
-            feature="${source_dataset}-to-${target_dataset}-${task_idx}"
- 
             ## Extract the value of `genes_by_peaks_str` for the current source and target
-            genes_by_peaks_str=$(awk -F',' -v source="$source_dataset" -v target="$target_dataset" '
-                NR == 1 {
-                    for (i = 1; i <= NF; i++) {
-                        if ($i == target) target_idx = i
-                    }
-                }
-                $1 == source {
-                    print $target_idx
-                }
-            ' "$csv_file")
- 
-            ## Check if the value was successfully extracted
-            if [ -z "$genes_by_peaks_str" ]; then
-                echo "Warning: No value found for source=$source_dataset, target=$target_dataset"
+            genes_by_peaks_str=$(extract_genes_by_peaks_str $csv_file $source_dataset $target_dataset)
+
+            ## Check if extraction was successful
+            if [ $? -ne 0 ]; then
                 continue
             fi
+
+            ## Inner loop: iterate over task replicates (one per GPU)
+            for task_idx in $(seq 0 $((N_CORES-1))); do
+
+                random_state=${random_states[$task_idx]}
+                feature="${source_dataset}-to-${target_dataset}-${task_idx}"
  
-            ## Make new sub-sub-directory for source dataset
-            mkdir -p $TMPDIR/$target_dataset/$source_dataset/$task_idx
+                ## Make new sub-sub-directory for source dataset
+                mkdir -p $TMPDIR/$target_dataset/$source_dataset/$task_idx
+                
+                # Assign task to an idle GPU
+                gpu_id=${idle_gpus[$((task_idx % ${#idle_gpus[@]}))]}
+                run_clip_task_on_gpu $gpu_id $target_dataset $source_dataset $task_idx $random_state $genes_by_peaks_str $feature
+            done
             
-            # Assign task to an idle GPU
-            gpu_id=${idle_gpus[$((task_idx % ${#idle_gpus[@]}))]}
-            run_clip_task_on_gpu $gpu_id $target_dataset $source_dataset $task_idx $random_state $genes_by_peaks_str $feature
+            # Wait for all tasks for this source-target combination to complete before moving to the next one
+            wait
         fi
     done
-    task_idx=$((task_idx + 1))
 done
-
-# Wait for all tasks to complete
-wait
 
 cp $commands_file $TMPDIR
 

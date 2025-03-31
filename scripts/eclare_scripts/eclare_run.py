@@ -132,8 +132,9 @@ if __name__ == "__main__":
         if args.source_dataset is not None:
             NotImplementedError('Need to specify source dataset')
         else:
-            model_uri_paths = glob(os.path.join(outpath, f'clip_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'))
-            assert len(model_uri_paths) > 0, f'Model URI path not found for {target_dataset_og} ({replicate_idx})'
+            model_uri_paths_str = f'clip_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'
+            model_uri_paths = glob(os.path.join(outpath, model_uri_paths_str))
+            assert len(model_uri_paths) > 0, f'Model URI path not found @ {model_uri_paths_str}'
     else:
         raise ValueError(f'Need to specify target dataset')
 
@@ -195,7 +196,7 @@ if __name__ == "__main__":
 
 
         # Initialize dictionaries to accumulate losses
-        epoch_losses, epoch_align_loss, epoch_distil_loss = [{dataset: 0.0 for dataset in datasets+[target_dataset_og]} for _ in range(3)]
+        epoch_total_losses, epoch_align_loss, epoch_distil_loss = [{dataset: 0.0 for dataset in datasets+[target_dataset_og]} for _ in range(3)]
 
         for outer in tqdm(outer_iterable):
 
@@ -275,10 +276,14 @@ if __name__ == "__main__":
                 distil_loss = 0.5 * (distil_loss + distil_loss_T)
                 align_loss_scaled = 0.5 * (align_loss_scaled + align_loss_T_scaled)
 
+                ## get total loss
+                lambd = args.distil_lambda
+                total_loss = (lambd * distil_loss) + ((1-lambd) * align_loss_scaled)
+
                 # Accumulate scalar loss values for logging
                 epoch_distil_loss[dataset] += distil_loss.mean().item()
                 epoch_align_loss[dataset] += align_loss_scaled.mean().item()
-                epoch_losses[dataset] += args.distil_lambda*distil_loss.mean().item() + (1-args.distil_lambda)*align_loss_scaled.mean().item()
+                epoch_total_losses[dataset] += total_loss.mean().item()
 
 
             ## Compute mean distillation loss
@@ -289,15 +294,17 @@ if __name__ == "__main__":
             offsets = torch.stack(offsets)
             offsets_T = torch.stack(offsets_T)
 
-            mean_distil_loss, _ = knowledge_distillation_fn.distil_loss_weighting( distil_losses, distil_losses_T, (offsets - align_losses), (offsets_T - align_losses_T))
+            mean_distil_loss, _ = \
+                knowledge_distillation_fn.distil_loss_weighting( distil_losses, distil_losses_T, (offsets - align_losses), (offsets_T - align_losses_T))
 
             ## Get student align loss
-            _, _, align_loss_scaled, _, _, _ = knowledge_distillation_fn(student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, 'student')
+            _, _, align_loss_scaled, _, _, _ = \
+                knowledge_distillation_fn(student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, 'student')
 
             ## Compute total loss as convex combination of CLIP loss and average distillation loss
             total_loss = (args.distil_lambda * mean_distil_loss) + ((1-args.distil_lambda) * align_loss_scaled)
             epoch_distil_loss[target_dataset_og] += mean_distil_loss.item()
-            epoch_losses[target_dataset_og] += total_loss.item()
+            epoch_total_losses[target_dataset_og] += total_loss.item()
 
             if (optimizer is not None):
                 optimizer.zero_grad()
@@ -308,10 +315,11 @@ if __name__ == "__main__":
         # Prepare metrics dictionary for MLflow logging
         metrics_dict = {}
         
-        # Add training metrics
+        # Add metrics
         for dataset in datasets+[target_dataset_og]:
-            metrics_dict[f'train_loss_{dataset}'] = epoch_losses[dataset] / num_batches
-            metrics_dict[f'train_distil_loss_{dataset}'] = epoch_distil_loss[dataset] / num_batches
+            metrics_dict[f'total_loss_{dataset}']   = epoch_total_losses[dataset] / num_batches
+            metrics_dict[f'distil_loss_{dataset}']  = epoch_distil_loss[dataset] / num_batches
+            metrics_dict[f'align_loss_{dataset}']   = epoch_align_loss[dataset] / num_batches # could ignore non-target datasets since constant value across epochs
                 
         return metrics_dict
 
@@ -361,7 +369,7 @@ if __name__ == "__main__":
 
             student_model.eval()
 
-            valid_metrics = eclare_pass(
+            valid_losses = eclare_pass(
                 student_rna_valid_loader,
                 student_atac_valid_loader,
                 target_rna_valid_loaders,
@@ -372,6 +380,14 @@ if __name__ == "__main__":
                 loop_order
             )
 
+            ## get metrics
+            metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device)
+            metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
+
+            # Log all metrics at once with MLflow
+            mlflow.log_metrics(metrics, step=0)
+
+
         print('Iterating over epochs, batches & datasets')
         for epoch in range(args.total_epochs):
 
@@ -381,7 +397,7 @@ if __name__ == "__main__":
             # Start the loops -- training data
             student_model.train()
 
-            train_metrics = eclare_pass(
+            train_losses = eclare_pass(
                 student_rna_train_loader,
                 student_atac_train_loader,
                 target_rna_train_loaders,
@@ -396,7 +412,7 @@ if __name__ == "__main__":
 
                 student_model.eval()
 
-                valid_metrics = eclare_pass(
+                valid_losses = eclare_pass(
                     student_rna_valid_loader,
                     student_atac_valid_loader,
                     target_rna_valid_loaders,
@@ -409,8 +425,8 @@ if __name__ == "__main__":
 
             # Add performance metrics from get_metrics
             metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device)
-            metrics.update(train_metrics)
-            metrics.update(valid_metrics)
+            metrics.update({f'train_{k}': v for k, v in train_losses.items() if ~np.isnan(v)})
+            metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
             
             # Log all metrics at once with MLflow
             mlflow.log_metrics(metrics, step=epoch+1)
