@@ -5,11 +5,11 @@ cd $ECLARE_ROOT
  
 ## Make new sub-directory for current job ID and assign to "TMPDIR" variable
 JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
-mkdir -p ${OUTPATH}/eclare_${JOB_ID}
-TMPDIR=${OUTPATH}/eclare_${JOB_ID}
+mkdir -p ${OUTPATH}/kd_clip_${JOB_ID}
+TMPDIR=${OUTPATH}/kd_clip_${JOB_ID}
  
 ## Copy scripts to sub-directory for reproducibility
-cp ./scripts/eclare_scripts/eclare_run.py ./scripts/eclare_scripts/eclare_paired_data.sh $TMPDIR
+cp ./scripts/eclare_scripts/eclare_run.py ./scripts/kd_clip_scripts/kd_clip_paired_data.sh $TMPDIR
  
 ## https://docs.alliancecan.ca/wiki/PyTorch#PyTorch_with_Multiple_GPUs
 export NCCL_BLOCKING_WAIT=1  #Set this environment variable if you wish to use the NCCL backend for inter-GPU communication.
@@ -32,6 +32,7 @@ for i in $(seq 0 $((N_CORES - 1))); do
 done
  
 ## Define total number of epochs
+clip_job_id='30165724'
 total_epochs=2
 
 ## Create a temporary file to store all the commands we want to run
@@ -69,12 +70,14 @@ echo "Idle GPUs: ${idle_gpus[@]}"
 
 # Function to run a task on a specific GPU
 run_eclare_task_on_gpu() {
-    local gpu_id=$1
-    local target_dataset=$2
-    local task_idx=$3
-    local random_state=$4
-    local genes_by_peaks_str=$5
-    local feature=$6
+    local clip_job_id=$1
+    local gpu_id=$2
+    local source_dataset=$3
+    local target_dataset=$4
+    local task_idx=$5
+    local random_state=$6
+    local genes_by_peaks_str=$7
+    local feature=$8
 
     echo "Running ${source_dataset} to ${target_dataset} (task $task_idx) on GPU $gpu_id"
 
@@ -83,11 +86,12 @@ run_eclare_task_on_gpu() {
     python ${ECLARE_ROOT}/scripts/eclare_scripts/eclare_run.py \
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
     --replicate_idx=$task_idx \
-    --clip_job_id='30165724' \
+    --clip_job_id=$clip_job_id \
+    --source_dataset=$source_dataset \
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str_mdd \
     --total_epochs=$total_epochs \
-    --feature="'$feature'" \
+    --feature="$feature" \
     --distil_lambda=0.1 &
     #--tune_hyperparameters \
     #--n_trials=3 &
@@ -131,32 +135,55 @@ extract_genes_by_peaks_str() {
     return 0
 }
 
+## Create experiment ID (or detect if it already exists)
+python -c "
+from src.eclare.run_utils import get_or_create_experiment; 
+experiment = get_or_create_experiment('clip_${clip_job_id}')
+experiment_id = experiment.experiment_id
+print(experiment_id)
+
+from mlflow import MlflowClient
+client = MlflowClient()
+run_name = 'KD_CLIP_${clip_job_id}'
+client.create_run(experiment_id, run_name=run_name)
+"
+
 ## Outer loop: iterate over datasets as the target_dataset
 for target_dataset in "${datasets[@]}"; do
 
-    ## Extract the value of `genes_by_peaks_str` for the current source and target
-    genes_by_peaks_str_mdd=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "mdd")
-    
-    ## Check if extraction was successful
-    if [ $? -ne 0 ]; then
-        continue
-    fi
+    ## Middle loop: iterate over datasets as the source_dataset
+    for source_dataset in "${datasets[@]}"; do
 
-    for task_idx in $(seq 0 $((N_CORES-1))); do
+        # Skip the case where source and target datasets are the same
+        if [ "$source_dataset" != "$target_dataset" ]; then
 
-        random_state=${random_states[$task_idx]}
-        feature="${target_dataset}-${task_idx}"
+            ## Extract the value of `genes_by_peaks_str` for the current source and target
+            genes_by_peaks_str_mdd=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "mdd")
+            
+            ## Check if extraction was successful
+            if [ $? -ne 0 ]; then
+                continue
+            fi
 
-        ## Make new sub-sub-directory for source dataset
-        mkdir -p $TMPDIR/$target_dataset/$task_idx
-        
-        # Assign task to an idle GPU
-        gpu_id=${idle_gpus[$((task_idx % ${#idle_gpus[@]}))]}
-        run_eclare_task_on_gpu $gpu_id $target_dataset $task_idx $random_state $genes_by_peaks_str_mdd $feature
+            ## Inner loop: iterate over task indices
+            for task_idx in $(seq 0 $((N_CORES-1))); do
+
+                random_state=${random_states[$task_idx]}
+                feature="${source_dataset}-to-${target_dataset}-${task_idx}"
+
+                ## Make new sub-sub-directory for source dataset
+                mkdir -p $TMPDIR/$target_dataset/$source_dataset/$task_idx
+                
+                # Assign task to an idle GPU
+                gpu_id=${idle_gpus[$((task_idx % ${#idle_gpus[@]}))]}
+                run_eclare_task_on_gpu $clip_job_id $gpu_id $source_dataset $target_dataset $task_idx $random_state $genes_by_peaks_str_mdd $feature
+            done
+
+            # Wait for all tasks for this target dataset to complete before moving to the next one
+            wait
+
+        fi
     done
-
-    # Wait for all tasks for this target dataset to complete before moving to the next one
-    wait
 done
 
 

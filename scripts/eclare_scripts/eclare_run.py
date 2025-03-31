@@ -9,7 +9,7 @@ import pandas as pd
 from glob import glob
 
 import mlflow
-from mlflow import get_artifact_uri
+from mlflow import get_artifact_uri, MlflowClient
 from mlflow.pytorch import log_model
 from mlflow.models.signature import ModelSignature
 from mlflow.types import Schema, TensorSpec, ParamSchema, ParamSpec
@@ -24,11 +24,11 @@ from eclare.tune_utils import Optuna_propose_hyperparameters, champion_callback
 import optuna
 from optuna import Trial, TrialPruned
 
-def tune_ECLARE(args, experiment_id):
+def tune_ECLARE(args, experiment_name):
     suggested_hyperparameters = get_clip_hparams()
 
     def run_CLIP_wrapper(trial, run_args):
-        with mlflow.start_run(experiment_id=experiment_id, run_name=f'Trial {trial.number}', nested=True):
+        with mlflow.start_run(experiment_id=experiment_name, run_name=f'Trial {trial.number}', nested=True):
 
             params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
             run_args['trial'] = trial
@@ -125,18 +125,16 @@ if __name__ == "__main__":
 
     print('Extracting data')
 
-    if args.target_dataset is not None:
-        target_dataset_og = args.target_dataset
-        replicate_idx = str(args.replicate_idx)
+    target_dataset_og = args.target_dataset
+    replicate_idx = str(args.replicate_idx)
 
-        if args.source_dataset is not None:
-            NotImplementedError('Need to specify source dataset')
-        else:
-            model_uri_paths_str = f'clip_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'
-            model_uri_paths = glob(os.path.join(outpath, model_uri_paths_str))
-            assert len(model_uri_paths) > 0, f'Model URI path not found @ {model_uri_paths_str}'
+    if args.source_dataset is not None:
+        model_uri_paths_str = f'clip_*{args.clip_job_id}/{args.target_dataset}/{args.source_dataset}/{replicate_idx}/model_uri.txt'
     else:
-        raise ValueError(f'Need to specify target dataset')
+        model_uri_paths_str = f'clip_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'
+
+    model_uri_paths = glob(os.path.join(outpath, model_uri_paths_str))
+    assert len(model_uri_paths) > 0, f'Model URI path not found @ {model_uri_paths_str}'
 
     ##Get student loaders
     args_tmp = deepcopy(args)
@@ -454,82 +452,95 @@ if __name__ == "__main__":
     }
 
     ## get or create mlflow experiment
-    experiment_id = get_or_create_experiment('ECLARE')
-    mlflow.set_experiment(experiment_id)
+    #experiment_type = 'ECLARE' if args.source_dataset is None else 'KD_CLIP'
+    experiment = get_or_create_experiment(f'clip_{args.clip_job_id}')
+    experiment_name = experiment.name
+    experiment_id = experiment.experiment_id
+    mlflow.set_experiment(experiment_name)
 
-    if args.feature:
-        run_name = args.feature
-    else:
-        run_name = 'Hyperparameter tuning' if args.tune_hyperparameters else 'Training'
+    # Create experiment type level run
+    experiment_type = 'ECLARE' if args.source_dataset is None else 'KD_CLIP'
+    run_name = f'{experiment_type}_{args.clip_job_id}'
 
-    ## run experiment
-    with mlflow.start_run(experiment_id=experiment_id, run_name=run_name):
+    client = MlflowClient()
+    print('run_name:', run_name)
+    run_name_filter_string = f"tags.mlflow.runName = '{run_name}'"
+    runs = client.search_runs(experiment_ids=[experiment_id], filter_string=run_name_filter_string)
+    run_id = runs[-1].info.run_id
+    data_run_name = f'{args.source_dataset}_to_{args.target_dataset}' if args.source_dataset is not None else args.target_dataset
 
-        mlflow.set_tag("outdir", args.outdir)
+    with mlflow.start_run(experiment_id=experiment_id, run_id=run_id) as exp_type_run:
+        mlflow.set_tag("experiment_type", experiment_type)
 
-        hyperparameters = get_clip_hparams()
-        default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
+        with mlflow.start_run(parent_run_id=exp_type_run.info.run_id, run_name=data_run_name, nested=True) as data_run:
+            mlflow.set_tag("data_run_name", data_run_name)
 
-        if (not args.tune_hyperparameters):
-            student_model, metrics_dict = run_ECLARE(**run_args, params=default_hyperparameters, device=device)
-            model_str = "trained_model"
+            with mlflow.start_run(parent_run_id=data_run.info.run_id, run_name=str(args.replicate_idx), nested=True) as replicate_run:
+                mlflow.set_tag("replicate_idx", args.replicate_idx)
+                mlflow.set_tag("outdir", args.outdir)
 
-        else:
+                hyperparameters = get_clip_hparams()
+                default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
 
-            optuna.logging.set_verbosity(optuna.logging.ERROR)
+                if not args.tune_hyperparameters:
 
-            best_params = tune_ECLARE(args, experiment_id)
+                    student_model, metrics_dict = run_ECLARE(**run_args, params=default_hyperparameters, device=device)
+                    model_str = "trained_model"
 
-            ## run best model
-            run_args['trial'] = None
-            run_args['args'].total_epochs = 100
-            model, _ = run_ECLARE(**run_args, params=best_params, device=device)
-            model_str = "best_model"
+                else:
+                    optuna.logging.set_verbosity(optuna.logging.ERROR)
+                    best_params = tune_ECLARE(args, experiment_name)
 
-    ## infer signature
-    x = student_rna_valid_loader.dataset.adatas[0].X[0].toarray()
-    params = best_params if args.tune_hyperparameters else default_hyperparameters
-    num_units = best_params['num_units'] if args.tune_hyperparameters else default_hyperparameters['num_units']
-    
-    #signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x, 0)[0].detach().cpu().numpy()) ## TODO: check if can have multiple output signatures
-    #param_specs_list = [ParamSpec(name=k, dtype=v.dtype, default=default_hyperparameters[k]) for k, v in params.items()]
+                    ## run best model
+                    run_args['trial'] = None
+                    run_args['args'].total_epochs = 100
+                    model, _ = run_ECLARE(**run_args, params=best_params, device=device)
+                    model_str = "best_model"
 
-    signature = ModelSignature(
-        inputs=Schema([TensorSpec(name="cell", type=x.dtype, shape=(-1, None))]),
-        outputs=Schema([
-                TensorSpec(name="latent", type=x.dtype, shape=(-1, num_units)),
-                TensorSpec(name="recon", type=x.dtype, shape=(-1, None)),
-            ]),
-        #params=ParamSchema(param_specs_list)
-    )
+                ## infer signature
+                x = student_rna_valid_loader.dataset.adatas[0].X[0].toarray()
+                params = best_params if args.tune_hyperparameters else default_hyperparameters
+                num_units = best_params['num_units'] if args.tune_hyperparameters else default_hyperparameters['num_units']
+                
+                #signature = mlflow.models.signature.infer_signature(x.cpu().numpy(), model(x, 0)[0].detach().cpu().numpy()) ## TODO: check if can have multiple output signatures
+                #param_specs_list = [ParamSpec(name=k, dtype=v.dtype, default=default_hyperparameters[k]) for k, v in params.items()]
 
-    ## script model
-    script_model = torch.jit.script(student_model)
+                signature = ModelSignature(
+                    inputs=Schema([TensorSpec(name="cell", type=x.dtype, shape=(-1, None))]),
+                    outputs=Schema([
+                            TensorSpec(name="latent", type=x.dtype, shape=(-1, num_units)),
+                            TensorSpec(name="recon", type=x.dtype, shape=(-1, None)),
+                        ]),
+                    #params=ParamSchema(param_specs_list)
+                )
 
-    ## create metadata dict
-    metadata = {
-        "modalities": ["rna", "atac"],
-        "modality_feature_sizes": [n_genes, n_peaks],
-        "genes_by_peaks_str": args.genes_by_peaks_str,
-        "source_dataset": args.source_dataset,
-        "target_dataset": args.target_dataset,
-    }
+                ## script model
+                script_model = torch.jit.script(student_model)
 
-    ## log model with mlflow.pytorch.log_model
-    log_model(script_model,
-        model_str,
-        signature=signature,
-        metadata=metadata)
-        #input_example=x,
+                ## create metadata dict
+                metadata = {
+                    "modalities": ["rna", "atac"],
+                    "modality_feature_sizes": [n_genes, n_peaks],
+                    "genes_by_peaks_str": args.genes_by_peaks_str,
+                    "source_dataset": args.source_dataset,
+                    "target_dataset": args.target_dataset,
+                }
 
-    ## save both model uri and file uri
-    file_uri = get_artifact_uri(model_str)
-    run_id = mlflow.active_run().info.run_id
-    runs_uri = f"runs:/{run_id}/{model_str}"
+                ## log model with mlflow.pytorch.log_model
+                log_model(script_model,
+                    model_str,
+                    signature=signature,
+                    metadata=metadata)
+                    #input_example=x,
 
-    with open(os.path.join(args.outdir, 'model_uri.txt'), 'w') as f:
-        f.write(f"{runs_uri}\n")
-        f.write(f"{file_uri}\n")
+                ## save both model uri and file uri
+                file_uri = get_artifact_uri(model_str)
+                run_id = mlflow.active_run().info.run_id
+                runs_uri = f"runs:/{run_id}/{model_str}"
+
+                with open(os.path.join(args.outdir, 'model_uri.txt'), 'w') as f:
+                    f.write(f"{runs_uri}\n")
+                    f.write(f"{file_uri}\n")
 
     ## print output directory
     print('\n', args.outdir)
