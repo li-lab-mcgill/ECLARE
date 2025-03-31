@@ -7,6 +7,7 @@ import torch.nn as nn
 from tqdm import tqdm
 from optuna import TrialPruned, Trial
 import mlflow
+import subprocess
 from scipy.spatial.distance import squareform
 
 from eclare.models import CLIP, SpatialCLIP, get_clip_hparams, get_spatial_clip_hparams
@@ -309,6 +310,29 @@ def get_or_create_experiment(experiment_name):
   """
 
   if experiment := mlflow.get_experiment_by_name(experiment_name):
-      return experiment.experiment_id
+      return experiment
   else:
-      return mlflow.create_experiment(experiment_name)
+      experiment_id = mlflow.create_experiment(experiment_name)
+      experiment = mlflow.get_experiment(experiment_id)
+      return experiment
+
+def fully_delete_experiment(experiment_name):
+
+    mlflow.set_tracking_uri('http://localhost:5000') # raises error if set to path to local mlruns directory
+    #mlflow.set_tracking_uri('file://' + os.path.abspath('mlruns'))
+    
+    client = mlflow.tracking.MlflowClient()
+    experiment = client.get_experiment_by_name(experiment_name)
+    experiment_id = experiment.experiment_id if experiment else experiment_name
+
+    print(f"Soft deleting experiment {experiment_id}...")
+    client.delete_experiment(experiment_id)
+
+    # Perform garbage collection immediately after
+    print("Performing garbage collection...")
+    subprocess.run(
+        ["mlflow", "gc", "--backend-store-uri", mlflow.get_tracking_uri()],
+        check=True
+    )
+
+    print(f"✅ Fully deleted experiment '{experiment_name}'.")
