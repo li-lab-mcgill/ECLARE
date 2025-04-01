@@ -310,38 +310,30 @@ def retain_feature_overlap(
     target_peak_name_str_pattern = len(target_atac.var.index[0].split('-'))
     target_peak_name_str_pattern = 'all dashes' if target_peak_name_str_pattern==3 else 'standard'
 
+    ## find overlapping peaks with bedtools
+    source_atac_bed = BedTool.from_dataframe(pd.DataFrame(np.stack(source_atac.var.index.str.split(':|-')), columns=['chrom','start','end']))
+    target_atac_bed = BedTool.from_dataframe(pd.DataFrame(np.stack(target_atac.var.index.str.split(':|-')), columns=['chrom','start','end']))
+    overlapping_atac_peaks = source_atac_bed.intersect(target_atac_bed, wa=True, wb=True).to_dataframe()
 
-    if peak_overlap_method == 'set':
-        overlapping_atac_peaks = set(source_atac.var.index).intersection(target_atac.var.index)
+    if source_peak_name_str_pattern == 'all dashes':
+        source_peak_names = overlapping_atac_peaks.iloc[:,:3].astype(str).apply('-'.join, axis=1)
+        target_peak_names = overlapping_atac_peaks.iloc[:,3:].astype(str).apply('-'.join, axis=1)
 
-        source_atac = source_atac[:, source_atac.var.index.isin(overlapping_atac_peaks)]
-        order_peaks_idxs = np.array([np.where(peak == source_atac.var.index)[0][0] for peak in target_atac.var.index if np.isin(peak, overlapping_atac_peaks).item()])
-        source_atac = source_atac[:, order_peaks_idxs]
+    elif source_peak_name_str_pattern == 'standard':
+        source_peak_names = overlapping_atac_peaks.iloc[:,:3].astype(str).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1)
+        target_peak_names = overlapping_atac_peaks.iloc[:,3:].astype(str).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1)
 
-    elif peak_overlap_method == 'bedtools':
-        source_atac_bed = BedTool.from_dataframe(pd.DataFrame(np.stack(source_atac.var.index.str.split(':|-')), columns=['chrom','start','end']))
-        target_atac_bed = BedTool.from_dataframe(pd.DataFrame(np.stack(target_atac.var.index.str.split(':|-')), columns=['chrom','start','end']))
-        overlapping_atac_peaks = source_atac_bed.intersect(target_atac_bed, wa=True, wb=True).to_dataframe()
+    peaks_names_mapper = dict(zip(source_peak_names, target_peak_names)) # not necessarly one-to-one map, can have many-to-one
 
-        if source_peak_name_str_pattern == 'all dashes':
-            source_peak_names = overlapping_atac_peaks.iloc[:,:3].astype(str).apply('-'.join, axis=1)
-            target_peak_names = overlapping_atac_peaks.iloc[:,3:].astype(str).apply('-'.join, axis=1)
+    source_peaks_filt = source_atac.var.index.isin(source_peak_names) # three lines below "performs alignment"
+    source_atac = source_atac[:, source_peaks_filt].to_memory()
+    source_atac.var.index = source_atac.var.index.map(peaks_names_mapper)
 
-        elif source_peak_name_str_pattern == 'standard':
-            source_peak_names = overlapping_atac_peaks.iloc[:,:3].astype(str).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1)
-            target_peak_names = overlapping_atac_peaks.iloc[:,3:].astype(str).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1)
+    duplicates = source_atac.var_names.duplicated(keep='first')
+    source_atac = source_atac[:, ~duplicates].copy()
 
-        peaks_names_mapper = dict(zip(source_peak_names, target_peak_names)) # not necessarly one-to-one map, can have many-to-one
-
-        source_peaks_filt = source_atac.var.index.isin(source_peak_names) # three lines below "performs alignment"
-        source_atac = source_atac[:, source_peaks_filt].to_memory()
-        source_atac.var.index = source_atac.var.index.map(peaks_names_mapper)
-
-        duplicates = source_atac.var_names.duplicated(keep='first')
-        source_atac = source_atac[:, ~duplicates].copy()
-
-        #source_atac = source_atac[:,~source_atac.var.index.isna()]
-        overlapping_atac_peaks = list(set(source_atac.var.index).intersection(set(target_atac.var.index))) # should be equivalent to set(source_atac.var.index)
+    #source_atac = source_atac[:,~source_atac.var.index.isna()]
+    overlapping_atac_peaks = list(set(source_atac.var.index).intersection(set(target_atac.var.index))) # should be equivalent to set(source_atac.var.index)
 
     ## subset target genes and peaks
     target_peaks_filt = target_atac.var.index.isin(overlapping_atac_peaks)
@@ -1811,13 +1803,11 @@ def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', hvg_only=True
     
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
-
-        
         
 
-def pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='pbmc_multiome'):
+def pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=False, protein_coding_only=True, do_gas=False, do_peak_gene_alignment=True, return_type='loaders', return_raw_data=False, dataset='pbmc_multiome'):
 
-    datapath = os.path.join(os.environ['DATAPATH'], 'pbmc_multiome')
+    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'pbmc_multiome')
 
     if args.genes_by_peaks_str is not None:
 
@@ -1839,6 +1829,9 @@ def pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=True, pr
         
         atac = anndata.read_h5ad( os.path.join(datapath, ATAC_file))
         rna  = anndata.read_h5ad( os.path.join(datapath, RNA_file) )
+
+        ## Rename peaks to standard format
+        atac.var.index = pd.DataFrame(atac.var.index.str.split('-', expand=True).to_list()).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1).values
 
         ## Subset to protein-coding genes
         if protein_coding_only:
@@ -1892,37 +1885,39 @@ def pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=True, pr
             with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
             #genes_to_peaks_binary_mask = pd.DataFrame(genes_to_peaks_binary_mask.toarray(), index=genes_peaks_dict['genes'], columns=genes_peaks_dict['peaks'])
 
-        ## find peaks and genes that overlap
-        overlapping_genes = set(rna.var.index).intersection(genes_peaks_dict['genes'])
-        overlapping_peaks = set(atac.var.index).intersection(genes_peaks_dict['peaks'])
-        #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ list(overlapping_genes) , list(overlapping_peaks) ]
+        if do_peak_gene_alignment:
 
-        ## subset RNA genes
-        rna = rna[:, rna.var.index.isin(overlapping_genes)].copy()
-        #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask.loc[rna.var.index,:]
+            ## find peaks and genes that overlap
+            overlapping_genes = set(rna.var.index).intersection(genes_peaks_dict['genes'])
+            overlapping_peaks = set(atac.var.index).intersection(genes_peaks_dict['peaks'])
+            #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ list(overlapping_genes) , list(overlapping_peaks) ]
 
-        ## subset ATAC peaks - requires ordering of peaks
-        atac = atac[:, atac.var.index.isin(overlapping_peaks)].copy()
-        #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask.loc[:,atac.var.index]
+            ## subset RNA genes
+            rna = rna[:, rna.var.index.isin(overlapping_genes)].copy()
+            #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask.loc[rna.var.index,:]
 
-        ## sort peaks and genes
-        genes_sort_idxs = np.argsort(genes_peaks_dict['genes'].tolist())
-        peaks_sort_idxs = np.argsort(genes_peaks_dict['peaks'].tolist())
+            ## subset ATAC peaks - requires ordering of peaks
+            atac = atac[:, atac.var.index.isin(overlapping_peaks)].copy()
+            #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask.loc[:,atac.var.index]
 
-        genes_peaks_dict['genes'] = genes_peaks_dict['genes'][genes_sort_idxs]
-        genes_peaks_dict['peaks'] = genes_peaks_dict['peaks'][peaks_sort_idxs]
-        genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ genes_sort_idxs , : ]
-        genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ : , peaks_sort_idxs ]
+            ## sort peaks and genes
+            genes_sort_idxs = np.argsort(genes_peaks_dict['genes'].tolist())
+            peaks_sort_idxs = np.argsort(genes_peaks_dict['peaks'].tolist())
 
-        genes_sort_idxs = np.argsort(rna.var.index.tolist())
-        rna = rna[:,genes_sort_idxs]
+            genes_peaks_dict['genes'] = genes_peaks_dict['genes'][genes_sort_idxs]
+            genes_peaks_dict['peaks'] = genes_peaks_dict['peaks'][peaks_sort_idxs]
+            genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ genes_sort_idxs , : ]
+            genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ : , peaks_sort_idxs ]
 
-        peaks_sort_idxs = np.argsort(atac.var.index.tolist())
-        atac = atac[:,peaks_sort_idxs]
+            genes_sort_idxs = np.argsort(rna.var.index.tolist())
+            rna = rna[:,genes_sort_idxs]
 
-        ## check alignment
-        print('Genes match:', (rna.var.index == genes_peaks_dict['genes']).all())
-        print('Peaks match:', (atac.var.index == genes_peaks_dict['peaks']).all())
+            peaks_sort_idxs = np.argsort(atac.var.index.tolist())
+            atac = atac[:,peaks_sort_idxs]
+
+            ## check alignment
+            print('Genes match:', (rna.var.index == genes_peaks_dict['genes']).all())
+            print('Peaks match:', (atac.var.index == genes_peaks_dict['peaks']).all())
 
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
@@ -1933,4 +1928,4 @@ def pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=True, pr
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
 
     elif return_type == 'data':
-        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict
+        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
