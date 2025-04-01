@@ -151,14 +151,15 @@ client.create_run(experiment_id, run_name=run_name)
 ## Outer loop: iterate over datasets as the target_dataset
 for target_dataset in "${datasets[@]}"; do
 
+    ## Extract the value of `genes_by_peaks_str` for the current target
+    genes_by_peaks_str_mdd=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "mdd")
+    
     ## Middle loop: iterate over datasets as the source_dataset
     for source_dataset in "${datasets[@]}"; do
 
         # Skip the case where source and target datasets are the same
         if [ "$source_dataset" != "$target_dataset" ]; then
 
-            ## Extract the value of `genes_by_peaks_str` for the current source and target
-            genes_by_peaks_str_mdd=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "mdd")
             
             ## Check if extraction was successful
             if [ $? -ne 0 ]; then
@@ -179,7 +180,7 @@ for target_dataset in "${datasets[@]}"; do
                 run_eclare_task_on_gpu $clip_job_id $gpu_id $source_dataset $target_dataset $task_idx $random_state $genes_by_peaks_str_mdd $feature
             done
 
-            # Wait for all tasks for this target dataset to complete before moving to the next one
+            # Wait for all tasks for this source dataset to complete before moving to the next one
             wait
 
         fi

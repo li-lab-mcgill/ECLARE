@@ -452,32 +452,73 @@ if __name__ == "__main__":
     }
 
     ## get or create mlflow experiment
-    #experiment_type = 'ECLARE' if args.source_dataset is None else 'KD_CLIP'
     experiment = get_or_create_experiment(f'clip_{args.clip_job_id}')
     experiment_name = experiment.name
     experiment_id = experiment.experiment_id
     mlflow.set_experiment(experiment_name)
 
-    # Create experiment type level run
-    experiment_type = 'ECLARE' if args.source_dataset is None else 'KD_CLIP'
-    run_name = f'{experiment_type}_{args.clip_job_id}'
-
     client = MlflowClient()
-    print('run_name:', run_name)
-    run_name_filter_string = f"tags.mlflow.runName = '{run_name}'"
-    runs = client.search_runs(experiment_ids=[experiment_id], filter_string=run_name_filter_string)
-    run_id = runs[-1].info.run_id
+
+    # 1. Get or create experiment type run
+    experiment_type = 'ECLARE' if args.source_dataset is None else 'KD_CLIP'
+    exp_type_run_name = f'{experiment_type}_{args.clip_job_id}'
+    exp_type_filter = f"tags.mlflow.runName = '{exp_type_run_name}'"
+    exp_type_runs = client.search_runs(experiment_ids=[experiment_id], filter_string=exp_type_filter)
+    
+    if not exp_type_runs:
+        print(f"Creating new experiment type run: {exp_type_run_name}")
+        exp_type_run = client.create_run(experiment_id, run_name=exp_type_run_name)
+        client.set_tag(exp_type_run.info.run_id, "experiment_type", experiment_type)
+    else:
+        print(f"Reusing existing experiment type run: {exp_type_run_name}")
+        exp_type_run = exp_type_runs[0]  # Take the first (is the most recent?)
+
+    # 2. Get or create data run with more specific filtering
     data_run_name = f'{args.source_dataset}_to_{args.target_dataset}' if args.source_dataset is not None else args.target_dataset
+    data_run_filter = (
+        f"tags.mlflow.runName = '{data_run_name}' and "
+        f"tags.mlflow.parentRunId = '{exp_type_run.info.run_id}'"
+    )
+    data_runs = client.search_runs(experiment_ids=[experiment_id], filter_string=data_run_filter)
 
-    with mlflow.start_run(experiment_id=experiment_id, run_id=run_id) as exp_type_run:
-        mlflow.set_tag("experiment_type", experiment_type)
+    if not data_runs:
+        print(f"Creating new data run: {data_run_name}")
+        data_run = client.create_run(
+            experiment_id,
+            run_name=data_run_name,
+            tags={
+                "mlflow.parentRunId": exp_type_run.info.run_id,
+                "data_run_name": data_run_name
+            }
+        )
+    else:
+        print(f"Reusing existing data run: {data_run_name}")
+        data_run = data_runs[0]  # Take the first RUNNING run
 
-        with mlflow.start_run(parent_run_id=exp_type_run.info.run_id, run_name=data_run_name, nested=True) as data_run:
-            mlflow.set_tag("data_run_name", data_run_name)
+    # 3. Create new replicate run
+    replicate_name = str(args.replicate_idx)
+    replicate_run = client.create_run(
+        experiment_id,
+        run_name=replicate_name,
+        tags={
+            "mlflow.parentRunId": data_run.info.run_id,
+            "replicate_idx": replicate_name,
+            "outdir": args.outdir
+        }
+    )
+    print(f"Created new replicate run: {replicate_name}")
 
-            with mlflow.start_run(parent_run_id=data_run.info.run_id, run_name=str(args.replicate_idx), nested=True) as replicate_run:
-                mlflow.set_tag("replicate_idx", args.replicate_idx)
-                mlflow.set_tag("outdir", args.outdir)
+    # Debug information
+    print(f"\nRun hierarchy:")
+    print(f"└── {exp_type_run_name} (ID: {exp_type_run.info.run_id})")
+    print(f"    └── {data_run_name} (ID: {data_run.info.run_id})")
+    print(f"        └── replicate_{replicate_name} (ID: {replicate_run.info.run_id})")
+
+    # Use the runs
+    with mlflow.start_run(run_id=exp_type_run.info.run_id):
+        with mlflow.start_run(run_id=data_run.info.run_id, nested=True):
+            with mlflow.start_run(run_id=replicate_run.info.run_id, nested=True):
+                print(f"Running replicate {args.replicate_idx} for {data_run_name}")
 
                 hyperparameters = get_clip_hparams()
                 default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
