@@ -954,8 +954,8 @@ def pfc_zhu_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, p
 
     elif args.genes_by_peaks_str is None:
 
-        RNA_file = "roussos_rna.h5ad"
-        ATAC_file = "roussos_atac.h5ad"
+        RNA_file = "PFC_Zhu_rna.h5ad"
+        ATAC_file = "PFC_Zhu_atac.h5ad"
 
         atac_fullpath = os.path.join(atac_datapath, ATAC_file)
         rna_fullpath = os.path.join(rna_datapath, RNA_file)
@@ -1072,7 +1072,7 @@ def pfc_zhu_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, p
       
 def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Anderson'):
         
-    datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Anderson', 'snMultiome')
+    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Anderson', 'snMultiome')
 
     if args.genes_by_peaks_str is not None:
 
@@ -1193,7 +1193,7 @@ def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_on
 
 def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='Midbrain_Adams'):
     
-    datapath = os.path.join(os.environ['DATAPATH'], 'Midbrain_Adams')
+    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'Midbrain_Adams')
     celltypist_model_path = os.path.join(os.environ['DATAPATH'], 'Adult_Human_PrefrontalCortex.pkl')
 
     if args.genes_by_peaks_str is not None:
@@ -1337,7 +1337,7 @@ def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=
 
 def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Ma'):
         
-    datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Ma')
+    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Ma')
 
     if args.genes_by_peaks_str is not None:
 
@@ -1467,7 +1467,7 @@ def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, p
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
     elif return_type == 'data':
-        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, datapath
+        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
 
 
 def gene_activity_score_adata(atac, rna):
@@ -1666,7 +1666,6 @@ def spatialLIBD_setup(batch_size, total_epochs, cell_group='Cluster', hvg_only=T
 
     return sp, cell_group, datapath
 
-#ef pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='pbmc_multiome'):
 def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='mouse_brain_multiome', chain_file_name=None):
 
     atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'mouse_brain_multiome')
@@ -1755,6 +1754,10 @@ def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', hvg_only=True
         rna.var_names = rna.var_names.map(mouse_to_human_map)
         rna = rna[:, rna.var_names.notna()].copy()
 
+        ## Subset to unique human genes
+        unique_human_genes_mask = ~rna.var.index.duplicated(keep='first')
+        rna = rna[:, unique_human_genes_mask].copy()
+
         ## Subset to protein-coding genes
         if protein_coding_only:
             rna = get_protein_coding_genes(rna)
@@ -1792,6 +1795,37 @@ def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', hvg_only=True
             with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
             #genes_to_peaks_binary_mask = pd.DataFrame(genes_to_peaks_binary_mask.toarray(), index=genes_peaks_dict['genes'], columns=genes_peaks_dict['peaks'])
 
+        ## find peaks and genes that overlap
+        overlapping_genes = set(rna.var.index).intersection(genes_peaks_dict['genes'])
+        overlapping_peaks = set(atac.var.index).intersection(genes_peaks_dict['peaks'])
+        #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ list(overlapping_genes) , list(overlapping_peaks) ]
+
+        ## subset RNA genes
+        rna = rna[:, rna.var.index.isin(overlapping_genes)].copy()
+        #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask.loc[rna.var.index,:]
+
+        ## subset ATAC peaks - requires ordering of peaks
+        atac = atac[:, atac.var.index.isin(overlapping_peaks)].copy()
+        #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask.loc[:,atac.var.index]
+
+        ## sort peaks and genes
+        genes_sort_idxs = np.argsort(genes_peaks_dict['genes'].tolist())
+        peaks_sort_idxs = np.argsort(genes_peaks_dict['peaks'].tolist())
+
+        genes_peaks_dict['genes'] = genes_peaks_dict['genes'][genes_sort_idxs]
+        genes_peaks_dict['peaks'] = genes_peaks_dict['peaks'][peaks_sort_idxs]
+        genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ genes_sort_idxs , : ]
+        genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ : , peaks_sort_idxs ]
+
+        genes_sort_idxs = np.argsort(rna.var.index.tolist())
+        rna = rna[:,genes_sort_idxs]
+
+        peaks_sort_idxs = np.argsort(atac.var.index.tolist())
+        atac = atac[:,peaks_sort_idxs]
+
+        ## check alignment
+        print('Genes match:', (rna.var.index == genes_peaks_dict['genes']).all())
+        print('Peaks match:', (atac.var.index == genes_peaks_dict['peaks']).all())
 
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
@@ -1802,8 +1836,7 @@ def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', hvg_only=True
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
     elif return_type == 'data':
-        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
-        
+        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath        
 
 def pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=False, protein_coding_only=True, do_gas=False, do_peak_gene_alignment=True, return_type='loaders', return_raw_data=False, dataset='pbmc_multiome'):
 
