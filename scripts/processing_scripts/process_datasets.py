@@ -1,19 +1,13 @@
 from argparse import ArgumentParser
-from setup_utils import \
-    CAtlas_Tabula_Sapiens_setup, mdd_setup, pbmc_multiome_setup, splatter_sim_setup, toy_simulation_setup, Roussos_cerebral_cortex_setup, retain_feature_overlap, snMultiome_388_human_brains_setup, snMultiome_388_human_brains_one_subject_setup, AD_Anderson_et_al_setup, PD_Adams_et_al_setup, human_dlpfc_setup, sea_ad_setup
 from scipy.sparse import save_npz
 from pickle import dump as pkl_dump
 from anndata import read_h5ad
 import numpy as np
 import os
 
-import socket
-hostname = socket.gethostname()
+from eclare import return_setup_func_from_dataset
+from eclare.setup_utils import retain_feature_overlap
 
-if 'narval' in hostname:
-    os.environ['machine'] = 'narval'
-elif 'Dylan' in hostname:
-    os.environ['machine'] = 'local'
 
 if __name__ == "__main__":
 
@@ -31,120 +25,20 @@ if __name__ == "__main__":
     parser.add_argument('--feature', type=str, default=None)
     args = parser.parse_args()
 
-
     ## SOURCE dataset setup function
-    if args.source_dataset == 'CAtlas_Tabula_Sapiens':
-        setup_func = CAtlas_Tabula_Sapiens_setup
-
-    elif args.source_dataset == 'pbmc_multiome':
-        source_setup_func = pbmc_multiome_setup
-        #source_rna_datapath = source_atac_datapath = '/home/dmannk/projects/def-liyue/dmannk/data/10x_pbmc'
-        #source_RNA_file = "pbmcMultiome_rna.h5ad"
-        #source_ATAC_file = "pbmcMultiome_atac.h5ad"
-
-    elif args.source_dataset == 'roussos':
-        source_setup_func = Roussos_cerebral_cortex_setup
-        #source_datapath = '/home/dmannk/projects/def-liyue/dmannk/data/Roussos_lab'
-        #rna_datapath = os.path.join(source_datapath, 'rna')
-        #atac_datapath = os.path.join(source_datapath, 'atac')
-
-    elif args.source_dataset == '388_human_brains':
-        source_setup_func = snMultiome_388_human_brains_setup
-        #source_datapath = source_rna_datapath = source_atac_datapath = '/home/dmannk/projects/def-liyue/dmannk/data/388_human_brains'
-
-    elif args.source_dataset == '388_human_brains_one_subject':
-        source_setup_func = snMultiome_388_human_brains_one_subject_setup
-        #subject = 'RT00391N'
-        #datapath = rna_datapath = atac_datapath = os.path.join('/home/dmannk/projects/def-liyue/dmannk/data/388_human_brains', subject)
-
-    elif args.source_dataset == 'AD_Anderson_et_al':
-        source_setup_func = AD_Anderson_et_al_setup
-        #datapath = rna_datapath = atac_datapath = '/home/dmannk/projects/def-liyue/dmannk/data/AD_Anderson_et_al'
-
-    elif args.source_dataset == 'PD_Adams_et_al':
-        source_setup_func = PD_Adams_et_al_setup
-
-    elif args.source_dataset == 'human_dlpfc':
-        source_setup_func = human_dlpfc_setup
-
-    elif args.source_dataset == 'sea_ad':
-        source_setup_func = sea_ad_setup
-
+    source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
     ## TARGET dataset setup function
-    if args.target_dataset == 'mdd':
-        target_setup_func = mdd_setup
-
-    elif args.target_dataset == 'pbmc_multiome':
-        target_setup_func = pbmc_multiome_setup
-        #target_rna_datapath = target_atac_datapath = '/home/dmannk/projects/def-liyue/dmannk/data/10x_pbmc'
-        #target_RNA_file = "pbmcMultiome_rna.h5ad"
-        #target_ATAC_file = "pbmcMultiome_atac.h5ad"
-
-    elif args.target_dataset == 'roussos':
-        target_setup_func = Roussos_cerebral_cortex_setup
-        #target_datapath = '/home/dmannk/projects/def-liyue/dmannk/data/Roussos_lab'
-        #target_rna_datapath = os.path.join(target_datapath, 'rna')
-        #target_atac_datapath = os.path.join(target_datapath, 'atac')
-
-    elif args.target_dataset == '388_human_brains':
-        target_setup_func = snMultiome_388_human_brains_setup
-        #target_datapath = target_rna_datapath = target_atac_datapath = '/home/dmannk/projects/def-liyue/dmannk/data/388_human_brains'
-
-    elif args.target_dataset == '388_human_brains_one_subject':
-        target_setup_func = snMultiome_388_human_brains_one_subject_setup
-        #subject = 'RT00391N'
-        #datapath = rna_datapath = atac_datapath = os.path.join('/home/dmannk/projects/def-liyue/dmannk/data/388_human_brains', subject)
-
-    elif args.target_dataset == 'AD_Anderson_et_al':
-        target_setup_func = AD_Anderson_et_al_setup
-
-    elif args.target_dataset == 'PD_Adams_et_al':
-        target_setup_func = PD_Adams_et_al_setup
-
-    elif args.target_dataset == 'human_dlpfc':
-        target_setup_func = human_dlpfc_setup
-
-    elif args.target_dataset == 'sea_ad':
-        target_setup_func = sea_ad_setup
-    
-
+    target_setup_func = return_setup_func_from_dataset(args.target_dataset)
 
     ## extract data
     print('Extracting data')
 
-    if args.source_dataset == 'merged_roussos_pbmc_multiome':
-        source_rna_datapath = source_atac_datapath = '/home/dmannk/projects/def-liyue/dmannk/data/merged_data'
-        source_rna = read_h5ad(os.path.join(source_rna_datapath, 'rna_merged_roussos_pbmc_multiome.h5ad'))
-        source_atac = read_h5ad(os.path.join(source_atac_datapath, 'atac_merged_roussos_pbmc_multiome.h5ad'))
-        source_cell_group = 'Cell type'
-
-    elif (args.source_dataset == 'merged_roussos_AD_Anderson_et_al_PD_Adams_et_al_human_dlpfc') or (args.source_dataset == 'imputed_merged_roussos_AD_Anderson_et_al_PD_Adams_et_al_human_dlpfc'):
-        if os.environ['machine'] == 'narval':
-            source_rna_datapath = soure_atac_datapath = '/home/dmannk/projects/def-liyue/dmannk/data/merged_data/roussos_AD_Anderson_et_al_PD_Adams_et_al_human_dlpfc'
-        elif os.environ['machine'] == 'local':
-            source_rna_datapath = source_atac_datapath = '/Users/dmannk/cisformer/workspace/merged_data/roussos_AD_Anderson_et_al_PD_Adams_et_al_human_dlpfc'
-
-        source_cell_group = 'Cell type'
-
-        if args.dataset == 'merged_roussos_AD_Anderson_et_al_PD_Adams_et_al_human_dlpfc':
-            source_rna = read_h5ad(os.path.join(source_rna_datapath, 'rna_merged_roussos_AD_Anderson_et_al_PD_Adams_et_al_human_dlpfc.h5ad'))
-            source_atac = read_h5ad(os.path.join(source_atac_datapath, 'atac_merged_roussos_AD_Anderson_et_al_PD_Adams_et_al_human_dlpfc.h5ad'))
-
-        elif args.dataset == 'imputed_merged_roussos_AD_Anderson_et_al_PD_Adams_et_al_human_dlpfc':
-            source_rna = read_h5ad(os.path.join(source_rna_datapath, 'rna_imputed_merged_roussos_AD_Anderson_et_al_PD_Adams_et_al_human_dlpfc.h5ad'))
-            source_atac = read_h5ad(os.path.join(source_atac_datapath, 'atac_imputed_merged_roussos_AD_Anderson_et_al_PD_Adams_et_al_human_dlpfc.h5ad'))
-
-            del source_rna.X, source_atac.X
-            source_rna.X = source_rna.obsm['imputed']
-            source_atac.X = source_atac.obsm['imputed']
-
-    elif args.source_dataset is not None:
-        source_rna, source_atac, source_cell_group, _, _, source_atac_datapath, source_rna_datapath \
-            = source_setup_func(args, hvg_only=True, protein_coding_only=True, pretrain=None, return_type='data')
+    source_rna, source_atac, source_cell_group, _, _, source_atac_datapath, source_rna_datapath \
+        = source_setup_func(args, hvg_only=True, protein_coding_only=True, return_type='data')
 
     target_rna, target_atac, target_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, target_atac_datapath, target_rna_datapath \
-        = target_setup_func(args, pretrain=None, return_type='data')
+        = target_setup_func(args, return_type='data')
     
     ## delete atac.raw if it exists
     if (args.target_dataset=='mdd') and ('raw' in target_atac.uns.keys()):
