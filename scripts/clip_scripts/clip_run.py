@@ -111,14 +111,13 @@ if __name__ == "__main__":
     ## SOURCE dataset setup function
     source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
-    ## TARGET dataset setup function
-    target_setup_func = return_setup_func_from_dataset(args.target_dataset)
-    
-
     ## get data loaders
     rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
         source_setup_func(args, return_type='loaders', dataset=args.source_dataset)
     
+    ## TARGET dataset setup function
+    #target_setup_func = return_setup_func_from_dataset(args.target_dataset)
+
     ## missing overlapping_subjects argument if target is MDD (False by default)
     #_, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
     #    target_setup_func(args, return_type='loaders', dataset=args.target_dataset)
@@ -132,8 +131,10 @@ if __name__ == "__main__":
     }
 
     ## get or create mlflow experiment
-    experiment_id = get_or_create_experiment('CLIP')
-    mlflow.set_experiment(experiment_id)
+    experiment = get_or_create_experiment('CLIP')
+    experiment_id = experiment.experiment_id
+    experiment_name = experiment.name
+    mlflow.set_experiment(experiment_name)
 
     if args.feature:
         run_name = args.feature

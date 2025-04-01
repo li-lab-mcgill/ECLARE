@@ -9,6 +9,9 @@ from pybedtools import BedTool
 #import bbknn
 from muon import atac as ac
 from muon import read_10x_h5 as muon_read_10x_h5
+from muon import read_h5mu as muon_read_h5mu
+from muon import MuData
+
 from scipy.sparse import csr_matrix, save_npz, load_npz
 from pickle import dump as pkl_dump
 from pickle import load as pkl_load
@@ -49,6 +52,9 @@ def return_setup_func_from_dataset(dataset_name):
 
     elif (dataset_name == 'pbmc_multiome'):
         setup_func = pbmc_multiome_setup
+
+    elif (dataset_name == 'mouse_brain_multiome'):
+        setup_func = mouse_brain_multiome_setup
 
     return setup_func
 
@@ -1668,31 +1674,150 @@ def spatialLIBD_setup(batch_size, total_epochs, cell_group='Cluster', hvg_only=T
 
     return sp, cell_group, datapath
 
+#ef pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='pbmc_multiome'):
+def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='mouse_brain_multiome', chain_file_name=None):
 
-def multiome_mouse_brain_setup(args, return_raw_data=False, cell_group='TBD', return_type='loaders', chain_file_name=None):
-
-    datapath = os.path.join(os.environ['DATAPATH'], 'multiome_mouse_brain')
-
-    ## Load the data
-    mudata = muon_read_10x_h5(os.path.join(os.environ['DATAPATH'], 'multiome_mouse_brain', 'M_Brain_Chromium_Nuc_Isolation_vs_SaltyEZ_vs_ComplexTissueDP_filtered_feature_bc_matrix.h5'))
+    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'mouse_brain_multiome')
     
-    if return_raw_data and return_type == 'data':
-        return mudata, cell_group, datapath
-    
-    if chain_file_name is not None:
+    ## Lift data from mm10 to hg38 and save as MuData object. Skip the rest of setup
+    if chain_file_name is not None: #'mm10ToHg38.over.chain.gz'
         
-        atac_intervals = mudata['atac'].var['interval'].reset_index().drop(columns=['index'])
+        ## Load the original data
+        mudata = muon_read_10x_h5(os.path.join(os.environ['DATAPATH'], 'mouse_brain_multiome', 'M_Brain_Chromium_Nuc_Isolation_vs_SaltyEZ_vs_ComplexTissueDP_filtered_feature_bc_matrix.h5'))
+
+        rna = mudata['rna']
+        atac = mudata['atac']
+
+        atac_intervals = atac.var['interval'].reset_index().drop(columns=['index'])
         atac_intervals_df = pd.DataFrame(atac_intervals['interval'].str.split(':|-', expand=True).values, columns=['chrom', 'start', 'end'])
-        atac_intervals_df['name'] = [f'peak_{i}' for i in range(atac_intervals_df.shape[0])] # add name column to trace back to original peaks
+        atac_intervals_df['original_peak_idx'] = np.arange(atac_intervals_df.shape[0])
+        atac_intervals_df['original_peak'] = atac_intervals['interval']
         atac_intervals_bed = BedTool.from_dataframe(atac_intervals_df)
 
-        os.environ["PATH"] = os.path.expanduser("~/bin") + ":" + os.environ["PATH"]
+        os.environ["PATH"] = os.path.expanduser("~/bin") + ":" + os.environ["PATH"] # add path to liftOver
         chain_file_path = os.path.join(os.environ['DATAPATH'], chain_file_name)
-        lifted_intervals_bed = atac_intervals_bed.liftover(chain_file_path, unmapped=os.path.join(datapath, 'multiome_mouse_brain_peak_beds_unmapped_mm10ToHg38.bed'), liftover_args='-minMatch=0.8')
+        lifted_intervals_bed = atac_intervals_bed.liftover(chain_file_path, unmapped=os.path.join(datapath, 'mouse_brain_multiome_peak_beds_unmapped_mm10ToHg38.bed'), liftover_args='-minMatch=0.8')
+        lifted_intervals_df = lifted_intervals_bed.to_dataframe()
+        lifted_intervals_df['intervals'] = lifted_intervals_df['chrom'] + ':' + lifted_intervals_df['start'].astype(str) + '-' + lifted_intervals_df['end'].astype(str)
+
+        ## Subset ATAC to lifted peaks
+        atac = atac[:, lifted_intervals_df['name']].copy() # 'name' column is the original peak index
+        atac.var = atac.var.reset_index(drop=False, inplace=False)
+
+        atac.var['intervals'] = lifted_intervals_df['intervals']
+        atac.var['original_peak_idx'] = lifted_intervals_df['name']
+        atac.var['original_peak'] = lifted_intervals_df['score']
+
+        assert (atac.var['index'] == atac.var['original_peak']).all(), "Original peak index is not preserved"
+        atac.var = atac.var.drop(columns=['index', 'gene_ids', 'interval']) # all seem like the same as original_peak_idx
+        atac.var = atac.var.set_index('intervals', inplace=False)
+
+        ## Save lifted ATAC
+        mudata_lifted = MuData({'atac': atac, 'rna': rna})
+        mudata_lifted.write_h5mu(os.path.join(datapath, 'mouse_brain_multiome_atac_lifted.h5mu'), compression='gzip')  # A value is trying to be set on a copy of a slice from a DataFrame.
+        return
+
+    if args.genes_by_peaks_str is not None:
+
+        if args.source_dataset == dataset:
+            RNA_file = f"rna_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
+            ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
+            binary_mask_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.npz"
+            genes_peaks_dict_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.pkl"
+
+            genes_to_peaks_binary_mask_path = os.path.join(datapath, binary_mask_file)
+            genes_to_peaks_binary_mask = load_npz(genes_to_peaks_binary_mask_path)
+            pkl_path = os.path.join(datapath, genes_peaks_dict_file)
+            with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
+
+        elif args.target_dataset == dataset:
+            RNA_file = f"rna_{args.genes_by_peaks_str}_aligned_source_{args.source_dataset}.h5ad"
+            ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_source_{args.source_dataset}.h5ad"
+            binary_mask_file = genes_peaks_dict_file = genes_to_peaks_binary_mask = genes_peaks_dict = None
+
+        atac_fullpath = os.path.join(datapath, ATAC_file)
+        rna_fullpath = os.path.join(datapath, RNA_file)
+
+        atac = anndata.read_h5ad(atac_fullpath)
+        rna  = anndata.read_h5ad(rna_fullpath)
+
+    elif args.genes_by_peaks_str is None:
+
+        ## Load the lifted data
+        mudata = muon_read_h5mu(os.path.join(datapath, 'mouse_brain_multiome_atac_lifted.h5mu'))
+        rna = mudata['rna']
+        atac = mudata['atac']
+
+        ## Load cluster labels
+        cluster_labels_file = os.path.join(datapath, 'gex_graph_cluster_annotations.csv')
+        cluster_labels = pd.read_csv(cluster_labels_file)
+        cluster_labels = cluster_labels.set_index('Barcode')
+
+        rna.obs = rna.obs.join(cluster_labels, how='left')
+        atac.obs = atac.obs.join(cluster_labels, how='left')
+
+        ## Map mouse genes to human genes
+        mouse_to_human_dict = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'mouse_CRGm38_with_human_orthologs.tsv'), sep='\t')
+        mouse_to_human_dict = mouse_to_human_dict.drop_duplicates(subset=['Gene name'])
+        mouse_to_human_map = mouse_to_human_dict.set_index('Gene name')['Human gene name']
+        rna.var_names = rna.var_names.map(mouse_to_human_map)
+        rna = rna[:, rna.var_names.notna()].copy()
+
+        ## Subset to protein-coding genes
+        if protein_coding_only:
+            rna = get_protein_coding_genes(rna)
+
+        if return_raw_data and return_type == 'data':
+            return rna.to_memory(), atac.to_memory(), cell_group, None, None, atac_datapath, rna_datapath
+
+        ## Subset to variable features
+        if hvg_only:
+            ac.pp.tfidf(atac, scale_factor=1e4)
+            sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
+            sc.pp.log1p(atac)
+            sc.pp.highly_variable_genes(atac, n_top_genes=200000) # sc.pl.highly_variable_genes(atac)
+            sc.pp.scale(atac, zero_center=False, max_value=10) # min-max scaling
+            atac = atac[:, atac.var['highly_variable'].astype(bool)].to_memory()
+
+            sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
+            sc.pp.log1p(rna)
+            sc.pp.highly_variable_genes(rna, n_top_genes=10000) # sc.pl.highly_variable_genes(rna)
+            sc.pp.scale(rna, zero_center=False,  max_value=10) # min-max scaling
+            rna = rna[:, rna.var['highly_variable'].astype(bool)].to_memory()
+
+        ## Save dummy-encoded overlapping intervals, use later as mask
+        genes_to_peaks_binary_mask_path = os.path.join(atac_datapath, f'genes_to_peaks_binary_mask_{rna.n_vars}_by_{atac.n_vars}.npz')
+
+        if not os.path.exists(genes_to_peaks_binary_mask_path):
+            print(f'peaks to genes mask not found, saving to {os.path.splitext(genes_to_peaks_binary_mask_path)[-1]}')
+            genes_to_peaks_binary_mask, genes_peaks_dict = get_genes_by_peaks(rna, atac, genes_to_peaks_binary_mask_path, window_size=250000, feature_selection_method=None)
+            #genes_to_peaks_binary_mask = pd.DataFrame(genes_to_peaks_binary_mask.toarray(), index=genes_peaks_dict['genes'], columns=genes_peaks_dict['peaks'])
+            
+        else:
+            print(f'peaks to genes mask found, loading {os.path.splitext(genes_to_peaks_binary_mask_path)[-1]}')
+            genes_to_peaks_binary_mask = load_npz(genes_to_peaks_binary_mask_path)
+            pkl_path = os.path.splitext(genes_to_peaks_binary_mask_path)[0] + '.pkl'
+            with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
+            #genes_to_peaks_binary_mask = pd.DataFrame(genes_to_peaks_binary_mask.toarray(), index=genes_peaks_dict['genes'], columns=genes_peaks_dict['peaks'])
+
+
+    n_peaks, n_genes = atac.n_vars, rna.n_vars
+    print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
+
+    if return_type == 'loaders':
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
+        return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
+    
+    elif return_type == 'data':
+        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
+
+        
+        
 
 def pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='pbmc_multiome'):
 
-    datapath = os.path.join(os.environ['DATAPATH'], '10x_pbmc')
+    datapath = os.path.join(os.environ['DATAPATH'], 'pbmc_multiome')
 
     if args.genes_by_peaks_str is not None:
 

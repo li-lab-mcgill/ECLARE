@@ -14,7 +14,7 @@ source /home/dmannk/projects/def-liyue/dmannk/tmp/envs/torch_env_py39/bin/activa
 cd /home/dmannk/projects/def-liyue/dmannk/CLARE
 
 ## Define all paired datasets
-datasets=("roussos" "AD_Anderson_et_al" "human_dlpfc" "PD_Adams_et_al")  # exclude SEA-AD
+datasets=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" "multiome_mouse_brain" "pbmc_multiome")  # exclude SEA-AD
 
 ## Outer loop: iterate over datasets as the target_dataset
 for target_dataset in "${datasets[@]}"; do
