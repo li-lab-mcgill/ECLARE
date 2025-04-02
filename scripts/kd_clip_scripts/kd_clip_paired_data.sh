@@ -21,19 +21,23 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
+## Reverse the order of datasets to have pbmc_multiome and mouse_brain_multiome first
+datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$i]}"; done))
+
 ## Define number of parallel tasks to run (replace with desired number of cores)
 N_CORES=3
+N_REPLICATES=1
 
 ## Define random state
 RANDOM=42
 random_states=()
-for i in $(seq 0 $((N_CORES - 1))); do
+for i in $(seq 0 $((N_REPLICATES - 1))); do
     random_states+=($RANDOM)
 done
  
 ## Define total number of epochs
-clip_job_id='30165724'
-total_epochs=2
+clip_job_id='02090548'
+total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)
@@ -89,8 +93,9 @@ run_eclare_task_on_gpu() {
     --clip_job_id=$clip_job_id \
     --source_dataset=$source_dataset \
     --target_dataset=$target_dataset \
-    --genes_by_peaks_str=$genes_by_peaks_str_mdd \
+    --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
+    --batch_size=500 \
     --feature="$feature" \
     --distil_lambda=0.1 &
     #--tune_hyperparameters \
@@ -149,12 +154,14 @@ client.create_run(experiment_id, run_name=run_name)
 "
 
 ## Outer loop: iterate over datasets as the target_dataset
+target_datasets_idx=0
 for target_dataset in "${datasets[@]}"; do
 
     ## Extract the value of `genes_by_peaks_str` for the current target
-    genes_by_peaks_str_mdd=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "mdd")
-    
+    genes_by_peaks_str=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "PFC_Zhu")
+
     ## Middle loop: iterate over datasets as the source_dataset
+    source_datasets_idx=0
     for source_dataset in "${datasets[@]}"; do
 
         # Skip the case where source and target datasets are the same
@@ -167,7 +174,7 @@ for target_dataset in "${datasets[@]}"; do
             fi
 
             ## Inner loop: iterate over task indices
-            for task_idx in $(seq 0 $((N_CORES-1))); do
+            for task_idx in $(seq 0 $((N_REPLICATES-1))); do
 
                 random_state=${random_states[$task_idx]}
                 feature="${source_dataset}-to-${target_dataset}-${task_idx}"
@@ -176,15 +183,20 @@ for target_dataset in "${datasets[@]}"; do
                 mkdir -p $TMPDIR/$target_dataset/$source_dataset/$task_idx
                 
                 # Assign task to an idle GPU
-                gpu_id=${idle_gpus[$((task_idx % ${#idle_gpus[@]}))]}
-                run_eclare_task_on_gpu $clip_job_id $gpu_id $source_dataset $target_dataset $task_idx $random_state $genes_by_peaks_str_mdd $feature
+                gpu_id=${idle_gpus[$((source_datasets_idx % ${#idle_gpus[@]}))]}
+
+                # Run ECLARE task on idle GPU
+                run_eclare_task_on_gpu $clip_job_id $gpu_id $source_dataset $target_dataset $task_idx $random_state $genes_by_peaks_str $feature
             done
 
-            # Wait for all tasks for this source dataset to complete before moving to the next one
-            wait
-
         fi
+        source_datasets_idx=$((source_datasets_idx + 1))
     done
+
+    # Wait for all tasks for this cloop to complete before moving to the next one
+    wait
+
+    target_datasets_idx=$((target_datasets_idx + 1))
 done
 
 

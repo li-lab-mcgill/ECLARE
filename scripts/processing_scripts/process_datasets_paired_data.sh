@@ -14,18 +14,18 @@ conda activate eclare_env
 cd $ECLARE_ROOT
 
 ## Define all paired datasets
-target_datasets=("mouse_brain_multiome" "pbmc_multiome")  # exclude SEA-AD
-source_datasets=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" "mouse_brain_multiome" "pbmc_multiome")  # exclude SEA-AD
+datasets=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" "mouse_brain_multiome" "pbmc_multiome")  # exclude SEA-AD
 
 ## Outer loop: iterate over datasets as the target_dataset
-for target_dataset in "${target_datasets[@]}"; do
+for target_dataset in "${datasets[@]}"; do
     echo "=== Target dataset: $target_dataset ==="
     
     ## Inner loop: iterate over datasets as the source_dataset
-    for source_dataset in "${source_datasets[@]}"; do
+    for source_dataset in "${datasets[@]}"; do
 
         # Skip the case where source and target datasets are the same
         if [ "$source_dataset" != "$target_dataset" ]; then
+        
             feature="Align nuclei from $source_dataset data to $target_dataset data."
             echo -e "\n\n ~~ $feature ~~ \n\n"
             
