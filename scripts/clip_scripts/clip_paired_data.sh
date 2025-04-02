@@ -22,17 +22,18 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
-N_CORES=3 # one core for each target dataset
+#N_CORES=6 # only relevant for multi-replicate tasks
+N_REPLICATES=1
 
 ## Define random state
 RANDOM=42
 random_states=()
-for i in $(seq 0 $((N_CORES - 1))); do
+for i in $(seq 0 $((N_REPLICATES - 1))); do
     random_states+=($RANDOM)
 done
  
 ## Define total number of epochs
-total_epochs=2
+total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)
@@ -132,9 +133,11 @@ extract_genes_by_peaks_str() {
 ## Train CLIP from source datasets
 
 ## Outer loop: iterate over datasets as the target_dataset
+target_datasets_idx=0
 for target_dataset in "${datasets[@]}"; do
-
+    
     ## Middle loop: iterate over datasets as the source_dataset
+    source_dataset_idx=0
     for source_dataset in "${datasets[@]}"; do
  
         # Skip the case where source and target datasets are the same
@@ -149,7 +152,7 @@ for target_dataset in "${datasets[@]}"; do
             fi
 
             ## Inner loop: iterate over task replicates (one per GPU)
-            for task_idx in $(seq 0 $((N_CORES-1))); do
+            for task_idx in $(seq 0 $((N_REPLICATES-1))); do
 
                 random_state=${random_states[$task_idx]}
                 feature="${source_dataset}-to-${target_dataset}-${task_idx}"
@@ -158,14 +161,19 @@ for target_dataset in "${datasets[@]}"; do
                 mkdir -p $TMPDIR/$target_dataset/$source_dataset/$task_idx
                 
                 # Assign task to an idle GPU
-                gpu_id=${idle_gpus[$((task_idx % ${#idle_gpus[@]}))]}
+                gpu_id=${idle_gpus[$((source_dataset_idx % ${#idle_gpus[@]}))]}
+
+                # Run CLIP task on idle GPU
                 run_clip_task_on_gpu $gpu_id $target_dataset $source_dataset $task_idx $random_state $genes_by_peaks_str $feature
             done
-            
-            # Wait for all tasks for this source-target combination to complete before moving to the next one
-            wait
+                
         fi
+        source_dataset_idx+=1
     done
+
+    wait # Wait for all tasks for this loop to complete before moving to the next one
+
+    target_datasets_idx+=1
 done
 
 cp $commands_file $TMPDIR

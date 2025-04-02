@@ -139,11 +139,11 @@ if __name__ == "__main__":
     ##Get student loaders
     args_tmp = deepcopy(args)
     args_tmp.source_dataset = args.target_dataset
-    args_tmp.target_dataset = 'MDD'
+    args_tmp.target_dataset = 'PFC_Zhu'  # could be any dataset, specified to skip processing (or do further zero-shot tasks)
 
     student_setup_func = return_setup_func_from_dataset(args.target_dataset)
     student_rna_train_loader, student_atac_train_loader, student_atac_train_num_batches, student_atac_train_n_batches_str_length, student_atac_train_total_epochs_str_length, student_rna_valid_loader, student_atac_valid_loader, student_atac_valid_num_batches, student_atac_valid_n_batches_str_length, student_atac_valid_total_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
-        student_setup_func(args_tmp, pretrain=None, return_type='loaders')
+        student_setup_func(args_tmp, return_type='loaders')
     
     ## Setup teachers
     datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders = \

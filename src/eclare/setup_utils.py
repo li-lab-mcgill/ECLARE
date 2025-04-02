@@ -1525,9 +1525,14 @@ def gene_activity_score_adata(atac, rna):
     return atac_gas, rna
 
 
-def get_genes_by_peaks_str(datasets = ["Roussos_lab", "AD_Anderson_et_al", "human_dlpfc", "PD_Adams_et_al"]):
+def get_genes_by_peaks_str(datasets = ["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", "Midbrain_Adams", "mouse_brain_multiome", "pbmc_multiome"]):
     """
     Get the genes_by_peaks_str for the given source and target datasets
+
+    import re, os
+    from glob import glob
+    from datetime import datetime
+    import pandas as pd
     """
 
     datapath = os.environ['DATAPATH']
@@ -1560,6 +1565,7 @@ def get_genes_by_peaks_str(datasets = ["Roussos_lab", "AD_Anderson_et_al", "huma
 
 
     ## rename Roussos_lab to roussos
+    '''
     genes_by_peaks_str_df['Roussos_lab'] = genes_by_peaks_str_df['roussos']
     genes_by_peaks_str_df = genes_by_peaks_str_df.drop(columns='roussos')
     genes_by_peaks_str_df = genes_by_peaks_str_df.rename(index={'Roussos_lab':'roussos'} , columns={'Roussos_lab':'roussos'})
@@ -1567,6 +1573,7 @@ def get_genes_by_peaks_str(datasets = ["Roussos_lab", "AD_Anderson_et_al", "huma
     genes_by_peaks_str_timestamp_df['Roussos_lab'] = genes_by_peaks_str_timestamp_df['roussos']
     genes_by_peaks_str_timestamp_df = genes_by_peaks_str_timestamp_df.drop(columns='roussos')
     genes_by_peaks_str_timestamp_df = genes_by_peaks_str_timestamp_df.rename(index={'Roussos_lab':'roussos'} , columns={'Roussos_lab':'roussos'})
+    '''
 
     ## save dataframes
     genes_by_peaks_str_df.to_csv(os.path.join(datapath, 'genes_by_peaks_str.csv'))
@@ -1595,7 +1602,8 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
         model_metadata = Model.load(model_uri)
 
         ## Determine the dataset
-        dataset = model_metadata.metadata['source_dataset']; genes_by_peaks_str = model_metadata.metadata['genes_by_peaks_str']
+        dataset = model_metadata.metadata['source_dataset']
+        genes_by_peaks_str = model_metadata.metadata['genes_by_peaks_str']
         target_setup_func = return_setup_func_from_dataset(args.target_dataset)
 
         print(dataset)
@@ -1612,7 +1620,7 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
         
         overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
         target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
-            target_setup_func(args_tmp, pretrain=None, return_type='loaders')
+            target_setup_func(args_tmp, return_type='loaders')
         
         #if args.train_encoders:
         #    model.train()
@@ -1844,16 +1852,27 @@ def pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=False, p
 
     if args.genes_by_peaks_str is not None:
 
-        RNA_file = f"rna_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
-        ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
+        if args.source_dataset == dataset:
+            RNA_file = f"rna_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
+            ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
+            binary_mask_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.npz"
+            genes_peaks_dict_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.pkl"
 
-        atac = anndata.read_h5ad( os.path.join(datapath, ATAC_file))
-        rna  = anndata.read_h5ad( os.path.join(datapath, RNA_file) )
-        
-        genes_to_peaks_binary_mask_path = os.path.join(datapath, f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.npz")
-        genes_to_peaks_binary_mask = load_npz(genes_to_peaks_binary_mask_path)
-        pkl_path = os.path.splitext(genes_to_peaks_binary_mask_path)[0] + '.pkl'
-        with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
+            genes_to_peaks_binary_mask_path = os.path.join(datapath, binary_mask_file)
+            genes_to_peaks_binary_mask = load_npz(genes_to_peaks_binary_mask_path)
+            pkl_path = os.path.join(datapath, genes_peaks_dict_file)
+            with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
+
+        elif args.target_dataset == dataset:
+            RNA_file = f"rna_{args.genes_by_peaks_str}_aligned_source_{args.source_dataset}.h5ad"
+            ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_source_{args.source_dataset}.h5ad"
+            binary_mask_file = genes_peaks_dict_file = genes_to_peaks_binary_mask = genes_peaks_dict = None
+
+        atac_fullpath = os.path.join(datapath, ATAC_file)
+        rna_fullpath = os.path.join(datapath, RNA_file)
+
+        atac = anndata.read_h5ad(atac_fullpath)
+        rna  = anndata.read_h5ad(rna_fullpath)
 
     elif args.genes_by_peaks_str is None:
 
