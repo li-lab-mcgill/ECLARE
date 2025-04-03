@@ -39,6 +39,8 @@ def run_CLIP(
     rna_valid_loader,
     atac_train_loader,
     atac_valid_loader,
+    target_rna_valid_loader,
+    target_atac_valid_loader,
     trial: Trial = None,
     params: dict = {},
     ):
@@ -61,6 +63,10 @@ def run_CLIP(
         metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
         mlflow.log_metrics(metrics, step=0)
 
+        ## get target metrics
+        target_metrics = get_metrics(model, target_rna_valid_loader, target_atac_valid_loader, device)
+        mlflow.log_metrics(target_metrics, step=0)
+
     ## Train model
 
     for epoch in (epochs_pbar := tqdm(range(args.total_epochs))):
@@ -79,6 +85,10 @@ def run_CLIP(
         metrics = get_metrics(model, rna_valid_loader, atac_valid_loader, device)
         metrics.update({f'train_{k}': v for k, v in train_losses.items() if ~np.isnan(v)})
         metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
+
+        target_metrics = get_metrics(model, target_rna_valid_loader, target_atac_valid_loader, device)
+        metrics.update({f'target_{k}': v for k, v in target_metrics.items() if ~np.isnan(v)})
+        
         mlflow.log_metrics(metrics, step=epoch+1)
 
         ## get metric to optimize

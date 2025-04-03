@@ -116,11 +116,11 @@ if __name__ == "__main__":
         source_setup_func(args, return_type='loaders', dataset=args.source_dataset)
     
     ## TARGET dataset setup function
-    #target_setup_func = return_setup_func_from_dataset(args.target_dataset)
+    target_setup_func = return_setup_func_from_dataset(args.target_dataset)
 
     ## missing overlapping_subjects argument if target is MDD (False by default)
-    #_, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
-    #    target_setup_func(args, return_type='loaders', dataset=args.target_dataset)
+    _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
+        target_setup_func(args, return_type='loaders', dataset=args.target_dataset)
     
     run_args = {
         'args': args,
@@ -128,6 +128,8 @@ if __name__ == "__main__":
         'rna_valid_loader': rna_valid_loader,
         'atac_train_loader': atac_train_loader,
         'atac_valid_loader': atac_valid_loader,
+        'target_rna_valid_loader': target_rna_valid_loader,
+        'target_atac_valid_loader': target_atac_valid_loader,
     }
 
     ## get or create mlflow experiment

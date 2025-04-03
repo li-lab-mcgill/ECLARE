@@ -21,6 +21,9 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
+## Reverse the order of datasets to have pbmc_multiome and mouse_brain_multiome first
+datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$i]}"; done))
+
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6 # only relevant for multi-replicate tasks
 N_REPLICATES=1
@@ -86,6 +89,7 @@ run_clip_task_on_gpu() {
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
+    --batch_size=500 \
     --feature="${feature}" \
     --metric_to_optimize="1-foscttm" &
     #--tune_hyperparameters \
