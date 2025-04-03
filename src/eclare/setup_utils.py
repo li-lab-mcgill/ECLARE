@@ -32,7 +32,7 @@ from eclare.data_utils import create_loaders
 
 def return_setup_func_from_dataset(dataset_name):
 
-    if dataset_name == 'mdd':
+    if dataset_name == 'MDD':
         setup_func = mdd_setup
 
     elif (dataset_name == 'PFC_Zhu') or (dataset_name == 'roussos'):
