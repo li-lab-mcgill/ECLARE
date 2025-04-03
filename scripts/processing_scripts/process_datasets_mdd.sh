@@ -14,15 +14,19 @@ source /home/dmannk/projects/def-liyue/dmannk/tmp/envs/torch_env_py39/bin/activa
 cd /home/dmannk/projects/def-liyue/dmannk/CLARE
 
 ## Align to MDD
-target_dataset='mdd'
+target_dataset='MDD'
 echo "=== Target dataset: $target_dataset ==="
+
+## Define paired datasets to align to MDD
+datasets=("mouse_brain_multiome" "pbmc_multiome")  # exclude SEA-AD
 
 for source_dataset in "${datasets[@]}"; do
 
     feature="Align nuclei from $source_dataset data to $target_dataset data."
     echo "~~ $feature ~~"
     
-    srun python process_datasets.py \
+    #srun python process_datasets.py \
+    python process_datasets.py \
     --feature="$feature" \
     --source_dataset="$source_dataset" \
     --target_dataset="$target_dataset"

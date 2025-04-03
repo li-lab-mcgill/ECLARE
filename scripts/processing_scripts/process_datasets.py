@@ -41,7 +41,7 @@ if __name__ == "__main__":
         = target_setup_func(args, return_type='data')
     
     ## delete atac.raw if it exists
-    if (args.target_dataset=='mdd') and ('raw' in target_atac.uns.keys()):
+    if (args.target_dataset=='MDD') and ('raw' in target_atac.uns.keys()):
         del target_atac.raw
 
     ## Overwrite paths where data is saved
