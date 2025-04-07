@@ -126,12 +126,26 @@ if __name__ == "__main__":
     print('Extracting data')
 
     target_dataset_og = args.target_dataset
-    replicate_idx = str(args.replicate_idx)
+    replicate_idx = str(args.replicate_idx)    
 
-    if args.source_dataset is not None:
+    ## get model uri paths based on experiment type
+
+    # kd-clip
+    if (args.source_dataset is not None) and (args.target_dataset != 'MDD'):
         model_uri_paths_str = f'clip_*{args.clip_job_id}/{args.target_dataset}/{args.source_dataset}/{replicate_idx}/model_uri.txt'
-    else:
+
+    # eclare
+    elif (args.source_dataset is None) and (args.target_dataset != 'MDD'):
         model_uri_paths_str = f'clip_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'
+
+    # kd-clip mdd
+    elif (args.source_dataset is not None) and (args.target_dataset == 'MDD'):
+        model_uri_paths_str = f'clip_mdd_*{args.clip_job_id}/{args.target_dataset}/{args.source_dataset}/{replicate_idx}/model_uri.txt'
+
+    # eclare mdd
+    elif (args.source_dataset is None) and (args.target_dataset == 'MDD'):
+        model_uri_paths_str = f'clip_mdd_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'
+
 
     model_uri_paths = glob(os.path.join(outpath, model_uri_paths_str))
     assert len(model_uri_paths) > 0, f'Model URI path not found @ {model_uri_paths_str}'
@@ -139,7 +153,7 @@ if __name__ == "__main__":
     ##Get student loaders
     args_tmp = deepcopy(args)
     args_tmp.source_dataset = args.target_dataset
-    args_tmp.target_dataset = 'PFC_Zhu'  # could be any dataset, specified to skip processing (or do further zero-shot tasks)
+    args_tmp.target_dataset = 'MDD'  # could be any dataset, specified to skip processing (or do further zero-shot tasks)
 
     student_setup_func = return_setup_func_from_dataset(args.target_dataset)
     student_rna_train_loader, student_atac_train_loader, student_atac_train_num_batches, student_atac_train_n_batches_str_length, student_atac_train_total_epochs_str_length, student_rna_valid_loader, student_atac_valid_loader, student_atac_valid_num_batches, student_atac_valid_n_batches_str_length, student_atac_valid_total_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
@@ -211,11 +225,13 @@ if __name__ == "__main__":
             student_rna_cells = student_rna_dat.X.float().to(device)
             student_rna_latents, _ = student_model(student_rna_cells, modality=0)
             student_rna_celltypes = student_rna_dat.obs['cell_type'].to_list()
+            student_rna_batches = student_rna_dat.obs['batch'].to_list()
 
             ## Project student ATAC data (target)
             student_atac_cells = student_atac_dat.X.float().to(device)
             student_atac_latents, _ = student_model(student_atac_cells, modality=1)
             student_atac_celltypes = student_atac_dat.obs['cell_type'].to_list()
+            student_atac_batches = student_atac_dat.obs['batch'].to_list()
 
             ## Initialize list of dataset distil losses
             distil_losses, distil_losses_T = [], []
@@ -379,7 +395,7 @@ if __name__ == "__main__":
             )
 
             ## get metrics
-            metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device)
+            metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device, paired=paired)
             metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
 
             # Log all metrics at once with MLflow
@@ -422,7 +438,7 @@ if __name__ == "__main__":
                 )
 
             # Add performance metrics from get_metrics
-            metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device)
+            metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device, paired=paired)
             metrics.update({f'train_{k}': v for k, v in train_losses.items() if ~np.isnan(v)})
             metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
             
@@ -452,7 +468,11 @@ if __name__ == "__main__":
     }
 
     ## get or create mlflow experiment
-    experiment = get_or_create_experiment(f'clip_{args.clip_job_id}')
+    if args.target_dataset == 'MDD':
+        experiment = get_or_create_experiment(f'clip_mdd_{args.clip_job_id}')
+    else:
+        experiment = get_or_create_experiment(f'clip_{args.clip_job_id}')
+
     experiment_name = experiment.name
     experiment_id = experiment.experiment_id
     mlflow.set_experiment(experiment_name)

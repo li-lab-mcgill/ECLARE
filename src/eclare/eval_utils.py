@@ -16,16 +16,58 @@ from jax.lax import top_k as lax_top_k
 from functools import partial
 
 from eclare.losses_and_distances_utils import clip_loss, clip_loss_split_by_ct
-from eclare.data_utils import fetch_data_from_loaders
+from eclare.data_utils import fetch_data_from_loader_light
 from eclare.losses_and_distances_utils import cosine_distance
 
+def get_metrics(model, rna_valid_loader, atac_valid_loader, device, paired=True):
 
-def align_metrics_light(latents, labels, k=20):
+    ## get data & latents
+    rna_cells, rna_labels, rna_batches = fetch_data_from_loader_light(rna_valid_loader)
+    atac_cells, atac_labels, atac_batches = fetch_data_from_loader_light(atac_valid_loader)
+    rna_latents, _ = model(rna_cells.to(device=device), modality=0)
+    atac_latents, _ = model(atac_cells.to(device=device), modality=1)
 
+    ## concatenate latents
+    rna_atac_latents    = torch.cat((rna_latents, atac_latents), dim=0)
+    rna_atac_labels     = np.hstack([rna_labels, atac_labels])
+    rna_atac_batches    = np.hstack([rna_batches, atac_batches])
+    rna_atac_modalities = np.hstack([ np.repeat('rna', len(rna_latents)) , np.repeat('atac', len(atac_latents)) ])
+
+    ## get unpaired metrics
+    metrics = unpaired_metrics(rna_atac_latents, rna_atac_labels, rna_atac_batches, rna_atac_modalities)
+
+    ## get paired metrics (if appropriate)
+    if paired:
+        foscttm_score = foscttm_moscot(rna_latents.detach().cpu().numpy(), atac_latents.detach().cpu().numpy()).mean().item()
+        one_minus_foscttm_score = 1 - foscttm_score # the higher the better
+        metrics['1-foscttm'] = one_minus_foscttm_score
+
+    return metrics
+
+def unpaired_metrics(latents, labels, modalities, batches, k=20):
+
+    ## get neighbors object & initialize metrics dict
     neighbors = jax_approx_min_k(latents.detach().cpu(), k)
-    nmi_ari_dict = nmi_ari_cluster_labels_leiden(neighbors, labels, optimize_resolution=True)
+    unpaired_metrics = {}
 
-    return nmi_ari_dict['nmi'], nmi_ari_dict['ari']
+    ## bioconservation
+    nmi_ari_dict = nmi_ari_cluster_labels_leiden(neighbors, labels, optimize_resolution=True)
+    silhouette_celltype = silhouette_label(latents.detach().cpu().numpy(), labels, rescale=True)
+
+    ## multimodal & batch integration
+    multimodal_ilisi = ilisi_knn(neighbors, modalities, scale=True)
+    batches_ilisi = ilisi_knn(neighbors, batches, scale=True)
+
+    ## update nmi_ari_dict to include other metrics
+    unpaired_metrics.update({
+        'nmi': nmi_ari_dict['nmi'],
+        'ari': nmi_ari_dict['ari'],
+        'silhouette_celltype': silhouette_celltype,
+        'multimodal_ilisi': multimodal_ilisi,
+        'batches_ilisi': batches_ilisi
+    })
+
+    return unpaired_metrics
 
 def align_metrics(model, rna_cells, rna_celltypes, atac_cells, atac_celltypes, paired=True, is_latents=False):
             

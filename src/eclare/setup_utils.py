@@ -620,7 +620,7 @@ def merge_datasets_union(
 
     return rna, atac, original_genes_mask, original_peaks_mask
 
-def merged_dataset_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', dataset=None):
+def merged_dataset_setup(args, cell_group='Cell type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', dataset=None):
 
     dataset = dataset.replace('merged_','').replace('imputed_','')
 
@@ -655,7 +655,18 @@ def merged_dataset_setup(args, pretrain=False, cell_group='Cell type', hvg_only=
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
 
 
-def mdd_setup(args, pretrain=None, cell_groups=dict({'atac':'ClustersMapped','rna':'Broad'}), hvg_only=True, protein_coding_only=True, do_gas=False, do_pseudobulk=False, return_type='loaders', overlapping_subjects_only=False, return_raw_data=False, dataset='mdd'):
+def mdd_setup(
+        args,
+        cell_groups=dict({'atac':'ClustersMapped','rna':'Broad'}),
+        batch_groups=dict({'atac':'BrainID','rna':'OriginalSub'}),
+        hvg_only=True,
+        protein_coding_only=True,
+        do_gas=False,
+        do_pseudobulk=False,
+        return_type='loaders',
+        overlapping_subjects_only=False,
+        return_raw_data=False,
+        dataset='MDD'):
 
     rna_datapath = atac_datapath = os.path.join(os.environ['DATAPATH'], 'mdd_data')
 
@@ -895,13 +906,14 @@ def mdd_setup(args, pretrain=None, cell_groups=dict({'atac':'ClustersMapped','rn
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     if return_type == 'loaders':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, 'mdd', args.batch_size, args.total_epochs, cell_group_key=cell_group, valid_only=False)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, 'mdd', args.batch_size, args.total_epochs, cell_group_key=cell_group, valid_only=False)
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, 'MDD', args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_groups['rna'], valid_only=False)
+        atac.obs = atac.obs.rename(columns={'batch':'batch_og'}) # original batch column, different from subjects
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, 'mdd', args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_groups['atac'], valid_only=False)
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     elif return_type == 'data':
         return rna, atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
     
-def pfc_zhu_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_Zhu', \
+def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_Zhu', \
     keep_group=['Inf', 'Child', 'Adol', 'Adult']):
 
     datapath = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu')
@@ -1049,28 +1061,19 @@ def pfc_zhu_setup(args, pretrain=False, cell_group='Cell type', hvg_only=True, p
         print('Genes match:', (rna.var.index == genes_peaks_dict['genes']).all())
         print('Peaks match:', (atac.var.index == genes_peaks_dict['peaks']).all())
 
-
-        '''
-        if pretrain:
-            rna_train_loader, rna_valid_loader, _, rna_train_num_batches, rna_valid_num_batches, _, _, _, _ = create_loaders(rna, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-            atac_train_loader, atac_valid_loader, _, atac_train_num_batches, atac_valid_num_batches, _, _, _, _ = create_loaders(atac, args.dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-            return align_setup_completed, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx
-
-        elif not pretrain:
-        '''
         
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     if return_type == 'loaders':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
       
-def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Anderson'):
+def dlpfc_anderson_setup(args, cell_group='predicted.id', batch_group='Sub.batch', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Anderson'):
         
     atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Anderson', 'snMultiome')
 
@@ -1184,14 +1187,14 @@ def dlpfc_anderson_setup(args, pretrain=False, cell_group='predicted.id', hvg_on
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     if return_type == 'loaders':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
 
-def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='Midbrain_Adams'):
+def midbrain_adams_setup(args, cell_group='cell_type', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='Midbrain_Adams'):
     
     atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'Midbrain_Adams')
     celltypist_model_path = os.path.join(os.environ['DATAPATH'], 'Adult_Human_PrefrontalCortex.pkl')
@@ -1328,14 +1331,14 @@ def midbrain_adams_setup(args, pretrain=False, cell_group='cell_type', hvg_only=
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     if return_type == 'loaders':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
 
-def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Ma'):
+def dlpfc_ma_setup(args, cell_group='subclass', batch_group='samplename', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Ma'):
         
     atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Ma')
 
@@ -1462,8 +1465,8 @@ def dlpfc_ma_setup(args, pretrain=False, cell_group='subclass', hvg_only=True, p
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     if return_type == 'loaders':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
     elif return_type == 'data':
@@ -1674,7 +1677,7 @@ def spatialLIBD_setup(batch_size, total_epochs, cell_group='Cluster', hvg_only=T
 
     return sp, cell_group, datapath
 
-def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='mouse_brain_multiome', chain_file_name=None):
+def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', batch_group=None, hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='mouse_brain_multiome', chain_file_name=None):
 
     atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'mouse_brain_multiome')
     
@@ -1839,14 +1842,14 @@ def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', hvg_only=True
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     if return_type == 'loaders':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath        
 
-def pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=False, protein_coding_only=True, do_gas=False, do_peak_gene_alignment=True, return_type='loaders', return_raw_data=False, dataset='pbmc_multiome'):
+def pbmc_multiome_setup(args, cell_group='seurat_annotations', batch_group=None, hvg_only=False, protein_coding_only=True, do_gas=False, do_peak_gene_alignment=True, return_type='loaders', return_raw_data=False, dataset='pbmc_multiome'):
 
     atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'pbmc_multiome')
 
@@ -1975,8 +1978,8 @@ def pbmc_multiome_setup(args, cell_group='seurat_annotations', hvg_only=False, p
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     if return_type == 'loaders':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group)
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
 
     elif return_type == 'data':
