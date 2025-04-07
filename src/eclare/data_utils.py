@@ -9,6 +9,7 @@ import anndata
 #from anndata.experimental import AnnLoader
 from scipy.sparse import issparse
 import h5py
+from warnings import warn
 
 from eclare.custom_annloader import CustomAnnLoader as AnnLoader
 
@@ -161,8 +162,8 @@ def create_loaders(
         dataset: str,
         batch_size: int,
         total_epochs: int,
-        cell_group_key: str='major cell group',
-        batch_key: str='batch',
+        cell_group_key: str,
+        batch_key: str,
         valid_only: bool=False,
         standard: bool=False,
         stratified: bool=True):
@@ -180,7 +181,8 @@ def create_loaders(
     test_len = int(len(data) - (train_len + valid_len))
 
     ## reduce data size to keep CPU RAM memory below 62G
-    if dataset == 'mdd':
+    if dataset == 'MDD':
+        warn('Reducing MDD data size to keep CPU RAM memory below 62G')
         train_len = int(train_len * 0.5)
         valid_len = int(valid_len * 0.5)
 
@@ -190,7 +192,7 @@ def create_loaders(
 
     if standard:
 
-        if dataset in ['pbmc_multiome', 'roussos', '388_human_brains_one_subject', '388_human_brains']:
+        if dataset in ['pbmc_multiome', 'PFC_Zhu', '388_human_brains_one_subject', '388_human_brains']:
             data = DenseData(data.X.toarray(), celltypes, batches)
         else:
             data = SparseData(data.X, celltypes, batches)
@@ -225,7 +227,7 @@ def create_loaders(
     elif not standard:
 
         data.obs = data.obs.reset_index().reset_index().set_index('index')  # ensure to register indices in terms of integers, to be saved later
-        data.obs = data.obs.rename(columns={cell_group_key:'cell_type'})
+        data.obs = data.obs.rename(columns={cell_group_key:'cell_type', batch_key:'batch'})
 
         valid_data = data[valid_idx].copy()
 
@@ -233,9 +235,6 @@ def create_loaders(
             valid_sampler = StratifiedBatchSampler(celltypes[valid_idx], batch_size=batch_size, shuffle=False)
             valid_loader_indices = [(batch_indices,) for batch_indices in valid_sampler]
             valid_loader_indices = np.hstack(valid_loader_indices).squeeze()   # stack, so can sensibly use batch_size argument for AnnLoader
-
-            #weights = 1 / data.obs['cell_type'].value_counts(normalize=True).sort_index().values
-            #valid_sampler = WeightedRandomSampler(weights, len(valid_data), replacement=True)
 
             valid_loader = AnnLoader(valid_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False, indices=valid_loader_indices)
         else:
@@ -246,9 +245,6 @@ def create_loaders(
             train_sampler = StratifiedBatchSampler(celltypes[train_idx], batch_size=batch_size, shuffle=False)
             train_loader_indices = [(batch_indices,) for batch_indices in train_sampler]
             train_loader_indices = np.hstack(train_loader_indices).squeeze()   # stack, so can sensibly use batch_size argument for AnnLoader
-
-            #weights = 1 / data.obs['cell_type'].value_counts(normalize=True).sort_index().values
-            #train_sampler = WeightedRandomSampler(weights, len(train_data), replacement=True)
 
             train_loader = AnnLoader(train_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False, indices=train_loader_indices)
 
@@ -265,7 +261,7 @@ def create_loaders(
 
     return train_loader, valid_loader, valid_idx, train_num_batches, valid_num_batches, train_n_batches_str_length, valid_n_batches_str_length, train_n_epochs_str_length, valid_n_epochs_str_length
 
-def fetch_data_from_loader_light(loader, subsample=2000, label_key='cell_type'):
+def fetch_data_from_loader_light(loader, subsample=2000, label_key='cell_type', batch_key='batch'):
 
     n_cells = loader.dataset.shape[0]
     n_splits = np.ceil(n_cells / subsample).astype(int)
@@ -282,8 +278,10 @@ def fetch_data_from_loader_light(loader, subsample=2000, label_key='cell_type'):
     else:
         cells  = torch.tensor(loader.dataset.adatas[0].X[cells_idx] , dtype=torch.float32)
 
-    labels = loader.dataset.obs[label_key].values[cells_idx]
-    return cells, labels
+    labels = loader.dataset.obs[label_key].values[cells_idx].to_list()
+    batches = loader.dataset.obs[batch_key].values[cells_idx].to_list() if batch_key in loader.dataset.obs.columns else None
+
+    return cells, labels, batches
 
 def fetch_data_from_loaders(rna_loader, atac_loader, paired=True, subsample=2000, rna_cells_idx=None, atac_cells_idx=None, label_key='cell_type'):
 

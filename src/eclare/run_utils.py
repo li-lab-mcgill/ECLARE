@@ -12,26 +12,8 @@ from scipy.spatial.distance import squareform
 
 from eclare.models import CLIP, SpatialCLIP, get_clip_hparams, get_spatial_clip_hparams
 from eclare.losses_and_distances_utils import clip_loss, spatial_clip_loss, rbf_from_distance
-from eclare.eval_utils import align_metrics_light
+from eclare.eval_utils import get_metrics
 from eclare.data_utils import fetch_data_from_loader_light
-from eclare.eval_utils import foscttm_moscot
-
-def get_metrics(model, rna_valid_loader, atac_valid_loader, device):
-
-    rna_cells, rna_labels = fetch_data_from_loader_light(rna_valid_loader, label_key='cell_type')
-    atac_cells, atac_labels = fetch_data_from_loader_light(atac_valid_loader, label_key='cell_type')
-
-    rna_latents, _ = model(rna_cells.to(device=device), modality=0)
-    atac_latents, _ = model(atac_cells.to(device=device), modality=1)
-
-    rna_nmi, rna_ari = align_metrics_light(rna_latents, rna_labels)
-    atac_nmi, atac_ari = align_metrics_light(atac_latents, atac_labels)
-    nmi_ari_score = 0.25 * (rna_nmi + rna_ari + atac_nmi + atac_ari)
-    foscttm_score = foscttm_moscot(rna_latents.detach().cpu().numpy(), atac_latents.detach().cpu().numpy()).mean().item()
-    one_minus_foscttm_score = 1 - foscttm_score # the higher the better
-
-    metrics = {'nmi_ari': nmi_ari_score, '1-foscttm': one_minus_foscttm_score}
-    return metrics
 
 def run_CLIP(
     args: Namespace,
