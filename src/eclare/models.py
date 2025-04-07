@@ -41,9 +41,13 @@ class CLIP(nn.Module):
         }
     }
     
-    def __init__(self, n_peaks, n_genes, **hparams):
+    def __init__(self, n_peaks, n_genes, paired=True, **hparams):
         super().__init__()
-        
+
+        ## whether data for forward pass is paired
+        self.paired = paired
+
+        ## hyperparameters
         self.temperature    = hparams['temperature']
         self.decoder_loss   = hparams['decoder_loss']
         num_units           = hparams['num_units']
