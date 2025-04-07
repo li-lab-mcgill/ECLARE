@@ -5,11 +5,11 @@ cd $ECLARE_ROOT
  
 ## Make new sub-directory for current job ID and assign to "TMPDIR" variable
 JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
-mkdir -p ${OUTPATH}/kd_clip_mdd_${JOB_ID}
-TMPDIR=${OUTPATH}/kd_clip_mdd_${JOB_ID}
+mkdir -p ${OUTPATH}/eclare_mdd_${JOB_ID}
+TMPDIR=${OUTPATH}/eclare_mdd_${JOB_ID}
  
 ## Copy scripts to sub-directory for reproducibility
-cp ./scripts/eclare_scripts/eclare_run.py ./scripts/kd_clip_scripts/kd_clip_mdd.sh $TMPDIR
+cp ./scripts/eclare_scripts/eclare_run.py ./scripts/eclare_scripts/eclare_mdd.sh $TMPDIR
  
 ## https://docs.alliancecan.ca/wiki/PyTorch#PyTorch_with_Multiple_GPUs
 export NCCL_BLOCKING_WAIT=1  #Set this environment variable if you wish to use the NCCL backend for inter-GPU communication.
@@ -28,13 +28,13 @@ datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$
 target_dataset="MDD"
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
-N_CORES=3
+N_CORES=6
 N_REPLICATES=1
 
 ## Define random state
 RANDOM=42
 random_states=()
-for i in $(seq 0 $((N_REPLICATES - 1))); do
+for i in $(seq 0 $((N_CORES - 1))); do
     random_states+=($RANDOM)
 done
  
@@ -75,33 +75,59 @@ done
 
 echo "Idle GPUs: ${idle_gpus[@]}"
 
-# Function to run a task on a specific GPU
+# Function to check if a CPU core is idle
+is_cpu_idle() {
+    local cpu_id=$1
+    local utilization=$(mpstat -P $cpu_id 1 1 | tail -n 1 | awk '{print 100-$NF}')
+    
+    # Define threshold for idle state (less than 20% utilization)
+    local utilization_threshold=20
+
+    if (( $(echo "$utilization < $utilization_threshold" | bc -l) )); then
+        return 0 # CPU is idle
+    else
+        return 1 # CPU is not idle
+    fi
+}
+
+# Get idle CPU cores
+get_idle_cpus() {
+    local idle_cpus=()
+    local num_cpus=$(nproc)
+    
+    for ((i=0; i<num_cpus; i++)); do
+        if is_cpu_idle $i; then
+            idle_cpus+=($i)
+        fi
+    done
+    echo "${idle_cpus[@]}"
+}
+
+# Function to run a task on a specific GPU and CPU core
 run_eclare_task_on_gpu() {
     local clip_job_id=$1
     local gpu_id=$2
-    local source_dataset=$3
-    local target_dataset=$4
-    local task_idx=$5
-    local random_state=$6
-    local feature=$7
+    local target_dataset=$3
+    local task_idx=$4
+    local random_state=$5
+    local feature=$6
+    local cpu_core=$7  # New parameter for CPU core
 
-    echo "Running ${source_dataset} to ${target_dataset} (task $task_idx) on GPU $gpu_id"
+    echo "Running ${source_dataset} to ${target_dataset} (task $task_idx) on GPU $gpu_id and CPU core $cpu_core"
 
-    # for paired data, do not specify source_dataset to ensure that all datasets serve as sources
+    # Use taskset to bind the process to a specific CPU core
     CUDA_VISIBLE_DEVICES=$gpu_id \
+    taskset -c $cpu_core \
     python ${ECLARE_ROOT}/scripts/eclare_scripts/eclare_run.py \
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
     --replicate_idx=$task_idx \
     --clip_job_id=$clip_job_id \
-    --source_dataset=$source_dataset \
     --target_dataset=$target_dataset \
     --genes_by_peaks_str='17563_by_100000' \
     --total_epochs=$total_epochs \
     --batch_size=500 \
-    --feature="$feature" \
+    --feature="'$feature'" \
     --distil_lambda=0.1 &
-    #--tune_hyperparameters \
-    #--n_trials=3 &
 }
 
 ## Create experiment ID (or detect if it already exists)
@@ -113,44 +139,43 @@ print(experiment_id)
 
 from mlflow import MlflowClient
 client = MlflowClient()
-run_name = 'KD_CLIP_${clip_job_id}'
+run_name = 'ECLARE_${clip_job_id}'
 client.create_run(experiment_id, run_name=run_name)
 "
 
-## Middle loop: iterate over datasets as the source_dataset
-source_datasets_idx=0
-for source_dataset in "${datasets[@]}"; do
+## Outer loop: iterate over datasets as the target_dataset
 
-    # Skip the case where source and target datasets are the same
-    if [ "$source_dataset" != "$target_dataset" ]; then
-        
-        ## Check if extraction was successful
-        if [ $? -ne 0 ]; then
-            continue
-        fi
+## Check if extraction was successful
+if [ $? -ne 0 ]; then
+    continue
+fi
 
-        ## Inner loop: iterate over task indices
-        for task_idx in $(seq 0 $((N_REPLICATES-1))); do
+# Get idle CPU cores
+idle_cpu_cores=($(get_idle_cpus))
+if [ ${#idle_cpu_cores[@]} -eq 0 ]; then
+    echo "Warning: No idle CPU cores found. Using all available cores."
+    idle_cpu_cores=($(seq 0 $(($(nproc) - 1))))
+fi
 
-            random_state=${random_states[$task_idx]}
-            feature="${source_dataset}-to-${target_dataset}-${task_idx}"
+for task_idx in $(seq 0 $((N_REPLICATES-1))); do
+    random_state=${random_states[$task_idx]}
+    feature="${target_dataset}-${task_idx}"
 
-            ## Make new sub-sub-directory for source dataset
-            mkdir -p $TMPDIR/$target_dataset/$source_dataset/$task_idx
-            
-            # Assign task to an idle GPU
-            gpu_id=${idle_gpus[$((source_datasets_idx % ${#idle_gpus[@]}))]}
-
-            # Run ECLARE task on idle GPU
-            run_eclare_task_on_gpu $clip_job_id $gpu_id $source_dataset $target_dataset $task_idx $random_state $feature
-        done
-
-    fi
-    source_datasets_idx=$((source_datasets_idx + 1))
+    ## Make new sub-sub-directory for source dataset
+    mkdir -p $TMPDIR/$target_dataset/$task_idx
+    
+    # Assign task to an idle GPU
+    gpu_id=${idle_gpus[$((target_datasets_idx % ${#idle_gpus[@]}))]}
+    
+    # Assign an idle CPU core (cycling through idle cores)
+    cpu_core=${idle_cpu_cores[$((task_idx % ${#idle_cpu_cores[@]}))]}
+    
+    run_eclare_task_on_gpu $clip_job_id $gpu_id $target_dataset $task_idx $random_state $feature $cpu_core
 done
 
-# Wait for all tasks for this cloop to complete before moving to the next one
+# Wait for all tasks for this target dataset to complete before moving to the next one
 #wait
+
 
 
 cp $commands_file $TMPDIR
