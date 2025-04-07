@@ -134,6 +134,19 @@ extract_genes_by_peaks_str() {
     return 0
 }
 
+## Create experiment ID (or detect if it already exists)
+python -c "
+from src.eclare.run_utils import get_or_create_experiment; 
+experiment = get_or_create_experiment('clip_${JOB_ID}')
+experiment_id = experiment.experiment_id
+print(experiment_id)
+
+from mlflow import MlflowClient
+client = MlflowClient()
+run_name = 'CLIP_${JOB_ID}'
+client.create_run(experiment_id, run_name=run_name)
+"
+
 ## Train CLIP from source datasets
 
 ## Outer loop: iterate over datasets as the target_dataset
@@ -172,12 +185,12 @@ for target_dataset in "${datasets[@]}"; do
             done
                 
         fi
-        source_dataset_idx+=1
+        source_dataset_idx=$((source_dataset_idx + 1))
     done
 
     wait # Wait for all tasks for this loop to complete before moving to the next one
 
-    target_datasets_idx+=1
+    target_datasets_idx=$((target_datasets_idx + 1))
 done
 
 cp $commands_file $TMPDIR
