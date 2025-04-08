@@ -34,7 +34,7 @@ def get_metrics(model, rna_valid_loader, atac_valid_loader, device, paired=True)
     rna_atac_modalities = np.hstack([ np.repeat('rna', len(rna_latents)) , np.repeat('atac', len(atac_latents)) ])
 
     ## get unpaired metrics
-    metrics = unpaired_metrics(rna_atac_latents, rna_atac_labels, rna_atac_batches, rna_atac_modalities)
+    metrics = unpaired_metrics(rna_atac_latents, rna_atac_labels, rna_atac_modalities, rna_atac_batches)
 
     ## get paired metrics (if appropriate)
     if paired:
@@ -44,7 +44,7 @@ def get_metrics(model, rna_valid_loader, atac_valid_loader, device, paired=True)
 
     return metrics
 
-def unpaired_metrics(latents, labels, modalities, batches, k=20):
+def unpaired_metrics(latents, labels, modalities, batches, k=30):
 
     ## get neighbors object & initialize metrics dict
     neighbors = jax_approx_min_k(latents.detach().cpu(), k)
