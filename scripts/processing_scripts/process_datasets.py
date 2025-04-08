@@ -35,7 +35,7 @@ if __name__ == "__main__":
     print('Extracting data')
 
     source_rna, source_atac, source_cell_group, _, _, source_atac_datapath, source_rna_datapath \
-        = source_setup_func(args, hvg_only=True, protein_coding_only=True, return_type='data')
+        = source_setup_func(args, return_type='data')
 
     target_rna, target_atac, target_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, target_atac_datapath, target_rna_datapath \
         = target_setup_func(args, return_type='data')

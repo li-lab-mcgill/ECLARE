@@ -85,11 +85,11 @@ run_clip_task_on_gpu() {
     CUDA_VISIBLE_DEVICES=$gpu_id \
     python ${ECLARE_ROOT}/scripts/clip_scripts/clip_run.py \
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
-    --source_dataset=$source_dataset \
     --target_dataset=$target_dataset \
+    --source_dataset=$source_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --batch_size=500 \
+    --batch_size=800 \
     --feature="${feature}" \
     --metric_to_optimize="1-foscttm" &
     #--tune_hyperparameters \

@@ -26,7 +26,7 @@ for source_dataset in "${datasets[@]}"; do
     echo "~~ $feature ~~"
     
     #srun python process_datasets.py \
-    python process_datasets.py \
+    python ${ECLARE_ROOT}/scripts/processing_scripts/process_datasets.py \
     --feature="$feature" \
     --source_dataset="$source_dataset" \
     --target_dataset="$target_dataset"
