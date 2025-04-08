@@ -149,7 +149,7 @@ def clip_loss_split_by_ct(atac_latents, rna_latents, atac_celltypes, rna_celltyp
 
 class Knowledge_distillation_fn(torch.nn.Module):
 
-    def __init__(self, device='cpu', paired=True, student_temperature=1, target_temperature=1, weigh_distil_by_align_type='none'):
+    def __init__(self, device='cpu', paired=True, student_temperature=1, teacher_temperature=1, weigh_distil_by_align_type='none'):
         super(Knowledge_distillation_fn, self).__init__()
         self.device = device
         self.paired = paired
@@ -158,7 +158,7 @@ class Knowledge_distillation_fn(torch.nn.Module):
 
         ## lower temperature = lower entropy, and vice versa
         self.student_temperature = torch.tensor(student_temperature, requires_grad=False).to(device)
-        self.target_temperature = torch.tensor(target_temperature, requires_grad=False).to(device)
+        self.teacher_temperature = torch.tensor(teacher_temperature, requires_grad=False).to(device)
 
         self.all_teacher_ot_plans = []
         self.all_teacher_ot_values = []
@@ -209,7 +209,7 @@ class Knowledge_distillation_fn(torch.nn.Module):
 
         # teacher loss
         else:
-            teacher_cost = 1 - (teacher_logits / torch.exp(1/self.target_temperature))
+            teacher_cost = 1 - (teacher_logits / torch.exp(1/self.teacher_temperature))
 
             ot_res = ot_solve(teacher_cost)
             plan = ot_res.plan
@@ -239,7 +239,7 @@ class Knowledge_distillation_fn(torch.nn.Module):
 
         ## get logits
         student_logits = torch.matmul(student_atac_latents, student_rna_latents.T) * torch.exp(1/self.student_temperature)
-        target_logits = torch.matmul(target_atac_latents, target_rna_latents.T) * torch.exp(1/self.target_temperature)
+        target_logits = torch.matmul(target_atac_latents, target_rna_latents.T) * torch.exp(1/self.teacher_temperature)
 
         ## get distillation loss
         distil_loss, distil_loss_T = self.kl_forward(student_logits, target_logits)

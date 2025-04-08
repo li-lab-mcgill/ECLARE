@@ -1566,18 +1566,6 @@ def get_genes_by_peaks_str(datasets = ["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", 
             timestamp = os.path.getmtime(genes_by_peaks_str_path)
             genes_by_peaks_str_timestamp_df.loc[source, target] = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
 
-
-    ## rename Roussos_lab to roussos
-    '''
-    genes_by_peaks_str_df['Roussos_lab'] = genes_by_peaks_str_df['roussos']
-    genes_by_peaks_str_df = genes_by_peaks_str_df.drop(columns='roussos')
-    genes_by_peaks_str_df = genes_by_peaks_str_df.rename(index={'Roussos_lab':'roussos'} , columns={'Roussos_lab':'roussos'})
-
-    genes_by_peaks_str_timestamp_df['Roussos_lab'] = genes_by_peaks_str_timestamp_df['roussos']
-    genes_by_peaks_str_timestamp_df = genes_by_peaks_str_timestamp_df.drop(columns='roussos')
-    genes_by_peaks_str_timestamp_df = genes_by_peaks_str_timestamp_df.rename(index={'Roussos_lab':'roussos'} , columns={'Roussos_lab':'roussos'})
-    '''
-
     ## save dataframes
     genes_by_peaks_str_df.to_csv(os.path.join(datapath, 'genes_by_peaks_str.csv'))
     genes_by_peaks_str_timestamp_df.to_csv(os.path.join(datapath, 'genes_by_peaks_str_timestamp.csv'))
@@ -1905,7 +1893,7 @@ def pbmc_multiome_setup(args, cell_group='seurat_annotations', batch_group=None,
         #sc.pp.log1p(rna)
         rna = sc.pp.scale(rna, zero_center=False, max_value=10, copy=True) # min-max scaling, max_value not working if copy=False
 
-        ## Subset to variable features
+        ## Subset to variable features. For this dataset, very restrictive HVG selection
         if hvg_only:
             atac = atac[:, atac.var['vst.variable'].astype(bool)].to_memory()
             rna = rna[:, rna.var['vst.variable'].astype(bool)].to_memory()

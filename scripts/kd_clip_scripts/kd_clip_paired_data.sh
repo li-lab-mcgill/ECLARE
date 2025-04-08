@@ -36,7 +36,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='02202535'
+clip_job_id='07163057'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
@@ -158,7 +158,7 @@ target_datasets_idx=0
 for target_dataset in "${datasets[@]}"; do
 
     ## Extract the value of `genes_by_peaks_str` for the current target
-    genes_by_peaks_str=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "PFC_Zhu")
+    genes_by_peaks_str=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "MDD")
 
     ## Middle loop: iterate over datasets as the source_dataset
     source_datasets_idx=0

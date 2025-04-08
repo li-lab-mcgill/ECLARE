@@ -157,7 +157,7 @@ target_datasets_idx=0
 for target_dataset in "${datasets[@]}"; do
 
     ## Extract the value of `genes_by_peaks_str` for the current source and target
-    genes_by_peaks_str=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "PFC_Zhu")
+    genes_by_peaks_str=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "MDD")
     
     ## Check if extraction was successful
     if [ $? -ne 0 ]; then
