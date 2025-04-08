@@ -231,7 +231,7 @@ class Knowledge_distillation_fn(torch.nn.Module):
 
     def forward(self, student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, teacher_or_student, dataset_embedding=None):
 
-        ## already normalized during clip loss, but need to normalize before to be consistent with Concerto
+        ## normalize latents
         target_rna_latents = torch.nn.functional.normalize(target_rna_latents, p=2, dim=1)
         target_atac_latents = torch.nn.functional.normalize(target_atac_latents, p=2, dim=1)
         student_rna_latents = torch.nn.functional.normalize(student_rna_latents, p=2, dim=1)
