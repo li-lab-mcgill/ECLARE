@@ -99,10 +99,20 @@ run_eclare_task_on_gpu() {
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="$feature" \
-    --distil_lambda=0.1 &
-    #--tune_hyperparameters \
-    #--n_trials=3 &
+    --distil_lambda=0.1 &  # Add & to run in background
+
+    # Increment job counter
+    ((current_jobs++))
+    
+    # If we've reached N_CORES jobs, wait for one to finish
+    if [ $current_jobs -ge $N_CORES ]; then
+        wait -n  # Wait for any background job to finish
+        ((current_jobs--))
+    fi
 }
+
+# Initialize job counter
+current_jobs=0
 
 ## Create experiment ID (or detect if it already exists)
 python -c "
@@ -149,9 +159,8 @@ for source_dataset in "${datasets[@]}"; do
     source_datasets_idx=$((source_datasets_idx + 1))
 done
 
-# Wait for all tasks for this cloop to complete before moving to the next one
-#wait
-
+# Wait for any remaining jobs to finish
+wait
 
 cp $commands_file $TMPDIR
 
