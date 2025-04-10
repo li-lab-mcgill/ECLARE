@@ -29,6 +29,7 @@ def run_CLIP(
 
     ## setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    paired_target = (args.target_dataset != 'MDD')
     n_genes = rna_train_loader.dataset.shape[1]
     n_peaks = atac_train_loader.dataset.shape[1]
 
@@ -46,7 +47,7 @@ def run_CLIP(
         metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
 
         ## target performance metrics
-        target_metrics = get_metrics(model, target_rna_valid_loader, target_atac_valid_loader, device)
+        target_metrics = get_metrics(model, target_rna_valid_loader, target_atac_valid_loader, device, paired = paired_target)
         metrics.update({f'target_{k}': v for k, v in target_metrics.items() if ~np.isnan(v)})
 
         ## log metrics
@@ -74,7 +75,7 @@ def run_CLIP(
         metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
 
         ## target performance metrics
-        target_metrics = get_metrics(model, target_rna_valid_loader, target_atac_valid_loader, device)
+        target_metrics = get_metrics(model, target_rna_valid_loader, target_atac_valid_loader, device, paired = paired_target)
         metrics.update({f'target_{k}': v for k, v in target_metrics.items() if ~np.isnan(v)})
         
         ## log metrics

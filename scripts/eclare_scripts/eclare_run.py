@@ -198,7 +198,7 @@ if __name__ == "__main__":
         exp_type_run = exp_type_runs[0]  # Take the first (is the most recent?)
 
     # 2. Get or create data run with more specific filtering
-    data_run_and_replicate_name = f'{args.source_dataset}_to_{args.target_dataset}-{args.replicate_idx}' if args.source_dataset is not None else f'{args.target_dataset}-{args.replicate_idx}'
+    data_run_and_replicate_name = f'{args.source_dataset}-to-{args.target_dataset}-{args.replicate_idx}' if args.source_dataset is not None else f'{args.target_dataset}-{args.replicate_idx}'
     data_run_filter = (
         f"tags.mlflow.runName = '{data_run_and_replicate_name}' and "
         f"tags.mlflow.parentRunId = '{exp_type_run.info.run_id}'"
@@ -223,6 +223,8 @@ if __name__ == "__main__":
     with mlflow.start_run(run_id=exp_type_run.info.run_id):
         with mlflow.start_run(run_id=data_run.info.run_id, nested=True):
             print(f"Running {data_run_and_replicate_name}")
+
+            mlflow.set_tag("outdir", args.outdir)
 
             hyperparameters = get_clip_hparams()
             default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}

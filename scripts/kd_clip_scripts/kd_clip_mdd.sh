@@ -39,8 +39,8 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='03223110'
-total_epochs=3
+clip_job_id='09102101'
+total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)
@@ -99,7 +99,7 @@ run_eclare_task_on_gpu() {
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="$feature" \
-    --distil_lambda=0.1 #&
+    --distil_lambda=0.1 &
     #--tune_hyperparameters \
     #--n_trials=3 &
 }

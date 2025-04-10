@@ -81,6 +81,7 @@ class CLIP(nn.Module):
     
         if modality == 0:
             latent = self.rna_to_core(x)
+            latent = torch.nn.functional.normalize(latent, p=2.0, dim=1)
 
             if hasattr(self, 'core_to_rna'):
                 recon = self.core_to_rna(latent)
@@ -90,7 +91,7 @@ class CLIP(nn.Module):
         
         elif modality == 1:
             latent = self.atac_to_core(x)
-
+            latent = torch.nn.functional.normalize(latent, p=2.0, dim=1)
             if hasattr(self, 'core_to_atac'):
                 recon = self.core_to_atac(latent)
                 return latent, recon

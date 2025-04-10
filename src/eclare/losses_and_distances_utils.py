@@ -58,8 +58,6 @@ def rbf_from_distance(distances, gamma=1, off_diag=False):
 def clip_loss(logits, atac_celltypes=None, rna_celltypes=None, atac_latents=None, rna_latents=None, temperature=1, do_ct=False, censor_same_celltype=False, return_logits=False, reduce=True):
     
     if (atac_latents is not None) and (rna_latents is not None) and (logits is None):
-        atac_latents = torch.nn.functional.normalize(atac_latents, p=2, dim=1)
-        rna_latents = torch.nn.functional.normalize(rna_latents, p=2, dim=1)
         logits = torch.matmul(atac_latents, rna_latents.T) * np.exp(temperature)
 
     if return_logits:
@@ -230,12 +228,6 @@ class Knowledge_distillation_fn(torch.nn.Module):
 
 
     def forward(self, student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, teacher_or_student, dataset_embedding=None):
-
-        ## normalize latents
-        target_rna_latents = torch.nn.functional.normalize(target_rna_latents, p=2, dim=1)
-        target_atac_latents = torch.nn.functional.normalize(target_atac_latents, p=2, dim=1)
-        student_rna_latents = torch.nn.functional.normalize(student_rna_latents, p=2, dim=1)
-        student_atac_latents = torch.nn.functional.normalize(student_atac_latents, p=2, dim=1)
 
         ## get logits
         student_logits = torch.matmul(student_atac_latents, student_rna_latents.T) * torch.exp(1/self.student_temperature)

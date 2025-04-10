@@ -2,11 +2,25 @@
 import os
 import sys
 
-config_path = '../config'
-sys.path.insert(0, config_path)
+# Check if environment variables are already set
+eclare_root = os.environ.get('ECLARE_ROOT')
+outpath = os.environ.get('OUTPATH')
+datapath = os.environ.get('DATAPATH')
 
-from export_env_variables import export_env_variables
-export_env_variables(config_path)
+# Print status of environment variables
+if all([eclare_root, outpath, datapath]):
+    print(f"Environment variables already set:")
+    print(f"ECLARE_ROOT: {eclare_root}")
+    print(f"OUTPATH: {outpath}")
+    print(f"DATAPATH: {datapath}")
+else:
+    print(f"Missing environment variables")
+
+    config_path = '../config'
+    sys.path.insert(0, config_path)
+
+    from export_env_variables import export_env_variables
+    export_env_variables(config_path)
 
 #%% import libraries
 import matplotlib.pyplot as plt
@@ -508,12 +522,12 @@ cuda_available = torch.cuda.is_available()
 #%%
 ## Create dict for methods and job_ids
 methods_id_dict = {
-    'clip': '15122421',
-    'kd_clip': '16101332_17203243',
-    'scMulticlip': '16101728',
+    'clip': '08095816',
+    'kd_clip': '08160131',
+    'eclare': '08180450',
     'clip_mdd': '15155920',
     'kd_clip_mdd': '20091454',
-    'scMulticlip_mdd': '19154717', #16105437
+    'eclare_mdd': '19154717', #16105437
     'mojitoo': '20212916',
     'multiVI': '18175921',
     'glue': '18234131_19205223',
@@ -521,6 +535,269 @@ methods_id_dict = {
     'scjoint': '19115016'
 }
 
+all_metrics_csv_path = os.path.join(os.environ['OUTPATH'], 'runs.csv')
+all_metrics_df = pd.read_csv(all_metrics_csv_path)
+
+CLIP_header_idx = np.where(all_metrics_df['Name'].str.startswith('CLIP'))[0].item()
+KD_CLIP_header_idx = np.where(all_metrics_df['Name'].str.startswith('KD_CLIP'))[0].item()
+ECLARE_header_idx = np.where(all_metrics_df['Name'].str.startswith('ECLARE'))[0].item()
+
+CLIP_metrics_df = all_metrics_df.iloc[CLIP_header_idx+1:KD_CLIP_header_idx]
+KD_CLIP_metrics_df = all_metrics_df.iloc[KD_CLIP_header_idx+1:ECLARE_header_idx]
+ECLARE_metrics_df = all_metrics_df.iloc[ECLARE_header_idx+1:]
+
+# Create multi-index for CLIP metrics DataFrame
+def extract_target_source_replicate(df, has_source=True):
+    """
+    Create a multi-index DataFrame from the 'Name' column.
+    
+    Parameters:
+    -----------
+    df : DataFrame
+        DataFrame containing a 'Name' column with format 'source_to_target-...'
+        
+    Returns:
+    --------
+    DataFrame
+        DataFrame with multi-index ['source', 'target']
+    """
+    if df.empty or 'Name' not in df.columns:
+        return df
+    
+    # Extract source and target from Name column
+    sources = []
+    targets = []
+    replicates = []
+
+    # Create a copy of the DataFrame to avoid modifying the original
+    result_df = df.copy()
+
+    if has_source:
+
+        for name in df['Name']:
+            try:
+                source = name.split('_to_')[0]
+                target = name.split('_to_')[1].split('-')[0]
+                replicate = name.split('_to_')[1].split('-')[1]
+            except:
+                source = name.split('-to-')[0]
+                target = name.split('-to-')[1].split('-')[0]
+                replicate = name.split('-to-')[1].split('-')[1]
+            finally:
+                sources.append(source)
+                targets.append(target)
+                replicates.append(replicate)
+
+        result_df['source'] = sources
+
+    elif not has_source:
+
+        for name in df['Name']:
+
+            target      = name.split('-')[0]
+            replicate   = name.split('-')[1]
+
+            targets.append(target)
+            replicates.append(replicate)
+    
+    # Add source and target columns
+    result_df['target'] = targets
+    result_df['replicate'] = replicates
+    
+    # Set multi-index
+    #result_df = result_df.set_index(['source', 'target', 'replicate'])
+    
+    return result_df
+
+def metric_boxplot(df, metric, dataset_labels, target_to_color, source_to_marker, unique_targets, unique_sources, ax=None, target_source_combinations=False):
+
+    # For clip, use the target metric values
+    df.loc[df['dataset']=='clip', metric] = df.loc[df['dataset']=='clip', 'target_'+metric].copy()
+
+    # Try to convert the metric column to float, replacing errors with NaN
+    df[metric] = pd.to_numeric(df[metric], errors='coerce')
+    
+    # Drop rows with NaN values in the metric column
+    #df = df.dropna(subset=[metric])
+
+    sns.boxplot(
+        x="dataset",
+        y=metric,
+        data=df,
+        ax=ax,
+        color="lightgray",
+        showfliers=False,
+        boxprops=dict(alpha=0.4),
+        whiskerprops=dict(alpha=0.4),
+        capprops=dict(alpha=0.4),
+        medianprops=dict(alpha=0.7)
+    ).tick_params(axis='x', rotation=30)
+    ax.set_xlabel("method")
+    ax.yaxis.set_minor_locator(plt.MultipleLocator(0.05))
+
+    # Add scatter points with jitter
+    dataset_positions = df["dataset"].unique()
+    position_mapping = {dataset: i for i, dataset in enumerate(dataset_positions)}
+
+    for target in unique_targets:
+        for dataset in dataset_positions:
+            for source in unique_sources:
+
+                if pd.isna(source):
+                    subset = df[(df["target"] == target) &
+                                (df["source"].isna()) &
+                                (df["dataset"] == dataset)]
+                    x_position = position_mapping[dataset]
+                    jitter = np.random.uniform(-0.15, 0.15, size=len(subset))
+                    jittered_positions = x_position + jitter
+                    ax.scatter(
+                        x=jittered_positions,
+                        y=subset[metric],
+                        color=target_to_color[target],
+                        marker='o',
+                        edgecolor=None,
+                        s=50,
+                        zorder=10,
+                        alpha=0.4
+                    )
+
+                else:
+                    subset = df[(df["source"] == source) &
+                                (df["target"] == target) &
+                                (df["dataset"] == dataset)]
+                    x_position = position_mapping[dataset]
+                    jitter = np.random.uniform(-0.15, 0.15, size=len(subset))
+                    jittered_positions = x_position + jitter
+                    ax.scatter(
+                        x=jittered_positions,
+                        y=subset[metric],
+                        color=target_to_color[target],
+                        marker=source_to_marker[source],
+                        edgecolor=None,
+                        s=50 if source_to_marker[source] == '*' else 50,
+                        zorder=10,
+                        alpha=0.4
+                    )
+
+    return fig, ax
+
+
+def metric_boxplots(combined_metrics_df):
+
+    hue_order = list(["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", "Midbrain_Adams", "mouse_brain_multiome", "pbmc_multiome", "MDD"])
+
+    unique_sources = sorted(df["source"].unique(), key=lambda item: (math.isnan(item), item) if isinstance(item, float) else (False, item))
+    unique_targets = sorted(df["target"].unique())
+
+    colors = sns.color_palette("Dark2", 8)[:4] + [sns.color_palette("Dark2", 8)[5]] + [sns.color_palette("Dark2", 8)[-1]]
+    markers = ['*', 's', '^', 'P', 'D', 'v', '<', '>']
+
+    #target_to_color = {target: colors[i] if len(unique_targets)>1 else 'black' for i, target in enumerate(unique_targets)}
+    if len(unique_targets) > 1:
+        target_to_color = {hue_order[i]: colors[i] if len(unique_targets)>1 else 'black' for i in range(len(unique_targets))}
+    elif unique_targets[0] == 'MDD':
+        target_to_color = {unique_targets[0]: colors[6]}
+
+    if target_source_combinations:
+        source_to_marker = {source: markers[i % len(markers)] for i, source in enumerate(unique_sources)}
+    else:
+        source_to_marker = {source: 'o' for i, source in enumerate(unique_sources)}
+
+    ## loop over metrics and plot
+    unpaired_metrics = ['multimodal_ilisi', 'ari', 'batches_ilisi', 'nmi', 'silhouette_celltype']
+    paired_metrics = ['1-foscttm']
+    all_metrics = unpaired_metrics + paired_metrics
+
+    fig, axs = plt.subplots(1, len(all_metrics), figsize=(12, 6))
+
+    for metric, ax in zip(all_metrics, axs):
+        metric_boxplot(combined_metrics_df, metric, ['eclare', 'kd_clip', 'clip'], target_to_color, source_to_marker, unique_targets, unique_sources, ax=ax)
+        ax.set_title(metric)
+        ax.set_ylabel('')
+
+    # Create handles for color-coding by target
+    color_handles = [
+        plt.Line2D([0], [0], marker='D' if target_source_combinations else 'o', color=color, label=f"{target}", linestyle='None', markersize=10)
+        for target, color in target_to_color.items()
+    ]
+
+    # Create handles for marker-coding by source
+    marker_handles = [
+        plt.Line2D([0], [0], marker=marker, color='black', label=f"{source}", linestyle='None', markersize=10)
+        if not pd.isna(source) else
+        plt.Line2D([0], [0], marker='o', color='black', label=f"all sources (ensemble)", linestyle='None', markersize=10)
+        for source, marker in source_to_marker.items()
+    ]
+
+
+    # Add labels for color and marker sections
+    if ( (len(set(source_to_marker.values())) > 1) and ( len(set(target_to_color.keys())) > 1) ):
+
+        # Add a blank entry and title for marker section
+        combined_handles = (
+            [plt.Line2D([0], [0], color='none', label="Target, by color:")] +
+            color_handles +
+            [plt.Line2D([0], [0], color='none', label="")] +  # Blank separator
+            [plt.Line2D([0], [0], color='none', label="Source, by marker:")] +  # Title for the second block
+            marker_handles
+        )
+        combined_labels = (
+            ['Target, by color:'] +
+            [f"{target}" for target in target_to_color.keys()] +
+            [''] +  # Blank separator
+            ["Source, by marker:"] +
+            [   f"{source}" if not pd.isna(source) else "all sources (ensemble)"
+                for source in source_to_marker.keys()]
+        )
+
+    elif ( (len(set(source_to_marker.values())) == 1) and ( len(set(target_to_color.keys())) > 1) ):
+        combined_handles = (
+            [plt.Line2D([0], [0], color='none', label="Target, by color:")] +
+            color_handles
+        )
+        combined_labels = (
+            ['Target, by color:'] +
+            [f"{target}" for target in target_to_color.keys()]
+        )
+    elif ( (len(set(source_to_marker.values())) > 1) and ( len(set(target_to_color.keys())) == 1) ):
+        combined_handles = (
+            [plt.Line2D([0], [0], color='none', label="Source, by marker:")] +
+            marker_handles
+        )
+        combined_labels = (
+            ["Source, by marker:"] +
+            [   f"{source}" if not pd.isna(source) else "all sources (ensemble)"
+                for source in source_to_marker.keys()]
+        )
+    else:
+        combined_handles = None
+        combined_labels = None
+
+    axs[-1].legend(
+        handles=combined_handles,
+        labels=combined_labels,
+        bbox_to_anchor=(1.05, 1),
+        loc='upper left',
+        frameon=False
+    )
+
+    plt.tight_layout()
+    plt.show()
+
+# Apply multi-index creation to each DataFrame
+CLIP_metrics_df = extract_target_source_replicate(CLIP_metrics_df)
+KD_CLIP_metrics_df = extract_target_source_replicate(KD_CLIP_metrics_df)
+ECLARE_metrics_df = extract_target_source_replicate(ECLARE_metrics_df, has_source=False)
+
+CLIP_metrics_df['dataset'] = 'clip'
+KD_CLIP_metrics_df['dataset'] = 'kd_clip'
+ECLARE_metrics_df['dataset'] = 'eclare'
+
+combined_metrics_df = pd.concat([CLIP_metrics_df, KD_CLIP_metrics_df, ECLARE_metrics_df])
+
+metric_boxplots(combined_metrics_df)
+
+'''
 ## Get metrics
 source_df_clip, target_df_clip, source_only_df_clip = get_metrics('clip', methods_id_dict['clip'])   # may need to rename 'triplet_align_<job_id>' by 'clip_<job_id>'
 target_df_kd_clip = get_metrics('kd_clip', methods_id_dict['kd_clip'], target_only=True)
@@ -562,6 +839,8 @@ if len(mdd_df_kd_clip) != 4*3:
     print(f'kd_clip_mdd: {len(mdd_df_kd_clip)}')
 if len(mdd_df_multiclip) != 1*3:
     print(f'multiclip_mdd: {len(mdd_df_multiclip)}')
+'''
+
     
 #%%
 metrics = ['1 - foscttm_score', 'ilisis', 'ari', 'nmi', 'asw_ct']

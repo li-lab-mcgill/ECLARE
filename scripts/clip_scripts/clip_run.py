@@ -136,7 +136,11 @@ if __name__ == "__main__":
     clip_job_id = args.outdir.split('/')[-4].split('_')[-1]
 
     ## get or create mlflow experiment
-    experiment = get_or_create_experiment(f'clip_{clip_job_id}')
+    if args.target_dataset == 'MDD':
+        experiment = get_or_create_experiment(f'clip_mdd_{clip_job_id}')
+    else:
+        experiment = get_or_create_experiment(f'clip_{clip_job_id}')
+        
     experiment_id = experiment.experiment_id
     experiment_name = experiment.name
     mlflow.set_experiment(experiment_name)

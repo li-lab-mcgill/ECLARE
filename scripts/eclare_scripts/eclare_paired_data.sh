@@ -37,7 +37,7 @@ for i in $(seq 0 $((N_CORES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='02202535'
+clip_job_id='08095816'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
