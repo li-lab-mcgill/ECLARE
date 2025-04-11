@@ -5,6 +5,7 @@ from argparse import ArgumentParser
 import torch
 from glob import glob
 import optuna
+import socket
 
 import mlflow
 from mlflow import get_artifact_uri, MlflowClient
@@ -15,49 +16,9 @@ from mlflow.types import Schema, TensorSpec
 from eclare import return_setup_func_from_dataset, teachers_setup
 from eclare.models import get_clip_hparams
 from eclare.run_utils import get_or_create_experiment, run_ECLARE
-from eclare.tune_utils import Optuna_propose_hyperparameters, champion_callback
+from eclare.tune_utils import tune_ECLARE
+from eclare.post_hoc_utils import plot_umap_embeddings, create_celltype_palette, get_latents
 
-
-def tune_ECLARE(args, experiment_name):
-    suggested_hyperparameters = get_clip_hparams()
-
-    def run_CLIP_wrapper(trial, run_args):
-        with mlflow.start_run(experiment_id=experiment_name, run_name=f'Trial {trial.number}', nested=True):
-
-            params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
-            run_args['trial'] = trial
-
-            mlflow.log_params(params)
-            _, metric_to_optimize = run_ECLARE(**run_args, params=params)
-
-            return metric_to_optimize
-
-    ## create study and run optimization
-    study = optuna.create_study(
-        direction='maximize',
-        sampler=optuna.samplers.TPESampler(
-            consider_prior=False,  # not recommended when sampling from categorical variables
-            n_startup_trials=0,
-        ),
-        pruner=optuna.pruners.MedianPruner(
-            n_startup_trials=3,  # Don't prune until this many trials have completed
-            n_warmup_steps=20,   # Don't prune until this many steps in each trial
-            interval_steps=1,     # Check for pruning every this many steps
-        )
-    )
-    Optuna_objective = lambda trial: run_CLIP_wrapper(trial, run_args)
-    study.optimize(Optuna_objective, n_trials=args.n_trials, callbacks=[champion_callback])
-
-    ## log best trial
-    mlflow.log_params(study.best_params)
-    mlflow.log_metrics({f"best_{args.metric_to_optimize}": study.best_trial.value})
-
-    ## log metadata
-    mlflow.set_tags(tags={
-        'suggested_hyperparameters': suggested_hyperparameters
-    })
-
-    return study.best_params
 
 if __name__ == "__main__":
 
@@ -66,6 +27,8 @@ if __name__ == "__main__":
                         help='output directory')
     parser.add_argument('--clip_job_id', type=str, default=None,
                         help='Job ID of CLIP training')
+    parser.add_argument('--experiment_job_id', type=str, default=None,
+                        help='Job ID of experiment')
     parser.add_argument('--total_epochs', type=int, default=2,
                         help='number of epochs')
     parser.add_argument('--batch_size', type=int, default=1000,
@@ -185,7 +148,7 @@ if __name__ == "__main__":
 
     # 1. Get or create experiment type run
     experiment_type = 'ECLARE' if args.source_dataset is None else 'KD_CLIP'
-    exp_type_run_name = f'{experiment_type}_{args.clip_job_id}'
+    exp_type_run_name = f'{experiment_type}_{args.experiment_job_id}'
     exp_type_filter = f"tags.mlflow.runName = '{exp_type_run_name}'"
     exp_type_runs = client.search_runs(experiment_ids=[experiment_id], filter_string=exp_type_filter)
     
@@ -225,6 +188,7 @@ if __name__ == "__main__":
             print(f"Running {data_run_and_replicate_name}")
 
             mlflow.set_tag("outdir", args.outdir)
+            mlflow.set_tag("hostname", socket.gethostname())
 
             hyperparameters = get_clip_hparams()
             default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
