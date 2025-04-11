@@ -11,6 +11,11 @@ import os
 
 from eclare.data_utils import PrintableLambda
 
+class MCDropout(nn.Dropout):
+    def forward(self, input):
+        # Always apply dropout, regardless of model.training
+        return nn.functional.dropout(input, self.p, training=True, inplace=self.inplace)
+
 class CLIP(nn.Module):
 
     HPARAMS = {
@@ -55,16 +60,16 @@ class CLIP(nn.Module):
         dropout_p           = hparams['dropout_p']
 
         ## encoders
-        rna_encoder = [nn.Linear(n_genes, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] + [nn.Linear(num_units, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] * (num_layers-1)
-        atac_encoder = [nn.Linear(n_peaks, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] + [nn.Linear(num_units, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] * (num_layers-1)
+        rna_encoder     = [nn.Linear(n_genes, num_units), nn.ReLU(), MCDropout(p=dropout_p)] + (num_layers-1) * [nn.Linear(num_units, num_units), nn.ReLU(), MCDropout(p=dropout_p)]
+        atac_encoder    = [nn.Linear(n_peaks, num_units), nn.ReLU(), MCDropout(p=dropout_p)] + (num_layers-1) * [nn.Linear(num_units, num_units), nn.ReLU(), MCDropout(p=dropout_p)]
 
         self.rna_to_core = nn.Sequential(*rna_encoder)
         self.atac_to_core = nn.Sequential(*atac_encoder)
 
         ## decoders
         if self.decoder_loss is not None:
-            rna_decoder = [nn.Linear(num_units, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] * (num_layers-1) + [nn.Linear(num_units, n_genes), nn.ReLU(), nn.Dropout(p=dropout_p)]
-            atac_decoder = [nn.Linear(num_units, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] * (num_layers-1) + [nn.Linear(num_units, n_peaks), nn.ReLU(), nn.Dropout(p=dropout_p)]
+            rna_decoder     = [nn.Linear(num_units, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] * (num_layers-1) + [nn.Linear(num_units, n_genes), nn.ReLU()]
+            atac_decoder    = [nn.Linear(num_units, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] * (num_layers-1) + [nn.Linear(num_units, n_peaks), nn.ReLU()]
             
             self.core_to_rna = nn.Sequential(*rna_decoder)
             self.core_to_atac = nn.Sequential(*atac_decoder)
@@ -73,15 +78,18 @@ class CLIP(nn.Module):
     def get_hparams(cls, key=None):
         return cls.HPARAMS[key] if key else cls.HPARAMS
 
-    def forward(self, x, modality: int):
+    def forward(self, x, modality: int, normalize: int = 1):
 
         '''
         modality: 0 for rna, 1 for atac. encode with int to enable model scriptability with torch.jit
         '''
     
         if modality == 0:
+
             latent = self.rna_to_core(x)
-            latent = torch.nn.functional.normalize(latent, p=2.0, dim=1)
+
+            if normalize==1:
+                latent = torch.nn.functional.normalize(latent, p=2.0, dim=1)
 
             if hasattr(self, 'core_to_rna'):
                 recon = self.core_to_rna(latent)
@@ -90,8 +98,12 @@ class CLIP(nn.Module):
                 return latent, None
         
         elif modality == 1:
+
             latent = self.atac_to_core(x)
-            latent = torch.nn.functional.normalize(latent, p=2.0, dim=1)
+
+            if normalize==1:
+                latent = torch.nn.functional.normalize(latent, p=2.0, dim=1)
+
             if hasattr(self, 'core_to_atac'):
                 recon = self.core_to_atac(latent)
                 return latent, recon
