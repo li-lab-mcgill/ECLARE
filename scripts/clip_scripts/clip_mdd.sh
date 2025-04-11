@@ -24,6 +24,10 @@ datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 ## Reverse the order of datasets to have pbmc_multiome and mouse_brain_multiome first
 datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$i]}"; done))
 
+## Ignore first two datasets
+echo "Ignoring first two datasets: ${datasets[0]} and ${datasets[1]}"
+datasets=("${datasets[@]:2}")
+
 ## Preset target dataset
 target_dataset="MDD"
 
@@ -92,7 +96,7 @@ run_clip_task_on_gpu() {
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --batch_size=500 \
+    --batch_size=800 \
     --feature="${feature}" \
     --metric_to_optimize="1-foscttm" &
     #--tune_hyperparameters \

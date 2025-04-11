@@ -24,6 +24,9 @@ datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 ## Reverse the order of datasets to have pbmc_multiome and mouse_brain_multiome first
 datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$i]}"; done))
 
+## Ignore first dataset
+echo "Ignoring first dataset: ${datasets[0]}"
+datasets=("${datasets[@]:1}")
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 N_CORES=6
@@ -37,7 +40,7 @@ for i in $(seq 0 $((N_CORES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='08095816'
+clip_job_id='10161404'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
@@ -76,12 +79,13 @@ echo "Idle GPUs: ${idle_gpus[@]}"
 # Function to run a task on a specific GPU
 run_eclare_task_on_gpu() {
     local clip_job_id=$1
-    local gpu_id=$2
-    local target_dataset=$3
-    local task_idx=$4
-    local random_state=$5
-    local genes_by_peaks_str=$6
-    local feature=$7
+    local experiment_job_id=$2
+    local gpu_id=$3
+    local target_dataset=$4
+    local task_idx=$5
+    local random_state=$6
+    local genes_by_peaks_str=$7
+    local feature=$8
 
     echo "Running ${source_dataset} to ${target_dataset} (task $task_idx) on GPU $gpu_id"
 
@@ -91,10 +95,11 @@ run_eclare_task_on_gpu() {
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
     --replicate_idx=$task_idx \
     --clip_job_id=$clip_job_id \
+    --experiment_job_id=$experiment_job_id \
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --batch_size=500 \
+    --batch_size=800 \
     --feature="'$feature'" \
     --distil_lambda=0.1 &
     #--tune_hyperparameters \
@@ -148,7 +153,7 @@ print(experiment_id)
 
 from mlflow import MlflowClient
 client = MlflowClient()
-run_name = 'ECLARE_${clip_job_id}'
+run_name = 'ECLARE_${JOB_ID}'
 client.create_run(experiment_id, run_name=run_name)
 "
 
@@ -174,7 +179,7 @@ for target_dataset in "${datasets[@]}"; do
         
         # Assign task to an idle GPU
         gpu_id=${idle_gpus[$((target_datasets_idx % ${#idle_gpus[@]}))]}
-        run_eclare_task_on_gpu $clip_job_id $gpu_id $target_dataset $task_idx $random_state $genes_by_peaks_str $feature
+        run_eclare_task_on_gpu $clip_job_id $JOB_ID $gpu_id $target_dataset $task_idx $random_state $genes_by_peaks_str $feature
     done
 
     # Wait for all tasks for this target dataset to complete before moving to the next one

@@ -36,7 +36,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='09102101'
+clip_job_id='10161404'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
@@ -75,13 +75,14 @@ echo "Idle GPUs: ${idle_gpus[@]}"
 # Function to run a task on a specific GPU
 run_eclare_task_on_gpu() {
     local clip_job_id=$1
-    local gpu_id=$2
-    local source_dataset=$3
-    local target_dataset=$4
-    local task_idx=$5
-    local random_state=$6
-    local genes_by_peaks_str=$7
-    local feature=$8
+    local experiment_job_id=$2
+    local gpu_id=$3
+    local source_dataset=$4
+    local target_dataset=$5
+    local task_idx=$6
+    local random_state=$7
+    local genes_by_peaks_str=$8
+    local feature=$9
 
     echo "Running ${source_dataset} to ${target_dataset} (task $task_idx) on GPU $gpu_id"
 
@@ -91,11 +92,12 @@ run_eclare_task_on_gpu() {
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
     --replicate_idx=$task_idx \
     --clip_job_id=$clip_job_id \
+    --experiment_job_id=$experiment_job_id \
     --source_dataset=$source_dataset \
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --batch_size=500 \
+    --batch_size=800 \
     --feature="$feature" \
     --distil_lambda=0.1 &
     #--tune_hyperparameters \
@@ -149,7 +151,7 @@ print(experiment_id)
 
 from mlflow import MlflowClient
 client = MlflowClient()
-run_name = 'KD_CLIP_${clip_job_id}'
+run_name = 'KD_CLIP_${JOB_ID}'
 client.create_run(experiment_id, run_name=run_name)
 "
 
@@ -186,7 +188,7 @@ for target_dataset in "${datasets[@]}"; do
                 gpu_id=${idle_gpus[$((source_datasets_idx % ${#idle_gpus[@]}))]}
 
                 # Run ECLARE task on idle GPU
-                run_eclare_task_on_gpu $clip_job_id $gpu_id $source_dataset $target_dataset $task_idx $random_state $genes_by_peaks_str $feature
+                run_eclare_task_on_gpu $clip_job_id $JOB_ID $gpu_id $source_dataset $target_dataset $task_idx $random_state $genes_by_peaks_str $feature
             done
 
         fi
