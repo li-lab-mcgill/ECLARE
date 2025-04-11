@@ -5,7 +5,7 @@ import torch
 import pandas as pd
 import optuna
 from shutil import copy2
-import json
+import socket
 
 import mlflow
 from mlflow import get_artifact_uri, MlflowClient
@@ -14,52 +14,10 @@ from mlflow.models.signature import ModelSignature
 from mlflow.types import Schema, TensorSpec, ParamSchema, ParamSpec
 
 from eclare import return_setup_func_from_dataset
-from eclare.tune_utils import Optuna_propose_hyperparameters, champion_callback
+from eclare.tune_utils import tune_CLIP
 from eclare.run_utils import run_CLIP, get_or_create_experiment
 from eclare.models import get_clip_hparams
-
-def tune_CLIP(args, experiment_id):
-
-    suggested_hyperparameters = get_clip_hparams()
-
-    def run_CLIP_wrapper(trial, run_args):
-        with mlflow.start_run(experiment_id=experiment_id, run_name=f'Trial {trial.number}', nested=True):
-
-            params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
-            run_args['trial'] = trial
-
-            mlflow.log_params(params)
-            _, metric_to_optimize = run_CLIP(**run_args, params=params)
-
-            return metric_to_optimize
-
-    ## create study and run optimization
-    study = optuna.create_study(
-        direction='maximize',
-        sampler=optuna.samplers.TPESampler(
-            consider_prior=False,  # not recommended when sampling from categorical variables
-            n_startup_trials=0,
-        ),
-        pruner=optuna.pruners.MedianPruner(
-            n_startup_trials=3,  # Don't prune until this many trials have completed
-            n_warmup_steps=20,   # Don't prune until this many steps in each trial
-            interval_steps=1,     # Check for pruning every this many steps
-        )
-    )
-    Optuna_objective = lambda trial: run_CLIP_wrapper(trial, run_args)
-    study.optimize(Optuna_objective, n_trials=args.n_trials, callbacks=[champion_callback])
-
-    ## log best trial
-    mlflow.log_params(study.best_params)
-    mlflow.log_metrics({f"best_{args.metric_to_optimize}": study.best_trial.value})
-
-    ## log metadata
-    mlflow.set_tags(tags={
-        'suggested_hyperparameters': suggested_hyperparameters
-    })
-
-    return study.best_params
-    
+from eclare.post_hoc_utils import plot_umap_embeddings, create_celltype_palette, get_latents
 
 
 if __name__ == "__main__":
@@ -75,7 +33,7 @@ if __name__ == "__main__":
                         help='indicator of peaks to genes mapping to skip processing')
     parser.add_argument('--total_epochs', type=int, default=2, metavar='E',
                         help='number of epochs for training')
-    parser.add_argument('--batch_size', type=int, default=1000, metavar='B',
+    parser.add_argument('--batch_size', type=int, default=800, metavar='B',
                         help='size of mini-batch')
     parser.add_argument('--feature', type=str, default=None, metavar='F',
                         help='Distinctive feature for current job')
@@ -169,7 +127,8 @@ if __name__ == "__main__":
         with mlflow.start_run(experiment_id=experiment_id, run_name=run_name, nested=True):
 
             mlflow.set_tag("outdir", args.outdir)
-                
+            mlflow.set_tag("hostname", socket.gethostname())
+            
             hyperparameters = get_clip_hparams()
             default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
 
@@ -179,7 +138,22 @@ if __name__ == "__main__":
                 model, _ = run_CLIP(**run_args, params=default_hyperparameters)
                 model_str = "trained_model"
 
-            else:
+                ## create umap embeddings and save
+                rna_latents, atac_latents = get_latents(model, rna_valid_loader.dataset.adatas[0], atac_valid_loader.dataset.adatas[0], return_tensor=False)
+
+                rna_celltypes = rna_valid_loader.dataset.adatas[0].obs['cell_type'].values
+                atac_celltypes = atac_valid_loader.dataset.adatas[0].obs['cell_type'].values
+                color_map_ct = create_celltype_palette(rna_celltypes.categories, atac_celltypes.categories, plot_color_palette=False)
+
+                rna_condition = ['nan'] * len(rna_celltypes)
+                atac_condition = ['nan'] * len(atac_celltypes)
+
+                ## save umap embeddings
+                umap_embedding, umap_figure = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
+                umap_figure.savefig(os.path.join(args.outdir, 'umap_embeddings.png'))
+                mlflow.log_figure(umap_figure, 'umap_embeddings.png')
+
+            elif args.tune_hyperparameters:
 
                 optuna.logging.set_verbosity(optuna.logging.ERROR)
 
