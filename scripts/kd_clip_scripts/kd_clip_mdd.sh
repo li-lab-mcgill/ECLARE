@@ -28,7 +28,7 @@ datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$
 target_dataset="MDD"
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
-N_CORES=3
+N_CORES=2
 N_REPLICATES=1
 
 ## Define random state
@@ -39,7 +39,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='09102101'
+clip_job_id='10161509'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
@@ -78,12 +78,13 @@ echo "Idle GPUs: ${idle_gpus[@]}"
 # Function to run a task on a specific GPU
 run_eclare_task_on_gpu() {
     local clip_job_id=$1
-    local gpu_id=$2
-    local source_dataset=$3
-    local target_dataset=$4
-    local task_idx=$5
-    local random_state=$6
-    local feature=$7
+    local experiment_job_id=$2
+    local gpu_id=$3
+    local source_dataset=$4
+    local target_dataset=$5
+    local task_idx=$6
+    local random_state=$7
+    local feature=$8
 
     echo "Running ${source_dataset} to ${target_dataset} (task $task_idx) on GPU $gpu_id"
 
@@ -93,6 +94,7 @@ run_eclare_task_on_gpu() {
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
     --replicate_idx=$task_idx \
     --clip_job_id=$clip_job_id \
+    --experiment_job_id=$experiment_job_id \
     --source_dataset=$source_dataset \
     --target_dataset=$target_dataset \
     --genes_by_peaks_str='17563_by_100000' \
@@ -123,7 +125,7 @@ print(experiment_id)
 
 from mlflow import MlflowClient
 client = MlflowClient()
-run_name = 'KD_CLIP_${clip_job_id}'
+run_name = 'KD_CLIP_${JOB_ID}'
 client.create_run(experiment_id, run_name=run_name)
 "
 
@@ -152,7 +154,7 @@ for source_dataset in "${datasets[@]}"; do
             gpu_id=${idle_gpus[$((source_datasets_idx % ${#idle_gpus[@]}))]}
 
             # Run ECLARE task on idle GPU
-            run_eclare_task_on_gpu $clip_job_id $gpu_id $source_dataset $target_dataset $task_idx $random_state $feature
+            run_eclare_task_on_gpu $clip_job_id $JOB_ID $gpu_id $source_dataset $target_dataset $task_idx $random_state $feature
         done
 
     fi

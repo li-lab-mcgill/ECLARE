@@ -39,7 +39,7 @@ for i in $(seq 0 $((N_CORES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='09102101'
+clip_job_id='10161509'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
@@ -106,12 +106,13 @@ get_idle_cpus() {
 # Function to run a task on a specific GPU and CPU core
 run_eclare_task_on_gpu() {
     local clip_job_id=$1
-    local gpu_id=$2
-    local target_dataset=$3
-    local task_idx=$4
-    local random_state=$5
-    local feature=$6
-    local cpu_core=$7  # New parameter for CPU core
+    local experiment_job_id=$2
+    local gpu_id=$3
+    local target_dataset=$4
+    local task_idx=$5
+    local random_state=$6
+    local feature=$7
+    local cpu_core=$8  # New parameter for CPU core
 
     echo "Running ${source_dataset} to ${target_dataset} (task $task_idx) on GPU $gpu_id and CPU core $cpu_core"
 
@@ -122,12 +123,13 @@ run_eclare_task_on_gpu() {
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
     --replicate_idx=$task_idx \
     --clip_job_id=$clip_job_id \
+    --experiment_job_id=$experiment_job_id \
     --target_dataset=$target_dataset \
     --genes_by_peaks_str='17563_by_100000' \
     --total_epochs=$total_epochs \
-    --batch_size=500 \
+    --batch_size=800 \
     --feature="'$feature'" \
-    --distil_lambda=0.1 &
+    --distil_lambda=0.1 #&
 }
 
 ## Create experiment ID (or detect if it already exists)
@@ -139,7 +141,7 @@ print(experiment_id)
 
 from mlflow import MlflowClient
 client = MlflowClient()
-run_name = 'ECLARE_${clip_job_id}'
+run_name = 'ECLARE_${JOB_ID}'
 client.create_run(experiment_id, run_name=run_name)
 "
 
@@ -170,7 +172,7 @@ for task_idx in $(seq 0 $((N_REPLICATES-1))); do
     # Assign an idle CPU core (cycling through idle cores)
     cpu_core=${idle_cpu_cores[$((task_idx % ${#idle_cpu_cores[@]}))]}
     
-    run_eclare_task_on_gpu $clip_job_id $gpu_id $target_dataset $task_idx $random_state $feature $cpu_core
+    run_eclare_task_on_gpu $clip_job_id $JOB_ID $gpu_id $target_dataset $task_idx $random_state $feature $cpu_core
 done
 
 # Wait for all tasks for this target dataset to complete before moving to the next one
