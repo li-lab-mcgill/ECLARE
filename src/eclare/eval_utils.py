@@ -44,7 +44,7 @@ def get_metrics(model, rna_valid_loader, atac_valid_loader, device, paired=True)
 
     return metrics
 
-def unpaired_metrics(latents, labels, modalities, batches, k=100):
+def unpaired_metrics(latents, labels, modalities, batches, k=30):
 
     ## get neighbors object & initialize metrics dict
     neighbors = jax_approx_min_k(latents.detach().cpu(), k)

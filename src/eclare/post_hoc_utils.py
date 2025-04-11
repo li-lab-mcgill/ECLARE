@@ -87,19 +87,18 @@ def get_latents(model, rna, atac, return_tensor=False):
     rna = torch.from_numpy(rna.X.toarray()).float().to(device)
     atac = torch.from_numpy(atac.X.toarray()).float().to(device)
 
-    ## normalize
-    rna = torch.nn.functional.normalize(rna, p=2, dim=1)
-    atac = torch.nn.functional.normalize(atac, p=2, dim=1)
-
     #with torch.inference_mode():
-    rna_latent = model(rna, modality='rna', task='align')[0].detach()
-    atac_latent = model(atac, modality='atac', task='align')[0].detach()
+    rna_latent = model(rna, modality=0)[0].detach()
+    atac_latent = model(atac, modality=1)[0].detach()
 
+    ## normalize
+    #rna = torch.nn.functional.normalize(rna, p=2, dim=1)
+    #atac = torch.nn.functional.normalize(atac, p=2, dim=1)
 
     if return_tensor:
         rna_latent, atac_latent = rna_latent.detach(), atac_latent.detach()
     else:
-        rna_latent, atac_latent = rna_latent.detach().numpy(), atac_latent.detach().numpy()
+        rna_latent, atac_latent = rna_latent.detach().cpu().numpy(), atac_latent.detach().cpu().numpy()
 
     return rna_latent, atac_latent
 
@@ -180,7 +179,7 @@ def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltype
 
     fig.tight_layout()
 
-    return umap_embedding
+    return umap_embedding, fig
 
 def plot_umap_embeddings_multidatasets(rna_latents_dict, atac_latents_dict, mdd_rna_latents_dict, mdd_atac_latents_dict, umap_embedding=None, split_plots='domains_and_modalities'):
 
