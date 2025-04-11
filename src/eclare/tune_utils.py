@@ -1,5 +1,9 @@
+import optuna
 from optuna.trial import TrialState
-from copy import deepcopy
+import mlflow
+
+from eclare.models import get_clip_hparams 
+from eclare.run_utils import run_CLIP, run_ECLARE
 
 def study_summary(study):
     pruned_trials = study.get_trials(deepcopy=False, states=[TrialState.PRUNED])
@@ -61,3 +65,88 @@ def champion_callback(study, frozen_trial):
           )
       else:
           print(f"Initial trial {frozen_trial.number} achieved value: {frozen_trial.value}")
+
+
+def tune_CLIP(args, experiment_id):
+
+    suggested_hyperparameters = get_clip_hparams()
+
+    def run_CLIP_wrapper(trial, run_args):
+        with mlflow.start_run(experiment_id=experiment_id, run_name=f'Trial {trial.number}', nested=True):
+
+            params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
+            run_args['trial'] = trial
+
+            mlflow.log_params(params)
+            _, metric_to_optimize = run_CLIP(**run_args, params=params)
+
+            return metric_to_optimize
+
+    ## create study and run optimization
+    study = optuna.create_study(
+        direction='maximize',
+        sampler=optuna.samplers.TPESampler(
+            consider_prior=False,  # not recommended when sampling from categorical variables
+            n_startup_trials=0,
+        ),
+        pruner=optuna.pruners.MedianPruner(
+            n_startup_trials=3,  # Don't prune until this many trials have completed
+            n_warmup_steps=20,   # Don't prune until this many steps in each trial
+            interval_steps=1,     # Check for pruning every this many steps
+        )
+    )
+    Optuna_objective = lambda trial: run_CLIP_wrapper(trial, run_args)
+    study.optimize(Optuna_objective, n_trials=args.n_trials, callbacks=[champion_callback])
+
+    ## log best trial
+    mlflow.log_params(study.best_params)
+    mlflow.log_metrics({f"best_{args.metric_to_optimize}": study.best_trial.value})
+
+    ## log metadata
+    mlflow.set_tags(tags={
+        'suggested_hyperparameters': suggested_hyperparameters
+    })
+
+    return study.best_params
+    
+
+def tune_ECLARE(args, experiment_name):
+    suggested_hyperparameters = get_clip_hparams()
+
+    def run_CLIP_wrapper(trial, run_args):
+        with mlflow.start_run(experiment_id=experiment_name, run_name=f'Trial {trial.number}', nested=True):
+
+            params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
+            run_args['trial'] = trial
+
+            mlflow.log_params(params)
+            _, metric_to_optimize = run_ECLARE(**run_args, params=params)
+
+            return metric_to_optimize
+
+    ## create study and run optimization
+    study = optuna.create_study(
+        direction='maximize',
+        sampler=optuna.samplers.TPESampler(
+            consider_prior=False,  # not recommended when sampling from categorical variables
+            n_startup_trials=0,
+        ),
+        pruner=optuna.pruners.MedianPruner(
+            n_startup_trials=3,  # Don't prune until this many trials have completed
+            n_warmup_steps=20,   # Don't prune until this many steps in each trial
+            interval_steps=1,     # Check for pruning every this many steps
+        )
+    )
+    Optuna_objective = lambda trial: run_CLIP_wrapper(trial, run_args)
+    study.optimize(Optuna_objective, n_trials=args.n_trials, callbacks=[champion_callback])
+
+    ## log best trial
+    mlflow.log_params(study.best_params)
+    mlflow.log_metrics({f"best_{args.metric_to_optimize}": study.best_trial.value})
+
+    ## log metadata
+    mlflow.set_tags(tags={
+        'suggested_hyperparameters': suggested_hyperparameters
+    })
+
+    return study.best_params

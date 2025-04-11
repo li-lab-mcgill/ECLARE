@@ -571,9 +571,7 @@ def run_ECLARE(
         )
 
         ## get metrics
-        metrics = {}
-        source_metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device, paired=paired)
-        metrics.update({f'source_{k}': v for k, v in source_metrics.items() if ~np.isnan(v)})
+        metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device, paired=paired)
         metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
 
         # Log all metrics at once with MLflow
