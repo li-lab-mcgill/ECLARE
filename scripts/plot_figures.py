@@ -33,6 +33,7 @@ from ot import solve as ot_solve
 from collections import defaultdict
 from string import ascii_uppercase
 import pybedtools
+from mlflow.tracking import MlflowClient
 
 from eclare.models import load_CLIP_model, CLIP
 from eclare.setup_utils import mdd_setup
@@ -517,51 +518,11 @@ def combined_plot_target_only(target_dataframes, value_column, dataset_labels):
     plt.tight_layout()
     plt.show()
 
-cuda_available = torch.cuda.is_available()
-
-#%%
-## Create dict for methods and job_ids
-methods_id_dict = {
-    'clip': '08095816',
-    'kd_clip': '08160131',
-    'eclare': '08180450',
-    'clip_mdd': '15155920',
-    'kd_clip_mdd': '20091454',
-    'eclare_mdd': '19154717', #16105437
-    'mojitoo': '20212916',
-    'multiVI': '18175921',
-    'glue': '18234131_19205223',
-    'scDART': '22083939', #'19150754',
-    'scjoint': '19115016'
-}
-
-all_metrics_csv_path = os.path.join(os.environ['OUTPATH'], 'runs.csv')
-all_metrics_df = pd.read_csv(all_metrics_csv_path)
-
-CLIP_header_idx = np.where(all_metrics_df['Name'].str.startswith('CLIP'))[0].item()
-KD_CLIP_header_idx = np.where(all_metrics_df['Name'].str.startswith('KD_CLIP'))[0].item()
-ECLARE_header_idx = np.where(all_metrics_df['Name'].str.startswith('ECLARE'))[0].item()
-
-CLIP_metrics_df = all_metrics_df.iloc[CLIP_header_idx+1:KD_CLIP_header_idx]
-KD_CLIP_metrics_df = all_metrics_df.iloc[KD_CLIP_header_idx+1:ECLARE_header_idx]
-ECLARE_metrics_df = all_metrics_df.iloc[ECLARE_header_idx+1:]
-
+## updated functions
 # Create multi-index for CLIP metrics DataFrame
 def extract_target_source_replicate(df, has_source=True):
-    """
-    Create a multi-index DataFrame from the 'Name' column.
-    
-    Parameters:
-    -----------
-    df : DataFrame
-        DataFrame containing a 'Name' column with format 'source_to_target-...'
-        
-    Returns:
-    --------
-    DataFrame
-        DataFrame with multi-index ['source', 'target']
-    """
-    if df.empty or 'Name' not in df.columns:
+
+    if df.empty or 'run_name' not in df.columns:
         return df
     
     # Extract source and target from Name column
@@ -574,7 +535,7 @@ def extract_target_source_replicate(df, has_source=True):
 
     if has_source:
 
-        for name in df['Name']:
+        for name in df['run_name']:
             try:
                 source = name.split('_to_')[0]
                 target = name.split('_to_')[1].split('-')[0]
@@ -592,7 +553,7 @@ def extract_target_source_replicate(df, has_source=True):
 
     elif not has_source:
 
-        for name in df['Name']:
+        for name in df['run_name']:
 
             target      = name.split('-')[0]
             replicate   = name.split('-')[1]
@@ -609,10 +570,10 @@ def extract_target_source_replicate(df, has_source=True):
     
     return result_df
 
-def metric_boxplot(df, metric, dataset_labels, target_to_color, source_to_marker, unique_targets, unique_sources, ax=None, target_source_combinations=False):
+def metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets, unique_sources, ax=None):
 
     # For clip, use the target metric values
-    df.loc[df['dataset']=='clip', metric] = df.loc[df['dataset']=='clip', 'target_'+metric].copy()
+    #df.loc[df['dataset']=='clip', metric] = df.loc[df['dataset']=='clip', 'target_'+metric].copy()
 
     # Try to convert the metric column to float, replacing errors with NaN
     df[metric] = pd.to_numeric(df[metric], errors='coerce')
@@ -679,10 +640,7 @@ def metric_boxplot(df, metric, dataset_labels, target_to_color, source_to_marker
                         alpha=0.4
                     )
 
-    return fig, ax
-
-
-def metric_boxplots(combined_metrics_df):
+def metric_boxplots(df, target_source_combinations=False, include_paired=True):
 
     hue_order = list(["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", "Midbrain_Adams", "mouse_brain_multiome", "pbmc_multiome", "MDD"])
 
@@ -696,7 +654,7 @@ def metric_boxplots(combined_metrics_df):
     if len(unique_targets) > 1:
         target_to_color = {hue_order[i]: colors[i] if len(unique_targets)>1 else 'black' for i in range(len(unique_targets))}
     elif unique_targets[0] == 'MDD':
-        target_to_color = {unique_targets[0]: colors[6]}
+        target_to_color = {unique_targets[0]: sns.color_palette("Dark2", 8)[6]}
 
     if target_source_combinations:
         source_to_marker = {source: markers[i % len(markers)] for i, source in enumerate(unique_sources)}
@@ -704,14 +662,14 @@ def metric_boxplots(combined_metrics_df):
         source_to_marker = {source: 'o' for i, source in enumerate(unique_sources)}
 
     ## loop over metrics and plot
-    unpaired_metrics = ['multimodal_ilisi', 'ari', 'batches_ilisi', 'nmi', 'silhouette_celltype']
+    unpaired_metrics = ['multimodal_ilisi', 'ari', 'nmi', 'silhouette_celltype', 'batches_ilisi']
     paired_metrics = ['1-foscttm']
-    all_metrics = unpaired_metrics + paired_metrics
+    all_metrics = paired_metrics + unpaired_metrics if include_paired else unpaired_metrics
 
-    fig, axs = plt.subplots(1, len(all_metrics), figsize=(12, 6))
+    fig, axs = plt.subplots(1, len(all_metrics), figsize=(12, 4), sharex=True)
 
     for metric, ax in zip(all_metrics, axs):
-        metric_boxplot(combined_metrics_df, metric, ['eclare', 'kd_clip', 'clip'], target_to_color, source_to_marker, unique_targets, unique_sources, ax=ax)
+        metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets, unique_sources, ax=ax)
         ax.set_title(metric)
         ax.set_ylabel('')
 
@@ -781,21 +739,148 @@ def metric_boxplots(combined_metrics_df):
         frameon=False
     )
 
-    plt.tight_layout()
-    plt.show()
+    fig.tight_layout()
+    fig.show()
 
-# Apply multi-index creation to each DataFrame
+
+cuda_available = torch.cuda.is_available()
+
+#%%
+## Create dict for methods and job_ids
+methods_id_dict = {
+    'clip': '10161404',
+    'kd_clip': '10210217',
+    'eclare': '10213018',
+    'clip_mdd': '10161509',
+    'kd_clip_mdd': '10213616',
+    'eclare_mdd': '11073137', #16105437
+    'mojitoo': '20212916',
+    'multiVI': '18175921',
+    'glue': '18234131_19205223',
+    'scDART': '22083939', #'19150754',
+    'scjoint': '19115016'
+}
+
+def download_mlflow_runs(experiment_name):
+    
+    # Initialize MLflow client with tracking URI if provided
+    tracking_uri = os.path.join(os.environ['ECLARE_ROOT'], 'mlruns')
+    client = MlflowClient(tracking_uri=tracking_uri)
+    
+    # Get experiment by name
+    experiment = client.get_experiment_by_name(experiment_name)
+    if experiment is None:
+        # Try to find experiment in alternative locations
+        alt_tracking_uri = os.path.join(os.environ.get('OUTPATH', '.'), 'mlruns')
+        if tracking_uri != alt_tracking_uri:
+            client = MlflowClient(tracking_uri=alt_tracking_uri)
+            experiment = client.get_experiment_by_name(experiment_name)
+        
+        if experiment is None:
+            raise ValueError(f"Experiment '{experiment_name}' not found. Set MLFLOW_TRACKING_URI environment variable to specify mlruns directory.")
+    
+    experiment_id = experiment.experiment_id
+    
+    # Get all runs for the experiment
+    runs = client.search_runs(experiment_ids=[experiment_id])
+    
+    # Convert runs to DataFrame
+    runs_data = []
+    for run in runs:
+        run_data = {
+            'run_id': run.info.run_id,
+            'parent_run_id': run.data.tags.get('mlflow.parentRunId', None),
+            'run_name': run.info.run_name,  # Include the name of the run
+            'status': run.info.status,
+            'start_time': datetime.fromtimestamp(run.info.start_time/1000.0),
+            'end_time': datetime.fromtimestamp(run.info.end_time/1000.0) if run.info.end_time else None,
+            'artifact_uri': run.info.artifact_uri,
+            **run.data.params,
+            **run.data.metrics
+        }
+        runs_data.append(run_data)
+    
+    runs_df = pd.DataFrame(runs_data)
+    
+    # Save to CSV
+    output_path = os.path.join(os.environ['OUTPATH'], experiment_name, "runs.csv")
+    runs_df.to_csv(output_path, index=False)
+    print(f"Saved {len(runs_df)} runs to {output_path}")
+    
+    return output_path
+
+## paired data
+experiment_name = f"clip_{methods_id_dict['clip']}"
+
+if os.path.exists(os.path.join(os.environ['OUTPATH'], experiment_name, "runs.csv")):
+    print(f"Found runs.csv for {experiment_name} in {os.environ['OUTPATH']}")
+    all_metrics_csv_path = os.path.join(os.environ['OUTPATH'], experiment_name, "runs.csv")
+else:
+    print(f"Downloading runs.csv for {experiment_name} from MLflow")
+    all_metrics_csv_path = download_mlflow_runs(experiment_name)
+
+all_metrics_df = pd.read_csv(all_metrics_csv_path)
+
+CLIP_header_idx = np.where(all_metrics_df['run_name'].str.startswith('CLIP'))[0].item()
+KD_CLIP_header_idx = np.where(all_metrics_df['run_name'].str.startswith('KD_CLIP'))[0].item()
+ECLARE_header_idx = np.where(all_metrics_df['run_name'].str.startswith('ECLARE'))[0].item()
+
+CLIP_run_id = all_metrics_df.iloc[CLIP_header_idx]['run_id']
+KD_CLIP_run_id = all_metrics_df.iloc[KD_CLIP_header_idx]['run_id']
+ECLARE_run_id = all_metrics_df.iloc[ECLARE_header_idx]['run_id']
+
+CLIP_metrics_df = all_metrics_df.loc[all_metrics_df['parent_run_id'] == CLIP_run_id]
+KD_CLIP_metrics_df = all_metrics_df.loc[all_metrics_df['parent_run_id'] == KD_CLIP_run_id]
+ECLARE_metrics_df = all_metrics_df.loc[all_metrics_df['parent_run_id'] == ECLARE_run_id]
+
 CLIP_metrics_df = extract_target_source_replicate(CLIP_metrics_df)
 KD_CLIP_metrics_df = extract_target_source_replicate(KD_CLIP_metrics_df)
 ECLARE_metrics_df = extract_target_source_replicate(ECLARE_metrics_df, has_source=False)
 
-CLIP_metrics_df['dataset'] = 'clip'
-KD_CLIP_metrics_df['dataset'] = 'kd_clip'
-ECLARE_metrics_df['dataset'] = 'eclare'
+CLIP_metrics_df.loc[:, 'dataset']      = 'clip'
+ECLARE_metrics_df.loc[:, 'dataset']    = 'eclare'
+KD_CLIP_metrics_df.loc[:, 'dataset']   = 'kd_clip'
 
-combined_metrics_df = pd.concat([CLIP_metrics_df, KD_CLIP_metrics_df, ECLARE_metrics_df])
+combined_metrics_df = pd.concat([ECLARE_metrics_df, KD_CLIP_metrics_df, CLIP_metrics_df]) # determines order in which metrics are plotted
 
 metric_boxplots(combined_metrics_df)
+
+## unpaired MDD data
+experiment_name = f"clip_mdd_{methods_id_dict['clip_mdd']}"
+
+if os.path.exists(os.path.join(os.environ['OUTPATH'], experiment_name, "runs.csv")):
+    print(f"Found runs.csv for {experiment_name} in {os.environ['OUTPATH']}")
+    all_metrics_csv_path = os.path.join(os.environ['OUTPATH'], experiment_name, "runs.csv")
+else:
+    print(f"Downloading runs.csv for {experiment_name} from MLflow")
+    all_metrics_csv_path = download_mlflow_runs(experiment_name)
+
+mdd_metrics_df = pd.read_csv(all_metrics_csv_path)
+
+CLIP_mdd_header_idx = np.where(mdd_metrics_df['run_name'].str.startswith('CLIP'))[0].item()
+KD_CLIP_mdd_header_idx = np.where(mdd_metrics_df['run_name'].str.startswith('KD_CLIP'))[0].item()
+ECLARE_mdd_header_idx = np.where(mdd_metrics_df['run_name'].str.startswith('ECLARE'))[0].item()
+
+CLIP_mdd_run_id = mdd_metrics_df.iloc[CLIP_mdd_header_idx]['run_id']
+KD_CLIP_mdd_run_id = mdd_metrics_df.iloc[KD_CLIP_mdd_header_idx]['run_id']
+ECLARE_mdd_run_id = mdd_metrics_df.iloc[ECLARE_mdd_header_idx]['run_id']
+
+CLIP_mdd_metrics_df = mdd_metrics_df.loc[mdd_metrics_df['parent_run_id'] == CLIP_mdd_run_id]
+KD_CLIP_mdd_metrics_df = mdd_metrics_df.loc[mdd_metrics_df['parent_run_id'] == KD_CLIP_mdd_run_id]
+ECLARE_mdd_metrics_df = mdd_metrics_df.loc[mdd_metrics_df['parent_run_id'] == ECLARE_mdd_run_id]
+
+CLIP_mdd_metrics_df = extract_target_source_replicate(CLIP_mdd_metrics_df)
+KD_CLIP_mdd_metrics_df = extract_target_source_replicate(KD_CLIP_mdd_metrics_df)
+ECLARE_mdd_metrics_df = extract_target_source_replicate(ECLARE_mdd_metrics_df, has_source=False)
+
+CLIP_mdd_metrics_df.loc[:, 'dataset'] = 'clip_mdd'
+KD_CLIP_mdd_metrics_df.loc[:, 'dataset'] = 'kd_clip_mdd'
+ECLARE_mdd_metrics_df.loc[:, 'dataset'] = 'eclare_mdd'
+
+combined_mdd_metrics_df = pd.concat([ECLARE_mdd_metrics_df, KD_CLIP_mdd_metrics_df, CLIP_mdd_metrics_df])
+
+metric_boxplots(combined_mdd_metrics_df, target_source_combinations=True, include_paired=False)
+
 
 '''
 ## Get metrics
