@@ -198,6 +198,21 @@ if __name__ == "__main__":
                 student_model, metrics_dict = run_ECLARE(**run_args, params=default_hyperparameters, device=device)
                 model_str = "trained_model"
 
+                ## create umap embeddings
+                rna_latents, atac_latents = get_latents(student_model, student_rna_valid_loader.dataset.adatas[0], student_atac_valid_loader.dataset.adatas[0], return_tensor=False)
+
+                rna_celltypes = student_rna_valid_loader.dataset.adatas[0].obs['cell_type'].values
+                atac_celltypes = student_atac_valid_loader.dataset.adatas[0].obs['cell_type'].values
+                color_map_ct = create_celltype_palette(rna_celltypes.categories, atac_celltypes.categories, plot_color_palette=False)
+
+                rna_condition = ['nan'] * len(rna_celltypes)
+                atac_condition = ['nan'] * len(atac_celltypes)
+
+                ## save umap embeddings
+                umap_embedding, umap_figure = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
+                umap_figure.savefig(os.path.join(args.outdir, 'umap_embeddings.png'))
+                mlflow.log_figure(umap_figure, 'umap_embeddings.png')
+
             else:
                 optuna.logging.set_verbosity(optuna.logging.ERROR)
                 best_params = tune_ECLARE(args, experiment_name)
