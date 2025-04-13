@@ -24,6 +24,10 @@ datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 ## Reverse the order of datasets to have pbmc_multiome and mouse_brain_multiome first
 datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$i]}"; done))
 
+## Ignore first two datasets
+echo "Ignoring first two datasets: ${datasets[0]} and ${datasets[1]}"
+datasets=("${datasets[@]:2}")
+
 ## Define number of parallel tasks to run (replace with desired number of cores)
 N_CORES=3
 N_REPLICATES=1
@@ -36,7 +40,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='10161404'
+clip_job_id='11165123'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
