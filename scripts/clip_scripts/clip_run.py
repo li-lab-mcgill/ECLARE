@@ -157,9 +157,6 @@ if __name__ == "__main__":
                 ## UMAP: target dataset
                 rna_latents, atac_latents = get_latents(model, target_rna_valid_loader.dataset.adatas[0], target_atac_valid_loader.dataset.adatas[0], return_tensor=False)
 
-                rna_latents = model(rna_cells.to(device=device), 0)[0].detach().cpu().numpy()   
-                atac_latents = model(atac_cells.to(device=device), 1)[0].detach().cpu().numpy()
-
                 rna_celltypes = target_rna_valid_loader.dataset.adatas[0].obs['cell_type'].values
                 atac_celltypes = target_atac_valid_loader.dataset.adatas[0].obs['cell_type'].values
                 color_map_ct = create_celltype_palette(rna_celltypes.categories, atac_celltypes.categories, plot_color_palette=False)
