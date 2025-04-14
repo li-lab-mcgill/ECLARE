@@ -33,6 +33,7 @@ from ot import solve as ot_solve
 from collections import defaultdict
 from string import ascii_uppercase
 import pybedtools
+from types import SimpleNamespace
 
 from mlflow.tracking import MlflowClient
 import mlflow.pytorch
@@ -993,42 +994,20 @@ with open(student_model_path, 'r') as f:
 
 ## Set tracking URI to ECLARE_ROOT/mlruns and load model & metadata
 mlflow.set_tracking_uri(os.path.join(os.environ['ECLARE_ROOT'], 'mlruns'))
-model = mlflow.pytorch.load_model(model_uri)
-model_metadata = Model.load(model_uri)
+student_model = mlflow.pytorch.load_model(model_uri)
+student_model_metadata = Model.load(model_uri)
 
-## Instantiate student model args dict from one of the source datasets, later overwrite with target dataset
-teachers_job_id = 'clip_mdd_15155920'
-paths_root = os.path.join(os.environ['OUTPATH'], teachers_job_id)
-model_paths = glob(os.path.join(paths_root, 'mdd', '*', '*', 'model.pt'))
-model_path = model_paths[0]
-
-_, teacher_model_args_dict = load_CLIP_model(model_path, device=device)
-
-## Get number of genes and peaks from genes_by_peaks_str
-teacher_model_args_dict['args'].genes_by_peaks_str = student_model_args_dict['args'].genes_by_peaks_str
-teacher_model_args_dict['n_genes'] = student_model_args_dict['n_genes']
-teacher_model_args_dict['n_peaks'] = student_model_args_dict['n_peaks']
-teacher_model_args_dict['tuned_hyperparameters']['params_num_layers'] = student_model_args_dict['tuned_hyperparameters']['params_num_layers']
-teacher_model_args_dict['pretrain'] = teacher_model_args_dict['rna_valid_idx']  = teacher_model_args_dict['atac_valid_idx'] = None
-#student_model_args_dict['args'].genes_by_peaks_str = None  # setting genes_by_peaks to None creates large processing overhead, can just use one of the preset configs for now
-
-## Create student model
-student_model = CLIP(**teacher_model_args_dict, trial=None).to(device=device)
-
-## Load student state_dict into student model
-student_model.load_state_dict(student_model_args_dict['model_state_dict'])
-student_model.eval()
 
 #%% load data
 
-#student_model.args.genes_by_peaks_str = None
-student_model.args.genes_by_peaks_str = '17563_by_100000'
-
-student_model.args.source_dataset = 'mdd'
-student_model.args.target_dataset = None
+args = SimpleNamespace(
+    source_dataset='MDD',
+    target_dataset=None,
+    genes_by_peaks_str='17563_by_100000'
+)
 
 mdd_rna, mdd_atac, mdd_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, _, _ = \
-    mdd_setup(student_model.args, pretrain=None, return_raw_data=True, return_type='data',\
+    mdd_setup(args, return_raw_data=True, return_type='data',\
     overlapping_subjects_only=False)
 
 mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
@@ -1108,7 +1087,7 @@ def c_sweep(X, Y, c_range=[0.1, 0.5, 2, 10]):
     plt.show()
 
 
-#%%
+#%% SEACells
 import SEACells
 import scanpy as sc
 
