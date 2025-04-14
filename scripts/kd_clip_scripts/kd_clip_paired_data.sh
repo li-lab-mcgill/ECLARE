@@ -40,7 +40,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='11165123'
+clip_job_id='14080516'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
@@ -101,7 +101,7 @@ run_eclare_task_on_gpu() {
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --batch_size=800 \
+    --batch_size=1000 \
     --feature="$feature" \
     --distil_lambda=0.1 &
     #--tune_hyperparameters \
