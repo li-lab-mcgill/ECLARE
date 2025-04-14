@@ -93,7 +93,7 @@ run_clip_task_on_gpu() {
     --source_dataset=$source_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --batch_size=800 \
+    --batch_size=1000 \
     --feature="${feature}" \
     --metric_to_optimize="1-foscttm" &
     #--tune_hyperparameters \

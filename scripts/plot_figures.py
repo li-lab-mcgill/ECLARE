@@ -33,7 +33,10 @@ from ot import solve as ot_solve
 from collections import defaultdict
 from string import ascii_uppercase
 import pybedtools
+
 from mlflow.tracking import MlflowClient
+import mlflow.pytorch
+from mlflow.models import Model
 
 from eclare.models import load_CLIP_model, CLIP
 from eclare.setup_utils import mdd_setup
@@ -572,14 +575,8 @@ def extract_target_source_replicate(df, has_source=True):
 
 def metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets, unique_sources, ax=None):
 
-    # For clip, use the target metric values
-    #df.loc[df['dataset']=='clip', metric] = df.loc[df['dataset']=='clip', 'target_'+metric].copy()
-
     # Try to convert the metric column to float, replacing errors with NaN
     df[metric] = pd.to_numeric(df[metric], errors='coerce')
-    
-    # Drop rows with NaN values in the metric column
-    #df = df.dropna(subset=[metric])
 
     sns.boxplot(
         x="dataset",
@@ -748,12 +745,12 @@ cuda_available = torch.cuda.is_available()
 #%%
 ## Create dict for methods and job_ids
 methods_id_dict = {
-    'clip': '10161404',
-    'kd_clip': '10210217',
-    'eclare': '10213018',
+    'clip': '13135338',
+    'kd_clip': '13214343',
+    'eclare': '13214410',
     'clip_mdd': '10161509',
     'kd_clip_mdd': '10213616',
-    'eclare_mdd': '11073137', #16105437
+    'eclare_mdd': '11151959', #16105437
     'mojitoo': '20212916',
     'multiVI': '18175921',
     'glue': '18234131_19205223',
@@ -983,12 +980,21 @@ fig4_clips_mdd.savefig(os.path.join(figpath, 'fig4_clips_mdd.png'), bbox_inches=
 ## MDD GRN analysis
 device = 'cuda' if cuda_available else 'cpu'
 
-## Load student state_dict into memory
-best_multiclip_mdd = str(mdd_df_multiclip['ilisis'].droplevel(0).argmax())
-student_job_id = f'scMulticlip_mdd_{methods_id_dict["scMulticlip_mdd"]}'
+## Find path to best ECLARE model
+best_eclare_mdd = str(ECLARE_mdd_metrics_df['multimodal_ilisi'].argmax())
+student_job_id = f'eclare_mdd_{methods_id_dict["eclare_mdd"]}'
 paths_root = os.path.join(os.environ['OUTPATH'], student_job_id)
-student_model_path = os.path.join(paths_root, 'mdd', best_multiclip_mdd, 'student_model.pt')
-student_model_args_dict = torch.load(student_model_path, map_location='cpu')
+student_model_path = os.path.join(paths_root, 'MDD', best_eclare_mdd, 'model_uri.txt')
+
+## Load the model and metadata
+with open(student_model_path, 'r') as f:
+    model_uris = f.read().strip().splitlines()
+    model_uri = model_uris[0]
+
+## Set tracking URI to ECLARE_ROOT/mlruns and load model & metadata
+mlflow.set_tracking_uri(os.path.join(os.environ['ECLARE_ROOT'], 'mlruns'))
+model = mlflow.pytorch.load_model(model_uri)
+model_metadata = Model.load(model_uri)
 
 ## Instantiate student model args dict from one of the source datasets, later overwrite with target dataset
 teachers_job_id = 'clip_mdd_15155920'

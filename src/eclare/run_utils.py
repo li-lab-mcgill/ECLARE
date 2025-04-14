@@ -467,9 +467,9 @@ def eclare_pass(
             total_loss = (lambd * distil_loss) + ((1-lambd) * align_loss_scaled)
 
             # Accumulate scalar loss values for logging
-            epoch_distil_loss[dataset] += distil_loss.mean().item()
-            epoch_align_loss[dataset] += align_loss_scaled.mean().item()
-            epoch_total_losses[dataset] += total_loss.mean().item()
+            epoch_total_losses[dataset]     += total_loss.mean().item()
+            epoch_distil_loss[dataset]      += distil_loss.mean().item()
+            epoch_align_loss[dataset]       += align_loss_scaled.mean().item()
 
 
         ## Compute mean distillation loss
@@ -480,6 +480,7 @@ def eclare_pass(
         offsets = torch.stack(offsets)
         offsets_T = torch.stack(offsets_T)
 
+        ## Compute distillation loss weighted by alignment loss, if more than one teacher
         mean_distil_loss, _ = \
             knowledge_distillation_fn.distil_loss_weighting( distil_losses, distil_losses_T, (offsets - align_losses), (offsets_T - align_losses_T))
 
@@ -489,8 +490,11 @@ def eclare_pass(
 
         ## Compute total loss as convex combination of CLIP loss and average distillation loss
         total_loss = (lambd * mean_distil_loss) + ((1-lambd) * align_loss_scaled)
-        epoch_distil_loss[target_dataset_og] += mean_distil_loss.item()
-        epoch_total_losses[target_dataset_og] += total_loss.item()
+
+        ## Save losses
+        epoch_total_losses[target_dataset_og]   += total_loss.item()
+        epoch_distil_loss[target_dataset_og]    += mean_distil_loss.item()
+        epoch_align_loss[target_dataset_og]     += align_loss_scaled.item()
 
         if (optimizer is not None):
             optimizer.zero_grad()
@@ -570,12 +574,26 @@ def run_ECLARE(
             loop_order
         )
 
+
+        ## Update alignment loss scale
+        target_distil_loss = valid_losses['distil_loss_'+args.target_dataset]
+        target_align_loss = valid_losses['align_loss_'+args.target_dataset]
+        align_loss_scale = (target_distil_loss / target_align_loss)
+        knowledge_distillation_fn.align_loss_scale = align_loss_scale
+
+        ## Retroactively scale teacher & student CLIP losses
+        datasets = list(teacher_rna_valid_loaders.keys())
+        for dataset in datasets+[args.target_dataset]:
+            valid_losses['align_loss_'+dataset] = valid_losses['align_loss_'+dataset] * align_loss_scale
+            valid_losses['total_loss_'+dataset] = (args.distil_lambda * valid_losses['distil_loss_'+dataset]) + ((1-args.distil_lambda) * valid_losses['align_loss_'+dataset])
+
         ## get metrics
         metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device, paired=paired)
         metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
 
         # Log all metrics at once with MLflow
         mlflow.log_metrics(metrics, step=0)
+
 
 
     print('Iterating over epochs, batches & datasets')
