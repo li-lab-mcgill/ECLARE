@@ -152,7 +152,10 @@ class Knowledge_distillation_fn(torch.nn.Module):
         self.device = device
         self.paired = paired
         self.align_loss_scale = 1 # to be updated later in script
+
         self.weigh_distil_by_align_type = weigh_distil_by_align_type
+        #if weigh_distil_by_align_type == 'sample':
+        #    assert paired, "Cannot use sample-based weighting if dataset is not paired"
 
         ## lower temperature = lower entropy, and vice versa
         self.student_temperature = torch.tensor(student_temperature, requires_grad=False).to(device)
@@ -245,10 +248,10 @@ class Knowledge_distillation_fn(torch.nn.Module):
             align_loss_T_scaled = None
 
         elif teacher_or_student == 'teacher':
-            align_loss, align_loss_T = self.ot_clip_loss_forward(target_logits, None)
-            offset = target_logits.exp().sum(1).log()       # dim: batch size
-            offset_T = target_logits.T.exp().sum(1).log()   # dim: batch size
-            align_loss_T_scaled = self.align_loss_scale * align_loss_T
+            align_loss, align_loss_T = self.ot_clip_loss_forward(target_logits, None).detach()
+            offset = target_logits.exp().sum(1).log().detach()       # dim: batch size
+            offset_T = target_logits.T.exp().sum(1).log().detach()   # dim: batch size
+            align_loss_T_scaled = (self.align_loss_scale * align_loss_T).detach()
 
         ## scale alignment loss
         align_loss_scaled = self.align_loss_scale * align_loss
@@ -262,8 +265,8 @@ class Knowledge_distillation_fn(torch.nn.Module):
     def distil_loss_weighting(self, distil_losses, distil_losses_T, align_losses_scaled_offset, align_losses_T_scaled_offset):
 
         ## for 'batch' or 'sample', gets overwritten if its 'none'
-        align_losses_weights = torch.softmax(distil_losses, dim=0)
-        align_losses_T_weights = torch.softmax(distil_losses_T, dim=0)
+        align_losses_weights = torch.softmax(align_losses_scaled_offset, dim=0)
+        align_losses_T_weights = torch.softmax(align_losses_T_scaled_offset, dim=0)
 
         if self.weigh_distil_by_align_type == 'none': # in reality, no need to create uniform weights, but leads to losses on more similar scales than other align types
 
@@ -275,8 +278,8 @@ class Knowledge_distillation_fn(torch.nn.Module):
             distil_loss = 0.5 * (distil_loss + distil_loss_T).mean()  
 
         elif self.weigh_distil_by_align_type == 'batch':# or (not self.paired and self.weigh_distil_by_align_type != 'none'): # for MMD align loss, cannot do 'sample', so default to 'batch'
-            distil_loss = (distil_losses * align_losses_weights.unsqueeze(1)).sum(0)            # teacher-based weighting (broadcasted)
-            distil_loss_T = (distil_losses_T * align_losses_T_weights.unsqueeze(1)).sum(0)      # teacher-based weighting (broadcasted)
+            distil_loss = (distil_losses * align_losses_weights.mean(1, keepdim=True)).sum(0)            # teacher-based weighting (broadcasted)
+            distil_loss_T = (distil_losses_T * align_losses_T_weights.mean(1, keepdim=True)).sum(0)      # teacher-based weighting (broadcasted)
             distil_loss = 0.5 * (distil_loss + distil_loss_T).mean()                            # sample-based averaging
 
         elif self.weigh_distil_by_align_type == 'sample':

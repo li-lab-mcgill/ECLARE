@@ -472,7 +472,7 @@ def eclare_pass(
             epoch_align_loss[dataset]       += align_loss_scaled.mean().item()
 
 
-        ## Compute mean distillation loss
+        ## Stack teacher distillation losses
         distil_losses = torch.stack(distil_losses)
         align_losses = torch.stack(align_losses)
         distil_losses_T = torch.stack(distil_losses_T)
