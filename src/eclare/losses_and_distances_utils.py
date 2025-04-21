@@ -248,10 +248,10 @@ class Knowledge_distillation_fn(torch.nn.Module):
             align_loss_T_scaled = None
 
         elif teacher_or_student == 'teacher':
-            align_loss, align_loss_T = self.ot_clip_loss_forward(target_logits, None).detach()
-            offset = target_logits.exp().sum(1).log().detach()       # dim: batch size
-            offset_T = target_logits.T.exp().sum(1).log().detach()   # dim: batch size
-            align_loss_T_scaled = (self.align_loss_scale * align_loss_T).detach()
+            align_loss, align_loss_T = self.ot_clip_loss_forward(target_logits, None)
+            offset = target_logits.exp().sum(1).log()       # dim: batch size
+            offset_T = target_logits.T.exp().sum(1).log()   # dim: batch size
+            align_loss_T_scaled = self.align_loss_scale * align_loss_T
 
         ## scale alignment loss
         align_loss_scaled = self.align_loss_scale * align_loss
