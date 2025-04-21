@@ -137,38 +137,6 @@ if __name__ == "__main__":
 
                 model, _ = run_CLIP(**run_args, params=default_hyperparameters)
                 model_str = "trained_model"
-
-                ## UMAP: source dataset
-                rna_latents, atac_latents = get_latents(model, rna_valid_loader.dataset.adatas[0], atac_valid_loader.dataset.adatas[0], return_tensor=False)
-
-                rna_celltypes = rna_valid_loader.dataset.adatas[0].obs['cell_type'].values
-                atac_celltypes = atac_valid_loader.dataset.adatas[0].obs['cell_type'].values
-                color_map_ct = create_celltype_palette(rna_celltypes.categories, atac_celltypes.categories, plot_color_palette=False)
-
-                rna_condition = ['nan'] * len(rna_celltypes)
-                atac_condition = ['nan'] * len(atac_celltypes)
-
-                umap_embedding, umap_figure = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
-                umap_figure.suptitle(f"source dataset: {args.source_dataset}", fontsize=14, y=0.98)
-                umap_figure.tight_layout()
-                umap_figure.savefig(os.path.join(args.outdir, 'source_umap_embeddings.png'))
-                mlflow.log_figure(umap_figure, 'source_umap_embeddings.png')
-
-                ## UMAP: target dataset
-                rna_latents, atac_latents = get_latents(model, target_rna_valid_loader.dataset.adatas[0], target_atac_valid_loader.dataset.adatas[0], return_tensor=False)
-
-                rna_celltypes = target_rna_valid_loader.dataset.adatas[0].obs['cell_type'].values
-                atac_celltypes = target_atac_valid_loader.dataset.adatas[0].obs['cell_type'].values
-                color_map_ct = create_celltype_palette(rna_celltypes.categories, atac_celltypes.categories, plot_color_palette=False)
-
-                rna_condition = ['nan'] * len(rna_celltypes)
-                atac_condition = ['nan'] * len(atac_celltypes)
-                
-                umap_embedding, umap_figure = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
-                umap_figure.suptitle(f"target dataset: {args.target_dataset}", fontsize=14, y=0.98)
-                umap_figure.tight_layout()
-                umap_figure.savefig(os.path.join(args.outdir, 'target_umap_embeddings.png'))
-                mlflow.log_figure(umap_figure, 'target_umap_embeddings.png')
     
             elif args.tune_hyperparameters:
 
@@ -226,6 +194,38 @@ if __name__ == "__main__":
             with open(os.path.join(args.outdir, 'model_uri.txt'), 'w') as f:
                 f.write(f"{runs_uri}\n")
                 f.write(f"{file_uri}\n")
+
+            ## UMAP: source dataset
+            rna_latents, atac_latents = get_latents(model, rna_valid_loader.dataset.adatas[0], atac_valid_loader.dataset.adatas[0], return_tensor=False)
+
+            rna_celltypes = rna_valid_loader.dataset.adatas[0].obs['cell_type'].values
+            atac_celltypes = atac_valid_loader.dataset.adatas[0].obs['cell_type'].values
+            color_map_ct = create_celltype_palette(rna_celltypes.categories, atac_celltypes.categories, plot_color_palette=False)
+
+            rna_condition = ['nan'] * len(rna_celltypes)
+            atac_condition = ['nan'] * len(atac_celltypes)
+
+            umap_embedding, umap_figure = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
+            umap_figure.suptitle(f"source dataset: {args.source_dataset}", fontsize=14, y=0.98)
+            umap_figure.tight_layout()
+            umap_figure.savefig(os.path.join(args.outdir, 'source_umap_embeddings.png'))
+            mlflow.log_figure(umap_figure, 'source_umap_embeddings.png')
+
+            ## UMAP: target dataset
+            rna_latents, atac_latents = get_latents(model, target_rna_valid_loader.dataset.adatas[0], target_atac_valid_loader.dataset.adatas[0], return_tensor=False)
+
+            rna_celltypes = target_rna_valid_loader.dataset.adatas[0].obs['cell_type'].values
+            atac_celltypes = target_atac_valid_loader.dataset.adatas[0].obs['cell_type'].values
+            color_map_ct = create_celltype_palette(rna_celltypes.categories, atac_celltypes.categories, plot_color_palette=False)
+
+            rna_condition = ['nan'] * len(rna_celltypes)
+            atac_condition = ['nan'] * len(atac_celltypes)
+            
+            umap_embedding, umap_figure = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
+            umap_figure.suptitle(f"target dataset: {args.target_dataset}", fontsize=14, y=0.98)
+            umap_figure.tight_layout()
+            umap_figure.savefig(os.path.join(args.outdir, 'target_umap_embeddings.png'))
+            mlflow.log_figure(umap_figure, 'target_umap_embeddings.png')
 
             ## print output directory
             print('\n', args.outdir)

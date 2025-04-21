@@ -198,21 +198,6 @@ if __name__ == "__main__":
                 student_model, metrics_dict = run_ECLARE(**run_args, params=default_hyperparameters, device=device)
                 model_str = "trained_model"
 
-                ## create umap embeddings
-                rna_latents, atac_latents = get_latents(student_model, student_rna_valid_loader.dataset.adatas[0], student_atac_valid_loader.dataset.adatas[0], return_tensor=False)
-
-                rna_celltypes = student_rna_valid_loader.dataset.adatas[0].obs['cell_type'].values
-                atac_celltypes = student_atac_valid_loader.dataset.adatas[0].obs['cell_type'].values
-                color_map_ct = create_celltype_palette(rna_celltypes.categories, atac_celltypes.categories, plot_color_palette=False)
-
-                rna_condition = ['nan'] * len(rna_celltypes)
-                atac_condition = ['nan'] * len(atac_celltypes)
-
-                ## save umap embeddings
-                umap_embedding, umap_figure = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
-                umap_figure.savefig(os.path.join(args.outdir, 'umap_embeddings.png'))
-                mlflow.log_figure(umap_figure, 'umap_embeddings.png')
-
             else:
                 optuna.logging.set_verbosity(optuna.logging.ERROR)
                 best_params = tune_ECLARE(args, experiment_name)
@@ -220,7 +205,7 @@ if __name__ == "__main__":
                 ## run best model
                 run_args['trial'] = None
                 run_args['args'].total_epochs = 100
-                model, _ = run_ECLARE(**run_args, params=best_params, device=device)
+                student_model, _ = run_ECLARE(**run_args, params=best_params, device=device)
                 model_str = "best_model"
 
             ## infer signature
@@ -267,6 +252,28 @@ if __name__ == "__main__":
             with open(os.path.join(args.outdir, 'model_uri.txt'), 'w') as f:
                 f.write(f"{runs_uri}\n")
                 f.write(f"{file_uri}\n")
+
+            ## create umap embeddings
+            student_rna_valid_adata = student_rna_valid_loader.dataset.adatas[0]
+            student_atac_valid_adata = student_atac_valid_loader.dataset.adatas[0]
+
+            if args.target_dataset == 'MDD':
+                student_rna_valid_adata = student_rna_valid_adata[::2].copy()
+                student_atac_valid_adata = student_atac_valid_adata[::2].copy()
+
+            rna_latents, atac_latents = get_latents(student_model, student_rna_valid_adata, student_atac_valid_adata, return_tensor=False)
+
+            rna_celltypes = student_rna_valid_adata.obs['cell_type'].values
+            atac_celltypes = student_atac_valid_adata.obs['cell_type'].values
+            color_map_ct = create_celltype_palette(rna_celltypes.categories, atac_celltypes.categories, plot_color_palette=False)
+
+            rna_condition = ['nan'] * len(rna_celltypes)
+            atac_condition = ['nan'] * len(atac_celltypes)
+
+            ## save umap embeddings
+            umap_embedding, umap_figure = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
+            umap_figure.savefig(os.path.join(args.outdir, 'umap_embeddings.png'))
+            mlflow.log_figure(umap_figure, 'umap_embeddings.png')
 
     ## print output directory
     print('\n', args.outdir)

@@ -746,18 +746,29 @@ cuda_available = torch.cuda.is_available()
 #%%
 ## Create dict for methods and job_ids
 methods_id_dict = {
-    'clip': '13135338',
-    'kd_clip': '13214343',
-    'eclare': '13214410',
-    'clip_mdd': '10161509',
-    'kd_clip_mdd': '10213616',
-    'eclare_mdd': '11151959', #16105437
+    'clip': '14215752',
+    'kd_clip': '16090251',
+    'eclare': '16091509',
+    'clip_mdd': '16204608',
+    'kd_clip_mdd': '17082436',
+    'eclare_mdd': '17082437', #16105437
     'mojitoo': '20212916',
     'multiVI': '18175921',
     'glue': '18234131_19205223',
     'scDART': '22083939', #'19150754',
     'scjoint': '19115016'
 }
+
+## define search strings
+search_strings = {
+    'clip': 'CLIP' + '_' + methods_id_dict['clip'],
+    'kd_clip': 'KD_CLIP' + '_' + methods_id_dict['kd_clip'],
+    'eclare': 'ECLARE' + '_' + methods_id_dict['eclare'],
+    'clip_mdd': 'CLIP' + '_' + methods_id_dict['clip_mdd'],
+    'kd_clip_mdd': 'KD_CLIP' + '_' + methods_id_dict['kd_clip_mdd'],
+    'eclare_mdd': 'ECLARE' + '_' + methods_id_dict['eclare_mdd']
+}
+
 
 def download_mlflow_runs(experiment_name):
     
@@ -807,7 +818,7 @@ def download_mlflow_runs(experiment_name):
     
     return output_path
 
-## paired data
+#%% paired data
 experiment_name = f"clip_{methods_id_dict['clip']}"
 
 if os.path.exists(os.path.join(os.environ['OUTPATH'], experiment_name, "runs.csv")):
@@ -819,17 +830,17 @@ else:
 
 all_metrics_df = pd.read_csv(all_metrics_csv_path)
 
-CLIP_header_idx = np.where(all_metrics_df['run_name'].str.startswith('CLIP'))[0].item()
-KD_CLIP_header_idx = np.where(all_metrics_df['run_name'].str.startswith('KD_CLIP'))[0].item()
-ECLARE_header_idx = np.where(all_metrics_df['run_name'].str.startswith('ECLARE'))[0].item()
+CLIP_header_idx = np.where(all_metrics_df['run_name'].str.startswith(search_strings['clip']))[0]
+KD_CLIP_header_idx = np.where(all_metrics_df['run_name'].str.startswith(search_strings['kd_clip']))[0]
+ECLARE_header_idx = np.where(all_metrics_df['run_name'].str.startswith(search_strings['eclare']))[0]
 
 CLIP_run_id = all_metrics_df.iloc[CLIP_header_idx]['run_id']
 KD_CLIP_run_id = all_metrics_df.iloc[KD_CLIP_header_idx]['run_id']
 ECLARE_run_id = all_metrics_df.iloc[ECLARE_header_idx]['run_id']
 
-CLIP_metrics_df = all_metrics_df.loc[all_metrics_df['parent_run_id'] == CLIP_run_id]
-KD_CLIP_metrics_df = all_metrics_df.loc[all_metrics_df['parent_run_id'] == KD_CLIP_run_id]
-ECLARE_metrics_df = all_metrics_df.loc[all_metrics_df['parent_run_id'] == ECLARE_run_id]
+CLIP_metrics_df = all_metrics_df.loc[all_metrics_df['parent_run_id'].isin(CLIP_run_id)]
+KD_CLIP_metrics_df = all_metrics_df.loc[all_metrics_df['parent_run_id'].isin(KD_CLIP_run_id)]
+ECLARE_metrics_df = all_metrics_df.loc[all_metrics_df['parent_run_id'].isin(ECLARE_run_id)]
 
 CLIP_metrics_df = extract_target_source_replicate(CLIP_metrics_df)
 KD_CLIP_metrics_df = extract_target_source_replicate(KD_CLIP_metrics_df)
@@ -843,7 +854,7 @@ combined_metrics_df = pd.concat([ECLARE_metrics_df, KD_CLIP_metrics_df, CLIP_met
 
 metric_boxplots(combined_metrics_df)
 
-## unpaired MDD data
+#%% unpaired MDD data
 experiment_name = f"clip_mdd_{methods_id_dict['clip_mdd']}"
 
 if os.path.exists(os.path.join(os.environ['OUTPATH'], experiment_name, "runs.csv")):
@@ -855,17 +866,17 @@ else:
 
 mdd_metrics_df = pd.read_csv(all_metrics_csv_path)
 
-CLIP_mdd_header_idx = np.where(mdd_metrics_df['run_name'].str.startswith('CLIP'))[0].item()
-KD_CLIP_mdd_header_idx = np.where(mdd_metrics_df['run_name'].str.startswith('KD_CLIP'))[0].item()
-ECLARE_mdd_header_idx = np.where(mdd_metrics_df['run_name'].str.startswith('ECLARE'))[0].item()
+CLIP_mdd_header_idxs = np.where(mdd_metrics_df['run_name'].str.startswith(search_strings['clip_mdd']))[0]
+KD_CLIP_mdd_header_idxs = np.where(mdd_metrics_df['run_name'].str.startswith(search_strings['kd_clip_mdd']))[0]
+ECLARE_mdd_header_idxs = np.where(mdd_metrics_df['run_name'].str.startswith(search_strings['eclare_mdd']))[0]
 
-CLIP_mdd_run_id = mdd_metrics_df.iloc[CLIP_mdd_header_idx]['run_id']
-KD_CLIP_mdd_run_id = mdd_metrics_df.iloc[KD_CLIP_mdd_header_idx]['run_id']
-ECLARE_mdd_run_id = mdd_metrics_df.iloc[ECLARE_mdd_header_idx]['run_id']
+CLIP_mdd_run_id = mdd_metrics_df.iloc[CLIP_mdd_header_idxs]['run_id']
+KD_CLIP_mdd_run_id = mdd_metrics_df.iloc[KD_CLIP_mdd_header_idxs]['run_id']
+ECLARE_mdd_run_id = mdd_metrics_df.iloc[ECLARE_mdd_header_idxs]['run_id']
 
-CLIP_mdd_metrics_df = mdd_metrics_df.loc[mdd_metrics_df['parent_run_id'] == CLIP_mdd_run_id]
-KD_CLIP_mdd_metrics_df = mdd_metrics_df.loc[mdd_metrics_df['parent_run_id'] == KD_CLIP_mdd_run_id]
-ECLARE_mdd_metrics_df = mdd_metrics_df.loc[mdd_metrics_df['parent_run_id'] == ECLARE_mdd_run_id]
+CLIP_mdd_metrics_df = mdd_metrics_df.loc[mdd_metrics_df['parent_run_id'].isin(CLIP_mdd_run_id)]
+KD_CLIP_mdd_metrics_df = mdd_metrics_df.loc[mdd_metrics_df['parent_run_id'].isin(KD_CLIP_mdd_run_id)]
+ECLARE_mdd_metrics_df = mdd_metrics_df.loc[mdd_metrics_df['parent_run_id'].isin(ECLARE_mdd_run_id)]
 
 CLIP_mdd_metrics_df = extract_target_source_replicate(CLIP_mdd_metrics_df)
 KD_CLIP_mdd_metrics_df = extract_target_source_replicate(KD_CLIP_mdd_metrics_df)
@@ -977,8 +988,8 @@ fig3_clips_paired.savefig(os.path.join(figpath, 'fig3_clips_paired.png'), bbox_i
 fig4_clips_mdd.savefig(os.path.join(figpath, 'fig4_clips_mdd.png'), bbox_inches='tight', dpi=300)
 
 
-#%%
-## MDD GRN analysis
+#%% MDD GRN analysis
+
 device = 'cuda' if cuda_available else 'cpu'
 
 ## Find path to best ECLARE model
@@ -1029,7 +1040,18 @@ unique_sexes = ['Female', 'Male']
 #%% project MDD nuclei into latent space
 
 mdd_rna_sampled, mdd_atac_sampled, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition = \
-   sample_proportional_celltypes_and_condition(mdd_rna, mdd_atac, batch_size=5000)
+   sample_proportional_celltypes_and_condition(mdd_rna, mdd_atac, batch_size=10000)
+
+# subset to 'Mic' celltype
+'''
+mdd_rna_sampled = mdd_rna[mdd_rna.obs[rna_celltype_key] == 'Mic']
+mdd_atac_sampled = mdd_atac[mdd_atac.obs[atac_celltype_key] == 'Mic']
+mdd_rna_condition = mdd_rna.obs[rna_condition_key][mdd_rna.obs[rna_celltype_key] == 'Mic']
+mdd_atac_condition = mdd_atac.obs[atac_condition_key][mdd_atac.obs[atac_celltype_key] == 'Mic']
+mdd_rna_celltypes = mdd_rna.obs[rna_celltype_key][mdd_rna.obs[rna_celltype_key] == 'Mic']
+mdd_atac_celltypes = mdd_atac.obs[atac_celltype_key][mdd_atac.obs[atac_celltype_key] == 'Mic']
+'''
+
 
 student_model = student_model.to('cpu')
 rna_latents, atac_latents = get_latents(student_model, mdd_rna_sampled, mdd_atac_sampled, return_tensor=True)
@@ -1091,32 +1113,37 @@ def c_sweep(X, Y, c_range=[0.1, 0.5, 2, 10]):
 import SEACells
 import scanpy as sc
 
-def run_SEACells(adata, build_kernel_on, redo_umap=False, key='X_umap'):
+def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key='X_umap'):
 
     # Copy the counts to ".raw" attribute of the anndata since it is necessary for downstream analysis
     # This step should be performed after filtering 
-    raw_ad = sc.AnnData(adata.X)
-    raw_ad.obs_names, raw_ad.var_names = adata.obs_names, adata.var_names
-    adata.raw = raw_ad
+    raw_ad = sc.AnnData(adata_train.X)
+    raw_ad.obs_names, raw_ad.var_names = adata_train.obs_names, adata_train.var_names
+    adata_train.raw = raw_ad
+
+    raw_ad = sc.AnnData(adata_apply.X)
+    raw_ad.obs_names, raw_ad.var_names = adata_apply.obs_names, adata_apply.var_names
+    adata_apply.raw = raw_ad
 
     # Normalize cells, log transform and compute highly variable genes
-    sc.pp.normalize_per_cell(adata)
-    sc.pp.log1p(adata)
-    sc.pp.highly_variable_genes(adata, n_top_genes=1500)
+    #sc.pp.normalize_per_cell(adata_train)
+    #sc.pp.log1p(adata_train)
+    #sc.pp.highly_variable_genes(adata_train, n_top_genes=1500)
 
     ## User defined parameters
 
     ## Core parameters 
-    n_SEACells = max(adata.n_obs // 75, 30)
+    n_SEACells = max(adata_train.n_obs // 75, 30)
     print(f'Number of SEACells: {n_SEACells}')
     n_waypoint_eigs = 15 # Number of eigenvalues to consider when initializing metacells
 
     ## Initialize SEACells model
-    model = SEACells.core.SEACells(adata, 
+    model = SEACells.core.SEACells(adata_train, 
                     build_kernel_on=build_kernel_on, 
                     n_SEACells=n_SEACells, 
                     n_waypoint_eigs=n_waypoint_eigs,
                     convergence_epsilon = 1e-5,
+                    max_franke_wolfe_iters=100,
                     use_gpu=False)
 
     model.construct_kernel_matrix()
@@ -1128,22 +1155,34 @@ def run_SEACells(adata, build_kernel_on, redo_umap=False, key='X_umap'):
     # Fit SEACells model
     model.fit(min_iter=10, max_iter=50)
 
+    ## Get number of cells in each SEACell
+    n_cells_per_SEACell = adata_train.obs['SEACell'].value_counts(sort=False)
+    assert np.all(n_cells_per_SEACell.index == adata_train.obs['SEACell'].unique()) # unique() is how SEACells gather cells into SEACells
+
+    ## add SEACell labels to apply data
+    adata_apply.obs['SEACell'] = adata_train.obs['SEACell'].values
+
     ## summarize by SEACell
-    SEACell_ad = SEACells.core.summarize_by_SEACell(adata, SEACells_label='SEACell', summarize_layer='raw')
+    SEACell_ad_train = SEACells.core.summarize_by_SEACell(adata_train, SEACells_label='SEACell', summarize_layer='raw')
+    SEACell_ad_apply = SEACells.core.summarize_by_SEACell(adata_apply, SEACells_label='SEACell', summarize_layer='raw')
+
+    ## divide aggregated SEACell counts by number of cells in each SEACell
+    SEACell_ad_train.X = SEACell_ad_train.X.multiply(1 / n_cells_per_SEACell.values[:,None]).tocsr()
+    SEACell_ad_apply.X = SEACell_ad_apply.X.multiply(1 / n_cells_per_SEACell.values[:,None]).tocsr()
 
     if redo_umap:
         #sc.pp.pca(adata, n_comps=15)
-        sc.pp.neighbors(adata)
-        sc.tl.umap(adata)
+        sc.pp.neighbors(adata_train)
+        sc.tl.umap(adata_train)
 
-        SEACells.plot.plot_2D(adata, key='X_umap', colour_metacells=False)
-        SEACells.plot.plot_2D(adata, key='X_umap', colour_metacells=True)
+        SEACells.plot.plot_2D(adata_train, key='X_umap', colour_metacells=False)
+        SEACells.plot.plot_2D(adata_train, key='X_umap', colour_metacells=True)
 
     else:
-        SEACells.plot.plot_2D(adata, key=key, colour_metacells=False)
-        SEACells.plot.plot_2D(adata, key=key, colour_metacells=True)
+        SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=False)
+        SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=True)
 
-    return SEACell_ad
+    return SEACell_ad_train, SEACell_ad_apply
 
 
 
@@ -1163,6 +1202,14 @@ maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Ma
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.05.tsv'), sep='\t')
 #maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
 
+## get HVG features
+sc.pp.highly_variable_genes(mdd_rna)
+sc.pp.highly_variable_genes(mdd_atac, n_top_genes=10000)
+
+## use all peaks and genes
+peaks_indices_hvg = mdd_atac.var['highly_variable'].astype(bool)
+genes_indices_hvg = mdd_rna.var['highly_variable'].astype(bool)
+
 do_corrs_or_cosines = 'correlations'
 
 for sex in unique_sexes:
@@ -1174,12 +1221,16 @@ for sex in unique_sexes:
         celltype_peaks = celltype_peaks_df['peakName'].str.split('-')
         celltype_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame({'chrom': celltype_peaks.str[0], 'start': celltype_peaks.str[1], 'end': celltype_peaks.str[2]}))
         
-        for condition in unique_conditions:
+        ## select peaks indices using bedtools intersect
+        peaks_indices_dar = mdd_peaks_bed.intersect(celltype_peaks_bed, c=True).to_dataframe()['name'].astype(bool)
+        genes_indices_deg = mdd_rna.var_names.isin(celltype_degs_df['gene'])
 
-            ## select peaks indices using bedtools intersect
-            
-            peaks_indices = mdd_peaks_bed.intersect(celltype_peaks_bed, c=True).to_dataframe()['name'].astype(bool)
-            genes_indices = mdd_rna.var_names.isin(celltype_degs_df['gene'])
+        #peaks_indices = peaks_indices_hvg.values | peaks_indices_dar.values
+        genes_indices = genes_indices_hvg.values | genes_indices_deg
+        peaks_indices = peaks_indices_dar
+        #genes_indices = genes_indices_deg
+
+        for condition in unique_conditions:
 
             print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {peaks_indices.sum()} - DEG genes: {genes_indices.sum()}')
 
@@ -1194,9 +1245,6 @@ for sex in unique_sexes:
 
             mdd_rna_sampled_group = mdd_rna[rna_indices]
             mdd_atac_sampled_group = mdd_atac[atac_indices]
-
-            mdd_rna_sampled_group_seacells = run_SEACells(mdd_rna_sampled_group, build_kernel_on='X_pca', key='X_UMAP_Harmony_Batch_Sample_Chemistry')
-            mdd_atac_sampled_group_seacells = run_SEACells(mdd_atac_sampled_group, build_kernel_on='X_lsi')
 
             if len(rna_indices) == 0 or len(atac_indices) == 0:
                 print(f'No indices')
@@ -1226,6 +1274,12 @@ for sex in unique_sexes:
             rna_latents = rna_latents[plan.argmax(axis=1)]
             mdd_rna_sampled_group = mdd_rna_sampled_group[plan.argmax(axis=1).numpy()]
 
+            ## select genes and peaks before SEACells
+            mdd_rna_sampled_group = mdd_rna_sampled_group[:,genes_indices]
+            mdd_atac_sampled_group = mdd_atac_sampled_group[:,peaks_indices]
+
+            mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_UMAP_Harmony_Batch_Sample_Chemistry')
+
             X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
             X_atac = torch.from_numpy(mdd_atac_sampled_group_seacells.X.toarray())
 
@@ -1233,8 +1287,8 @@ for sex in unique_sexes:
             #X_atac = torch.from_numpy(mdd_atac_sampled_group.X.toarray())
 
             ## select DEG genes and DAR peaks
-            X_rna = X_rna[:,genes_indices]
-            X_atac = X_atac[:,peaks_indices]
+            #X_rna = X_rna[:,genes_indices]
+            #X_atac = X_atac[:,peaks_indices]
 
             ## detect cells with no gene expression and no chromatin accessibility
             no_rna_cells = X_rna.sum(1) == 0
@@ -1255,6 +1309,10 @@ for sex in unique_sexes:
 
                 corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
                 corr = corr[0:genes_indices.sum(), genes_indices.sum():]
+
+                if corr.isnan().any():
+                    print(f'NaN values in correlation matrix')
+                    corr[corr.isnan()] = 0
 
                 genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
                 n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
@@ -1285,7 +1343,8 @@ for sex in unique_sexes:
     for celltype in unique_celltypes:
 
         celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id'].str.startswith(celltype)]
-        genes_names = mdd_rna.var_names[mdd_rna.var_names.isin(celltype_degs_df['gene'])]
+        #genes_names = mdd_rna.var_names[mdd_rna.var_names.isin(celltype_degs_df['gene'])]
+        genes_names = mdd_rna.var_names[genes_indices]
 
         corr_case = genes_by_peaks_corrs_dict[sex][celltype]['Case']
         corr_control = genes_by_peaks_corrs_dict[sex][celltype]['Control']
@@ -1418,4 +1477,22 @@ for sex in unique_sexes:
         '''
         break
     break
-# %%
+#%% GSEApy
+
+import gseapy as gp
+
+ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': Z})
+ranked_list = ranked_list.sort_values(by='score', ascending=False)
+
+pre_res = gp.prerank(rnk=ranked_list,
+                     gene_sets='Reactome_2022', # apparently, GO_Biological_Process_2021 and Reactome_2022 better for neurological disorders
+                     outdir=os.path.join(os.environ['OUTPATH'], 'gseapy_results'),
+                     min_size=1,
+                     max_size=500,
+                     permutation_num=1000)
+
+pre_res.res2d.head()
+
+#%%
+
+

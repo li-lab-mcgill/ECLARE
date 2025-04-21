@@ -837,7 +837,7 @@ def mdd_setup(
             ac.pp.tfidf(atac, scale_factor=1e4)
             sc.pp.normalize_total(atac, target_sum=1e4)
             sc.pp.log1p(atac)
-            sc.pp.highly_variable_genes(atac, n_top_genes=56354) # sc.pl.highly_variable_genes(atac)
+            sc.pp.highly_variable_genes(atac, n_top_genes=100000) # sc.pl.highly_variable_genes(atac)
             sc.pp.scale(atac, zero_center=False, max_value=10)
             genes_peaks_dict['peaks'] = genes_peaks_dict['peaks'][atac.var['highly_variable'].astype(bool)]
             genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ : , atac.var['highly_variable'].astype(bool) ]
@@ -846,7 +846,7 @@ def mdd_setup(
             #sc.pp.filter_genes(rna, min_counts=3)
             sc.pp.normalize_total(rna, target_sum=1e4)
             sc.pp.log1p(rna)
-            sc.pp.highly_variable_genes(rna, n_top_genes=10112) # sc.pl.highly_variable_genes(rna)
+            sc.pp.highly_variable_genes(rna, n_top_genes=18000) # sc.pl.highly_variable_genes(rna)
             sc.pp.scale(rna, zero_center=False, max_value=10)
             genes_peaks_dict['genes'] = genes_peaks_dict['genes'][rna.var['highly_variable'].astype(bool)]
             genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ rna.var['highly_variable'].astype(bool) , : ]

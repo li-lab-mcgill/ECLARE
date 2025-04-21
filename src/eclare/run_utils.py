@@ -540,7 +540,7 @@ def run_ECLARE(
 
     # Instantiate the knowledge distillation loss function
     paired = (args.target_dataset != 'MDD')
-    knowledge_distillation_fn = Knowledge_distillation_fn(device=device, student_temperature=1, teacher_temperature=1, paired=paired, weigh_distil_by_align_type='none')
+    knowledge_distillation_fn = Knowledge_distillation_fn(device=device, student_temperature=1, teacher_temperature=1, paired=paired, weigh_distil_by_align_type='batch')
 
     # Define loop_order parameter
     loop_order = args.loop_order  # 'datasets_first' or 'batches_first'
@@ -558,7 +558,7 @@ def run_ECLARE(
     ## Get metrics -- valid dataset
     with torch.inference_mode():
 
-        student_model.eval()
+        #student_model.eval()
 
         valid_losses = eclare_pass(
             args.target_dataset,
@@ -573,7 +573,6 @@ def run_ECLARE(
             knowledge_distillation_fn,
             loop_order
         )
-
 
         ## Update alignment loss scale
         target_distil_loss = valid_losses['distil_loss_'+args.target_dataset]
@@ -618,7 +617,7 @@ def run_ECLARE(
 
         with torch.inference_mode():
 
-            student_model.eval()
+            #student_model.eval()
 
             valid_losses = eclare_pass(
                 args.target_dataset,

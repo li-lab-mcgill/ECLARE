@@ -27,6 +27,10 @@ datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$
 ## Preset target dataset
 target_dataset="MDD"
 
+## Define total number of epochs
+clip_job_id='16204608'
+total_epochs=100
+
 ## Define number of parallel tasks to run (replace with desired number of cores)
 N_CORES=2
 N_REPLICATES=1
@@ -37,10 +41,6 @@ random_states=()
 for i in $(seq 0 $((N_REPLICATES - 1))); do
     random_states+=($RANDOM)
 done
- 
-## Define total number of epochs
-clip_job_id='10161509'
-total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)
@@ -101,7 +101,7 @@ run_eclare_task_on_gpu() {
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="$feature" \
-    --distil_lambda=0.1 &  # Add & to run in background
+    --distil_lambda=0.1 #&  # Add & to run in background
 
     # Increment job counter
     ((current_jobs++))

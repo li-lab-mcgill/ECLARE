@@ -25,11 +25,11 @@ class CLIP(nn.Module):
         },
         'num_layers': {
             'suggest_distribution': CategoricalDistribution(choices=[1, 2]),
-            'default': 1
+            'default': 2
         },
         'dropout_p': {
             'suggest_distribution': FloatDistribution(low=0.1, high=0.9),
-            'default': 0.2
+            'default': 0.3
         },
         'temperature': {
             'suggest_distribution': FloatDistribution(low=0.01, high=5),
@@ -60,8 +60,8 @@ class CLIP(nn.Module):
         dropout_p           = hparams['dropout_p']
 
         ## encoders
-        rna_encoder     = [nn.Linear(n_genes, num_units), nn.ReLU(), MCDropout(p=dropout_p)] + (num_layers-1) * [nn.Linear(num_units, num_units), nn.ReLU(), MCDropout(p=dropout_p)]
-        atac_encoder    = [nn.Linear(n_peaks, num_units), nn.ReLU(), MCDropout(p=dropout_p)] + (num_layers-1) * [nn.Linear(num_units, num_units), nn.ReLU(), MCDropout(p=dropout_p)]
+        rna_encoder     = [nn.Linear(n_genes, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] + (num_layers-1) * [nn.Linear(num_units, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)]
+        atac_encoder    = [nn.Linear(n_peaks, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)] + (num_layers-1) * [nn.Linear(num_units, num_units), nn.ReLU(), nn.Dropout(p=dropout_p)]
 
         self.rna_to_core = nn.Sequential(*rna_encoder)
         self.atac_to_core = nn.Sequential(*atac_encoder)
