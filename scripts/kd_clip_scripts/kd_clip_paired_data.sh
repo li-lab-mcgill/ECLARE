@@ -24,12 +24,8 @@ datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 ## Reverse the order of datasets to have pbmc_multiome and mouse_brain_multiome first
 datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$i]}"; done))
 
-## Ignore first two datasets
-echo "Ignoring first two datasets: ${datasets[0]} and ${datasets[1]}"
-datasets=("${datasets[@]:2}")
-
 ## Define number of parallel tasks to run (replace with desired number of cores)
-N_CORES=3
+#N_CORES=3
 N_REPLICATES=1
 
 ## Define random state
@@ -40,8 +36,8 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='13135338'
-total_epochs=100
+clip_job_id='14215752'
+total_epochs=10
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)
@@ -101,7 +97,7 @@ run_eclare_task_on_gpu() {
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --batch_size=1000 \
+    --batch_size=800 \
     --feature="$feature" \
     --distil_lambda=0.1 &
     #--tune_hyperparameters \

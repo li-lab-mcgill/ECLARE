@@ -27,8 +27,12 @@ datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$
 ## Preset target dataset
 target_dataset="MDD"
 
+## Define total number of epochs
+clip_job_id='16204608'
+total_epochs=100
+
 ## Define number of parallel tasks to run (replace with desired number of cores)
-N_CORES=6
+N_CORES=1
 N_REPLICATES=1
 
 ## Define random state
@@ -37,10 +41,7 @@ random_states=()
 for i in $(seq 0 $((N_CORES - 1))); do
     random_states+=($RANDOM)
 done
- 
-## Define total number of epochs
-clip_job_id='10161509'
-total_epochs=100
+
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)
