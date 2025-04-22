@@ -1103,10 +1103,6 @@ def dlpfc_anderson_setup(args, cell_group='predicted.id', batch_group='Sub.batch
         atac = anndata.read_h5ad(atac_fullpath)
         rna  = anndata.read_h5ad(rna_fullpath)
 
-        ## already being loaded by other dataset, datapath of which genes-to-peaks mask is stored
-        genes_to_peaks_binary_mask = genes_peaks_dict = None
-
-        cell_group = cell_groups['atac']
 
     elif args.genes_by_peaks_str is None:
 

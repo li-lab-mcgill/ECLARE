@@ -746,9 +746,9 @@ cuda_available = torch.cuda.is_available()
 #%%
 ## Create dict for methods and job_ids
 methods_id_dict = {
-    'clip': '10161404',
-    'kd_clip': '21134451',
-    'eclare': '21134503',
+    'clip': '21140748',
+    'kd_clip': '22090727',
+    'eclare': '22090820',
     'clip_mdd': '16204608',
     'kd_clip_mdd': '17082436',
     'eclare_mdd': '17082437', #16105437
