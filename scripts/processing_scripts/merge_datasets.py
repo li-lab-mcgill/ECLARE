@@ -3,7 +3,7 @@ import os
 from numpy import isin as np_isin
 
 from setup_utils import \
-    CAtlas_Tabula_Sapiens_setup, pbmc_multiome_setup, Roussos_cerebral_cortex_setup, merge_datasets_union, snMultiome_388_human_brains_setup, AD_Anderson_et_al_setup, PD_Adams_et_al_setup, human_dlpfc_setup
+    CAtlas_Tabula_Sapiens_setup, pbmc_10x_setup, Roussos_cerebral_cortex_setup, merge_datasets_union, snMultiome_388_human_brains_setup, AD_Anderson_et_al_setup, PD_Adams_et_al_setup, human_dlpfc_setup
 
 import socket
 hostname = socket.gethostname()
@@ -36,8 +36,8 @@ if __name__ == "__main__":
     if np_isin('CAtlas_Tabula_Sapiens', args.datasets):
         setup_func = CAtlas_Tabula_Sapiens_setup
 
-    if np_isin('pbmc_multiome', args.datasets):
-        setup_funcs.append(pbmc_multiome_setup)
+    if np_isin('pbmc_10x', args.datasets):
+        setup_funcs.append(pbmc_10x_setup)
 
     if np_isin('roussos', args.datasets):
         setup_funcs.append(Roussos_cerebral_cortex_setup)

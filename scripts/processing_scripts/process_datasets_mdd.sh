@@ -18,7 +18,7 @@ target_dataset='MDD'
 echo "=== Target dataset: $target_dataset ==="
 
 ## Define paired datasets to align to MDD
-datasets=("mouse_brain_multiome" "pbmc_multiome")  # exclude SEA-AD
+datasets=("mouse_brain_10x" "pbmc_10x")  # exclude SEA-AD
 
 for source_dataset in "${datasets[@]}"; do
 

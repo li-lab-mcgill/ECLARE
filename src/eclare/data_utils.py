@@ -192,7 +192,7 @@ def create_loaders(
 
     if standard:
 
-        if dataset in ['pbmc_multiome', 'PFC_Zhu', '388_human_brains_one_subject', '388_human_brains']:
+        if dataset in ['pbmc_10x', 'PFC_Zhu', '388_human_brains_one_subject', '388_human_brains']:
             data = DenseData(data.X.toarray(), celltypes, batches)
         else:
             data = SparseData(data.X, celltypes, batches)

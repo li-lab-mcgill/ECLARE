@@ -14,7 +14,7 @@ conda activate eclare_env
 cd $ECLARE_ROOT
 
 ## Define all paired datasets
-datasets=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" "mouse_brain_multiome" "pbmc_multiome")  # exclude SEA-AD
+datasets=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" "mouse_brain_10x" "pbmc_10x")  # exclude SEA-AD
 
 ## Outer loop: iterate over datasets as the target_dataset
 for target_dataset in "${datasets[@]}"; do
