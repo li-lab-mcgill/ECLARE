@@ -253,7 +253,7 @@ def compare_dataframes_target(dataframes, value_column, dataset_labels, target_s
     return source_to_marker, target_to_color
         
 
-def compare_dataframes_target_only(dataframes, value_column, dataset_labels, ax=None):
+def10161404 compare_dataframes_target_only(dataframes, value_column, dataset_labels, ax=None):
     """
     Compare multiple dataframes with boxplots and scatter points with centered jitter,
     distinguishing only between targets (shapes).
@@ -746,9 +746,9 @@ cuda_available = torch.cuda.is_available()
 #%%
 ## Create dict for methods and job_ids
 methods_id_dict = {
-    'clip': '14215752',
-    'kd_clip': '16090251',
-    'eclare': '16091509',
+    'clip': '10161404',
+    'kd_clip': '21134451',
+    'eclare': '21134503',
     'clip_mdd': '16204608',
     'kd_clip_mdd': '17082436',
     'eclare_mdd': '17082437', #16105437
