@@ -50,12 +50,6 @@ def return_setup_func_from_dataset(dataset_name):
     elif (dataset_name == 'spatialLIBD'):
         setup_func = spatialLIBD_setup
 
-    elif (dataset_name == 'pbmc_multiome'):
-        setup_func = pbmc_multiome_setup
-
-    elif (dataset_name == 'mouse_brain_multiome'):
-        setup_func = mouse_brain_multiome_setup
-
     elif (dataset_name == 'pbmc_10x'):
         setup_func = pbmc_10x_setup
 
@@ -1847,7 +1841,7 @@ def mouse_brain_10x_setup(args, cell_group='GEX Graph-based', batch_group=None, 
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
     elif return_type == 'data':
-        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath        
+        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
 
 def pbmc_10x_setup(args, cell_group='seurat_annotations', batch_group=None, hvg_only=False, protein_coding_only=True, do_gas=False, do_peak_gene_alignment=True, return_type='loaders', return_raw_data=False, dataset='pbmc_10x'):
 
