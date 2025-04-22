@@ -640,7 +640,7 @@ def metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets
 
 def metric_boxplots(df, target_source_combinations=False, include_paired=True):
 
-    hue_order = list(["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", "Midbrain_Adams", "mouse_brain_multiome", "pbmc_multiome", "MDD"])
+    hue_order = list(["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", "Midbrain_Adams", "mouse_brain_10x", "pbmc_10x", "MDD"])
 
     unique_sources = sorted(df["source"].unique(), key=lambda item: (math.isnan(item), item) if isinstance(item, float) else (False, item))
     unique_targets = sorted(df["target"].unique())

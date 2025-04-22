@@ -56,6 +56,12 @@ def return_setup_func_from_dataset(dataset_name):
     elif (dataset_name == 'mouse_brain_multiome'):
         setup_func = mouse_brain_multiome_setup
 
+    elif (dataset_name == 'pbmc_10x'):
+        setup_func = pbmc_10x_setup
+
+    elif (dataset_name == 'mouse_brain_10x'):
+        setup_func = mouse_brain_10x_setup
+
     return setup_func
 
 def get_protein_coding_genes(rna):
@@ -897,6 +903,8 @@ def mdd_setup(
             gas_binary_mask = gas_binary_mask.fillna(0)
             
             atac_gas = np.matmul( atac.X.toarray() , gas_binary_mask.T)
+            atac_gas.index = atac.obs.index
+            return atac_gas, rna
 
     ## delete atac.raw if it exists
     if 'raw' in atac.uns.keys():
@@ -1100,7 +1108,11 @@ def dlpfc_anderson_setup(args, cell_group='predicted.id', batch_group='Sub.batch
 
         atac = anndata.read_h5ad(atac_fullpath)
         rna  = anndata.read_h5ad(rna_fullpath)
-        
+
+        ## already being loaded by other dataset, datapath of which genes-to-peaks mask is stored
+        genes_to_peaks_binary_mask = genes_peaks_dict = None
+
+        cell_group = cell_groups['atac']
 
     elif args.genes_by_peaks_str is None:
 
@@ -1528,7 +1540,7 @@ def gene_activity_score_adata(atac, rna):
     return atac_gas, rna
 
 
-def get_genes_by_peaks_str(datasets = ["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", "Midbrain_Adams", "mouse_brain_multiome", "pbmc_multiome"]):
+def get_genes_by_peaks_str(datasets = ["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", "Midbrain_Adams", "mouse_brain_10x", "pbmc_10x"]):
     """
     Get the genes_by_peaks_str for the given source and target datasets
 
@@ -1665,15 +1677,15 @@ def spatialLIBD_setup(batch_size, total_epochs, cell_group='Cluster', hvg_only=T
 
     return sp, cell_group, datapath
 
-def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', batch_group=None, hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='mouse_brain_multiome', chain_file_name=None):
+def mouse_brain_10x_setup(args, cell_group='GEX Graph-based', batch_group=None, hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='mouse_brain_10x', chain_file_name=None):
 
-    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'mouse_brain_multiome')
+    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'mouse_brain_10x')
     
     ## Lift data from mm10 to hg38 and save as MuData object. Skip the rest of setup
     if chain_file_name is not None: #'mm10ToHg38.over.chain.gz'
         
         ## Load the original data
-        mudata = muon_read_10x_h5(os.path.join(os.environ['DATAPATH'], 'mouse_brain_multiome', 'M_Brain_Chromium_Nuc_Isolation_vs_SaltyEZ_vs_ComplexTissueDP_filtered_feature_bc_matrix.h5'))
+        mudata = muon_read_10x_h5(os.path.join(os.environ['DATAPATH'], 'mouse_brain_10x', 'M_Brain_Chromium_Nuc_Isolation_vs_SaltyEZ_vs_ComplexTissueDP_filtered_feature_bc_matrix.h5'))
 
         rna = mudata['rna']
         atac = mudata['atac']
@@ -1686,7 +1698,7 @@ def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', batch_group=N
 
         os.environ["PATH"] = os.path.expanduser("~/bin") + ":" + os.environ["PATH"] # add path to liftOver
         chain_file_path = os.path.join(os.environ['DATAPATH'], chain_file_name)
-        lifted_intervals_bed = atac_intervals_bed.liftover(chain_file_path, unmapped=os.path.join(datapath, 'mouse_brain_multiome_peak_beds_unmapped_mm10ToHg38.bed'), liftover_args='-minMatch=0.8')
+        lifted_intervals_bed = atac_intervals_bed.liftover(chain_file_path, unmapped=os.path.join(datapath, 'mouse_brain_10x_peak_beds_unmapped_mm10ToHg38.bed'), liftover_args='-minMatch=0.8')
         lifted_intervals_df = lifted_intervals_bed.to_dataframe()
         lifted_intervals_df['intervals'] = lifted_intervals_df['chrom'] + ':' + lifted_intervals_df['start'].astype(str) + '-' + lifted_intervals_df['end'].astype(str)
 
@@ -1704,7 +1716,7 @@ def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', batch_group=N
 
         ## Save lifted ATAC
         mudata_lifted = MuData({'atac': atac, 'rna': rna})
-        mudata_lifted.write_h5mu(os.path.join(datapath, 'mouse_brain_multiome_atac_lifted.h5mu'), compression='gzip')  # A value is trying to be set on a copy of a slice from a DataFrame.
+        mudata_lifted.write_h5mu(os.path.join(datapath, 'mouse_brain_10x_atac_lifted.h5mu'), compression='gzip')  # A value is trying to be set on a copy of a slice from a DataFrame.
         return
 
     if args.genes_by_peaks_str is not None:
@@ -1734,7 +1746,7 @@ def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', batch_group=N
     elif args.genes_by_peaks_str is None:
 
         ## Load the lifted data
-        mudata = muon_read_h5mu(os.path.join(datapath, 'mouse_brain_multiome_atac_lifted.h5mu'))
+        mudata = muon_read_h5mu(os.path.join(datapath, 'mouse_brain_10x_atac_lifted.h5mu'))
         rna = mudata['rna']
         atac = mudata['atac']
 
@@ -1837,9 +1849,9 @@ def mouse_brain_multiome_setup(args, cell_group='GEX Graph-based', batch_group=N
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath        
 
-def pbmc_multiome_setup(args, cell_group='seurat_annotations', batch_group=None, hvg_only=False, protein_coding_only=True, do_gas=False, do_peak_gene_alignment=True, return_type='loaders', return_raw_data=False, dataset='pbmc_multiome'):
+def pbmc_10x_setup(args, cell_group='seurat_annotations', batch_group=None, hvg_only=False, protein_coding_only=True, do_gas=False, do_peak_gene_alignment=True, return_type='loaders', return_raw_data=False, dataset='pbmc_10x'):
 
-    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'pbmc_multiome')
+    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'pbmc_10x')
 
     if args.genes_by_peaks_str is not None:
 

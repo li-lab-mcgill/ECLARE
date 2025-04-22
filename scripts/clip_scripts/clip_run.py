@@ -1,4 +1,3 @@
-
 import os
 from argparse import ArgumentParser
 import torch
@@ -26,9 +25,9 @@ if __name__ == "__main__":
     parser.add_argument('--outdir', type=str, default=os.environ.get('OUTPATH', None),
                         help='output directory')
     parser.add_argument('--source_dataset', type=str, default='AD_Anderson_et_al',
-                        help='current options: CAtlas_Tabula_Sapiens, pbmc_multiome, pbmc_multiome_setup, splatter_sim, toy_simulation')
+                        help='current options: CAtlas_Tabula_Sapiens, pbmc_10x, pbmc_10x_setup, splatter_sim, toy_simulation')
     parser.add_argument('--target_dataset', type=str, default='mdd',
-                        help='current options: CAtlas_Tabula_Sapiens, pbmc_multiome, pbmc_multiome_setup, splatter_sim, toy_simulation')
+                        help='current options: CAtlas_Tabula_Sapiens, pbmc_10x, pbmc_10x_setup, splatter_sim, toy_simulation')
     parser.add_argument('--genes_by_peaks_str', type=str, default='9918_by_43840',
                         help='indicator of peaks to genes mapping to skip processing')
     parser.add_argument('--total_epochs', type=int, default=2, metavar='E',
