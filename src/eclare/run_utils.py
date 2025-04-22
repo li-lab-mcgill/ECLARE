@@ -481,7 +481,7 @@ def eclare_pass(
         offsets_T = torch.stack(offsets_T)
 
         ## Compute distillation loss weighted by alignment loss, if more than one teacher
-        mean_distil_loss, _ = \
+        mean_distil_loss = \
             knowledge_distillation_fn.distil_loss_weighting( distil_losses, distil_losses_T, (offsets - align_losses), (offsets_T - align_losses_T))
 
         ## Get student align loss

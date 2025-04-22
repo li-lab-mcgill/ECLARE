@@ -269,13 +269,7 @@ class Knowledge_distillation_fn(torch.nn.Module):
         align_losses_T_weights = torch.softmax(align_losses_T_scaled_offset, dim=0)
 
         if self.weigh_distil_by_align_type == 'none': # in reality, no need to create uniform weights, but leads to losses on more similar scales than other align types
-
-            ## overwrite weights to obtain uniform weights
-            align_losses_weights = align_losses_T_weights = torch.ones_like(align_losses_weights) / len(align_losses_weights)
-
-            distil_loss = (distil_losses * align_losses_weights).sum(0)                         # teacher-based weighting (pointwise)
-            distil_loss_T = (distil_losses_T * align_losses_T_weights).sum(0)                   # teacher-based weighting (pointwise)
-            distil_loss = 0.5 * (distil_loss + distil_loss_T).mean()  
+            distil_loss = 0.5 * torch.stack([distil_losses, distil_losses_T]).sum(0).mean()  # close to 'batchmean' reduction of KL divergence, but not identical
 
         elif self.weigh_distil_by_align_type == 'batch':# or (not self.paired and self.weigh_distil_by_align_type != 'none'): # for MMD align loss, cannot do 'sample', so default to 'batch'
             distil_loss = (distil_losses * align_losses_weights.mean(1, keepdim=True)).sum(0)            # teacher-based weighting (broadcasted)
@@ -287,7 +281,6 @@ class Knowledge_distillation_fn(torch.nn.Module):
             distil_loss_T = (distil_losses_T * align_losses_T_weights).sum(0)                   # teacher-based weighting (pointwise)
             distil_loss = 0.5 * (distil_loss + distil_loss_T).mean()                            # sample-based averaging
 
-        #distil_loss         = 0.5 * torch.stack([distil_losses, distil_losses_T]).sum(0).mean()  # close to 'batchmean' reduction of KL divergence, but not identical
-        align_loss_scaled   = 0.5 * torch.stack([align_losses_scaled_offset, align_losses_T_scaled_offset]).sum(0).mean()
+        #align_loss_scaled   = 0.5 * torch.stack([align_losses_scaled_offset, align_losses_T_scaled_offset]).sum(0).mean()
 
-        return distil_loss, align_loss_scaled
+        return distil_loss
