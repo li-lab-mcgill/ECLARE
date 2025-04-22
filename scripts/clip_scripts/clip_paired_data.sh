@@ -21,7 +21,7 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-## Reverse the order of datasets to have pbmc_multiome and mouse_brain_multiome first
+## Reverse the order of datasets to have pbmc_10x and mouse_brain_10x first
 datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$i]}"; done))
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
@@ -36,7 +36,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-total_epochs=100
+total_epochs=2
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)
