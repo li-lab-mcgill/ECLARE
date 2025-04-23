@@ -747,11 +747,11 @@ cuda_available = torch.cuda.is_available()
 ## Create dict for methods and job_ids
 methods_id_dict = {
     'clip': '21140748',
-    'kd_clip': '22090727',
-    'eclare': '22090820',
+    'kd_clip': '22222341',
+    'eclare': '22222419',
     'clip_mdd': '16204608',
-    'kd_clip_mdd': '17082436',
-    'eclare_mdd': '17082437', #16105437
+    'kd_clip_mdd': '22172306',
+    'eclare_mdd': '22172639', #16105437
     'mojitoo': '20212916',
     'multiVI': '18175921',
     'glue': '18234131_19205223',
@@ -852,6 +852,10 @@ KD_CLIP_metrics_df.loc[:, 'dataset']   = 'kd_clip'
 
 combined_metrics_df = pd.concat([ECLARE_metrics_df, KD_CLIP_metrics_df, CLIP_metrics_df]) # determines order in which metrics are plotted
 
+## if source and/or target contain 'multiome', convert to '10x'
+combined_metrics_df.loc[:, 'source'] = combined_metrics_df['source'].str.replace('multiome', '10x')
+combined_metrics_df.loc[:, 'target'] = combined_metrics_df['target'].str.replace('multiome', '10x')
+
 metric_boxplots(combined_metrics_df)
 
 #%% unpaired MDD data
@@ -887,6 +891,10 @@ KD_CLIP_mdd_metrics_df.loc[:, 'dataset'] = 'kd_clip_mdd'
 ECLARE_mdd_metrics_df.loc[:, 'dataset'] = 'eclare_mdd'
 
 combined_mdd_metrics_df = pd.concat([ECLARE_mdd_metrics_df, KD_CLIP_mdd_metrics_df, CLIP_mdd_metrics_df])
+
+## if source and/or target contain 'multiome', convert to '10x'
+combined_mdd_metrics_df.loc[:, 'source'] = combined_mdd_metrics_df['source'].str.replace('multiome', '10x')
+combined_mdd_metrics_df.loc[:, 'target'] = combined_mdd_metrics_df['target'].str.replace('multiome', '10x')
 
 metric_boxplots(combined_mdd_metrics_df, target_source_combinations=True, include_paired=False)
 
@@ -1042,7 +1050,7 @@ unique_sexes = ['Female', 'Male']
 mdd_rna_sampled, mdd_atac_sampled, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition = \
    sample_proportional_celltypes_and_condition(mdd_rna, mdd_atac, batch_size=10000)
 
-# subset to 'Mic' celltype
+# subset to 'Mic' celltype right away
 '''
 mdd_rna_sampled = mdd_rna[mdd_rna.obs[rna_celltype_key] == 'Mic']
 mdd_atac_sampled = mdd_atac[mdd_atac.obs[atac_celltype_key] == 'Mic']
@@ -1133,7 +1141,7 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
     ## User defined parameters
 
     ## Core parameters 
-    n_SEACells = max(adata_train.n_obs // 75, 30)
+    n_SEACells = max(adata_train.n_obs // 75, 15)
     print(f'Number of SEACells: {n_SEACells}')
     n_waypoint_eigs = 15 # Number of eigenvalues to consider when initializing metacells
 
@@ -1153,7 +1161,7 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
     model.initialize_archetypes()
 
     # Fit SEACells model
-    model.fit(min_iter=10, max_iter=50)
+    model.fit(min_iter=10, max_iter=100)
 
     ## Get number of cells in each SEACell
     n_cells_per_SEACell = adata_train.obs['SEACell'].value_counts(sort=False)
@@ -1196,10 +1204,10 @@ n_dict = tree()
 cutoff = 1300  # 1300 for Mic
 
 ## sex='Female'; celltype='Mic'
-## sex='Female'; celltype='InN'
+## sex='Female'; celltype='In'
 
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData6', header=2)
-doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.05.tsv'), sep='\t')
+doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
 #maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
 
 ## get HVG features
@@ -1215,28 +1223,33 @@ do_corrs_or_cosines = 'correlations'
 for sex in unique_sexes:
     for celltype in unique_celltypes:
 
-        celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id'].str.startswith(celltype)]
+        celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
+        #celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id'].str.startswith(celltype)]
 
         celltype_peaks_df = doruk_peaks_df[doruk_peaks_df['cluster'].str.startswith(celltype)]
-        celltype_peaks = celltype_peaks_df['peakName'].str.split('-')
-        celltype_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame({'chrom': celltype_peaks.str[0], 'start': celltype_peaks.str[1], 'end': celltype_peaks.str[2]}))
+
+        #celltype_peaks = celltype_peaks_df['peakName'].str.split('-')
+        #celltype_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame({'chrom': celltype_peaks.str[0], 'start': celltype_peaks.str[1], 'end': celltype_peaks.str[2]}))
+
+        celltype_peaks = celltype_peaks_df[['Chromosome', 'Start', 'End']].values
+        celltype_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame({'chrom': celltype_peaks[:,0], 'start': celltype_peaks[:,1], 'end': celltype_peaks[:,2]}))
         
         ## select peaks indices using bedtools intersect
         peaks_indices_dar = mdd_peaks_bed.intersect(celltype_peaks_bed, c=True).to_dataframe()['name'].astype(bool)
         genes_indices_deg = mdd_rna.var_names.isin(celltype_degs_df['gene'])
 
         #peaks_indices = peaks_indices_hvg.values | peaks_indices_dar.values
-        genes_indices = genes_indices_hvg.values | genes_indices_deg
+        #genes_indices = genes_indices_hvg.values | genes_indices_deg
         peaks_indices = peaks_indices_dar
-        #genes_indices = genes_indices_deg
+        genes_indices = genes_indices_deg
 
         for condition in unique_conditions:
 
             print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {peaks_indices.sum()} - DEG genes: {genes_indices.sum()}')
 
             ## select cell indices
-            rna_indices = np.where((mdd_rna.obs[rna_celltype_key] == celltype) & (mdd_rna.obs[rna_condition_key] == condition) & (mdd_rna.obs['Sex'] == sex))[0]
-            atac_indices = np.where((mdd_atac.obs[atac_celltype_key] == celltype) & (mdd_atac.obs[atac_condition_key] == condition) & (mdd_atac.obs['sex'] == sex.lower()))[0]
+            rna_indices = np.where((mdd_rna.obs[rna_celltype_key].str.startswith(celltype)) & (mdd_rna.obs[rna_condition_key] == condition) & (mdd_rna.obs['Sex'] == sex))[0]
+            atac_indices = np.where((mdd_atac.obs[atac_celltype_key].str.startswith(celltype)) & (mdd_atac.obs[atac_condition_key] == condition) & (mdd_atac.obs['sex'] == sex.lower()))[0]
 
             if len(rna_indices) > cutoff:
                 rna_indices = np.random.choice(rna_indices, cutoff, replace=False)
@@ -1339,10 +1352,14 @@ gene_candidates_dict['Female']['InN'] = gene_candidates_dict['Female']['Mic']
 hits_idxs_dict = tree()
 from scipy.stats import norm
 
+score_type = 'fisher'
+
 for sex in unique_sexes:
     for celltype in unique_celltypes:
 
-        celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id'].str.startswith(celltype)]
+        #celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id'].str.startswith(celltype)]
+        celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
+
         #genes_names = mdd_rna.var_names[mdd_rna.var_names.isin(celltype_degs_df['gene'])]
         genes_names = mdd_rna.var_names[genes_indices]
 
@@ -1352,143 +1369,161 @@ for sex in unique_sexes:
         corr_case = corr_case.numpy()
         corr_control = corr_control.numpy()
 
-        fisher_case = np.arctanh(corr_case)
-        fisher_control = np.arctanh(corr_control)
+        if score_type == 'corrdiff':
 
-        fisher_sums_case = np.sum(fisher_case, axis=1)
-        fisher_sums_control = np.sum(fisher_control, axis=1)
+            corrdiff = corr_case - corr_control
+            corrdiff_genes = (corrdiff**2).sum(axis=1)
+            chi2 = corrdiff_genes / np.sqrt(len(corrdiff_genes))
 
-        K_case = len(fisher_sums_case)
-        K_control = len(fisher_sums_control)
-        n_case = n_dict[sex][celltype]['Case']
-        n_control = n_dict[sex][celltype]['Control']
+        elif score_type == 'logfc':
 
-        fisher_sums_var_case = K_case / (n_case - 3)
-        fisher_sums_var_control = K_control / (n_control - 3)
+            logcorr_case = np.log1p(corr_case)
+            logcorr_control = np.log1p(corr_control)
 
-        Z = (fisher_sums_case - fisher_sums_control) / np.sqrt(fisher_sums_var_case + fisher_sums_var_control)
+            logfc = logcorr_case - logcorr_control
+            logfc_genes = (logfc**2).sum(axis=1)
+            chi2 = logfc_genes / np.sqrt(len(logfc_genes))
 
-        p_value = 2 * (1 - norm.cdf(abs(Z)))
-        p_value_threshold = 0.05 / K_case
-        hits_idxs = np.where(p_value < p_value_threshold)[0]
+        elif score_type == 'fisher':
 
-        hits_idxs_dict[sex][celltype] = hits_idxs
+            fisher_case = np.arctanh(corr_case)
+            fisher_control = np.arctanh(corr_control)
 
-        '''
-        cosine_case = genes_by_peaks_corrs_dict[sex][celltype]['Case']
-        cosine_control = genes_by_peaks_corrs_dict[sex][celltype]['Control']
+            fisher_sums_case = np.sum(fisher_case, axis=1)
+            fisher_sums_control = np.sum(fisher_control, axis=1)
 
-        cosine_valid_comparison = (cosine_case!=0) * (cosine_control!=0)
-        cosine_case = cosine_case[cosine_valid_comparison]
-        cosine_control = cosine_control[cosine_valid_comparison]
+            K_case = fisher_case.shape[1]
+            K_control = fisher_control.shape[1]
+            n_case = n_dict[sex][celltype]['Case']
+            n_control = n_dict[sex][celltype]['Control']
 
-        log1p_fold_change = torch.log1p(cosine_case) - torch.log1p(cosine_control)
+            fisher_sums_var_case = K_case / (n_case - 3)
+            fisher_sums_var_control = K_control / (n_control - 3)
 
-        where_valid = np.where(cosine_valid_comparison)
-        genes_where_valid_idxs = where_valid[1]
-        logfc_sum_per_gene = np.bincount(genes_where_valid_idxs, weights=log1p_fold_change.abs())
-        logfc_mean_per_gene = logfc_sum_per_gene / np.bincount(genes_where_valid_idxs)
+            Z = (fisher_sums_case - fisher_sums_control) / np.sqrt(fisher_sums_var_case + fisher_sums_var_control)
+            chi2 = Z**2
 
-        logfc_sum_per_gene_ranked_idxs = np.argsort(logfc_sum_per_gene)[::-1]
-        logfc_sum_per_gene_ranked_gene_names = mdd_rna.var_names[genes_indices][logfc_sum_per_gene_ranked_idxs]
-        logfc_sum_per_gene_matches = np.concatenate([logfc_sum_per_gene[genes_names == gene] for gene in gene_candidates_dict['Female']['Mic'] if logfc_sum_per_gene[genes_names == gene].size > 0])
-        #logfc_sum_per_gene_matches = np.concatenate([logfc_sum_per_gene[mdd_rna.var_names == gene] for gene in gene_candidates_dict['Female']['Mic'] if logfc_sum_per_gene[mdd_rna.var_names == gene].size > 0])
+            p_value = 2 * (1 - norm.cdf(abs(Z)))
+            p_value_threshold = 0.05 / K_case
+            hits_idxs = np.where(p_value < p_value_threshold)[0]
 
-        from scipy import stats
-        percentiles = [stats.percentileofscore(logfc_sum_per_gene, gene) for gene in logfc_sum_per_gene_matches]
+            hits_idxs_dict[sex][celltype] = hits_idxs
 
-        # Filter genes with percentiles > 95
-        top_percentiles = [
-            (percentile, logfc_sum, gene)
-            for percentile, logfc_sum, gene in zip(percentiles, logfc_sum_per_gene_matches, gene_candidates_dict['Female']['Mic'])
-            if percentile > 95
-        ]
+        elif score_type == 'ismb_cosine':
 
-        lower_percentiles = [
-            (percentile, logfc_sum, gene)
-            for percentile, logfc_sum, gene in zip(percentiles, logfc_sum_per_gene_matches, gene_candidates_dict['Female']['Mic'])
-            if percentile < 95
-        ]
+            cosine_case = genes_by_peaks_corrs_dict[sex][celltype]['Case']
+            cosine_control = genes_by_peaks_corrs_dict[sex][celltype]['Control']
 
-        # increase font size
-        plt.rcParams.update({'font.size': 12})
+            cosine_valid_comparison = (cosine_case!=0) * (cosine_control!=0)
+            cosine_case = cosine_case[cosine_valid_comparison]
+            cosine_control = cosine_control[cosine_valid_comparison]
 
-        # Create a histogram
-        fig5 = plt.figure(figsize=(10, 5))
-        #plt.hist(logfc_sum_per_gene, bins=30, alpha=0.7, color='blue', edgecolor='black')
-        sns.histplot(logfc_sum_per_gene, stat='proportion')
+            log1p_fold_change = torch.log1p(cosine_case) - torch.log1p(cosine_control)
 
-        # Annotate the histogram with top-percentile genes
-        for percentile, logfc_sum, gene in top_percentiles:
-            plt.axvline(logfc_sum, color='black', linestyle='--', label=f'{gene}: {percentile:.0f}th percentile')
-            plt.annotate(f'{gene}\n{percentile:.0f}%',  # Gene name with percentile below
-                        xy=(logfc_sum, plt.gca().get_ylim()[1] * 0.7),
-                        xytext=(logfc_sum + 5, plt.gca().get_ylim()[1] * 0.8),
-                        arrowprops=dict(facecolor='black', arrowstyle='->'),
-                        fontsize=12, color='black')
+            where_valid = np.where(cosine_valid_comparison)
+            genes_where_valid_idxs = where_valid[1]
+            logfc_sum_per_gene = np.bincount(genes_where_valid_idxs, weights=log1p_fold_change.abs())
+            logfc_mean_per_gene = logfc_sum_per_gene / np.bincount(genes_where_valid_idxs)
 
-        # Annotate the histogram with lower-percentile genes
-        for percentile, logfc_sum, gene in lower_percentiles:
-            offsetx = 25 if percentile == np.min([lp[0] for lp in lower_percentiles]) else 0
-            offsety = 0.025 if percentile == np.min([lp[0] for lp in lower_percentiles]) else 0
-            plt.axvline(logfc_sum, color='black', linestyle='--', label=f'{gene}: {percentile:.0f}th percentile')
-            plt.annotate(f'{gene}\n{percentile:.0f}%',  # Gene name with percentile below
-                        #xy=(logfc_sum, (plt.gca().get_ylim()[1] * percentile / 100) * 0.8 - offsety) ,
-                        #xytext=(logfc_sum + 2 + offsetx, (plt.gca().get_ylim()[1] * percentile / 100) - offsety) ,
-                        xy=(logfc_sum, plt.gca().get_ylim()[1] * 0.7),
-                        xytext=(logfc_sum + 5, plt.gca().get_ylim()[1] * 0.8),
-                        arrowprops=dict(facecolor='black', arrowstyle='->'),
-                        fontsize=12, color='black')
+            logfc_sum_per_gene_ranked_idxs = np.argsort(logfc_sum_per_gene)[::-1]
+            logfc_sum_per_gene_ranked_gene_names = mdd_rna.var_names[genes_indices][logfc_sum_per_gene_ranked_idxs]
+            logfc_sum_per_gene_matches = np.concatenate([logfc_sum_per_gene[genes_names == gene] for gene in gene_candidates_dict['Female']['Mic'] if logfc_sum_per_gene[genes_names == gene].size > 0])
+            #logfc_sum_per_gene_matches = np.concatenate([logfc_sum_per_gene[mdd_rna.var_names == gene] for gene in gene_candidates_dict['Female']['Mic'] if logfc_sum_per_gene[mdd_rna.var_names == gene].size > 0])
 
-        # Add labels and title
-        plt.xlabel("$\phi_g$", fontsize=12)
-        plt.ylabel("Frequency", fontsize=12)
-        plt.show()
+            from scipy import stats
+            percentiles = [stats.percentileofscore(logfc_sum_per_gene, gene) for gene in logfc_sum_per_gene_matches]
 
-        fig5.savefig(os.path.join(figpath, f'fig5_cosine_histogram.png'), bbox_inches='tight', dpi=300)
-        '''
+            # Filter genes with percentiles > 95
+            top_percentiles = [
+                (percentile, logfc_sum, gene)
+                for percentile, logfc_sum, gene in zip(percentiles, logfc_sum_per_gene_matches, gene_candidates_dict['Female']['Mic'])
+                if percentile > 95
+            ]
 
-        '''
-        cosine_case_hit = (cosine_case==1) * (cosine_control!=1) * cosine_valid_comparison
-        cosine_control_hit = (cosine_control==1) * (cosine_case!=1) * cosine_valid_comparison
+            lower_percentiles = [
+                (percentile, logfc_sum, gene)
+                for percentile, logfc_sum, gene in zip(percentiles, logfc_sum_per_gene_matches, gene_candidates_dict['Female']['Mic'])
+                if percentile < 95
+            ]
 
-        cosine_case_hit_by_gene = cosine_case_hit.sum(dim=0)
-        cosine_control_hit_by_gene = cosine_control_hit.sum(dim=0)
+            # increase font size
+            plt.rcParams.update({'font.size': 12})
 
-        cosine_case_hit_ranked_idxs = cosine_case_hit_by_gene.argsort().flip(0)
-        cosine_case_hit_ranked_gene_names = mdd_rna.var_names[cosine_case_hit_ranked_idxs]
+            # Create a histogram
+            fig5 = plt.figure(figsize=(10, 5))
+            #plt.hist(logfc_sum_per_gene, bins=30, alpha=0.7, color='blue', edgecolor='black')
+            sns.histplot(logfc_sum_per_gene, stat='proportion')
 
-        cosine_case_hit_idxs = torch.where(cosine_case_hit)
-        hits_idxs_dict[sex][celltype] = cosine_case_hit_idxs
-        
+            # Annotate the histogram with top-percentile genes
+            for percentile, logfc_sum, gene in top_percentiles:
+                plt.axvline(logfc_sum, color='black', linestyle='--', label=f'{gene}: {percentile:.0f}th percentile')
+                plt.annotate(f'{gene}\n{percentile:.0f}%',  # Gene name with percentile below
+                            xy=(logfc_sum, plt.gca().get_ylim()[1] * 0.7),
+                            xytext=(logfc_sum + 5, plt.gca().get_ylim()[1] * 0.8),
+                            arrowprops=dict(facecolor='black', arrowstyle='->'),
+                            fontsize=12, color='black')
 
-        logfc_mean_per_gene_ranked_idxs = np.argsort(logfc_mean_per_gene)[::-1]
-        logfc_mean_per_gene_ranked_gene_names = mdd_rna.var_names[logfc_mean_per_gene_ranked_idxs]
+            # Annotate the histogram with lower-percentile genes
+            for percentile, logfc_sum, gene in lower_percentiles:
+                offsetx = 25 if percentile == np.min([lp[0] for lp in lower_percentiles]) else 0
+                offsety = 0.025 if percentile == np.min([lp[0] for lp in lower_percentiles]) else 0
+                plt.axvline(logfc_sum, color='black', linestyle='--', label=f'{gene}: {percentile:.0f}th percentile')
+                plt.annotate(f'{gene}\n{percentile:.0f}%',  # Gene name with percentile below
+                            #xy=(logfc_sum, (plt.gca().get_ylim()[1] * percentile / 100) * 0.8 - offsety) ,
+                            #xytext=(logfc_sum + 2 + offsetx, (plt.gca().get_ylim()[1] * percentile / 100) - offsety) ,
+                            xy=(logfc_sum, plt.gca().get_ylim()[1] * 0.7),
+                            xytext=(logfc_sum + 5, plt.gca().get_ylim()[1] * 0.8),
+                            arrowprops=dict(facecolor='black', arrowstyle='->'),
+                            fontsize=12, color='black')
 
-        log1p_fold_change = torch.log1p(cosine_case) - torch.log1p(cosine_control)
-        #log1p_fold_change = log1p_fold_change[cosine_valid_comparison]
+            # Add labels and title
+            plt.xlabel("$\phi_g$", fontsize=12)
+            plt.ylabel("Frequency", fontsize=12)
+            plt.show()
 
-        nonzero_log1p_fold_change = log1p_fold_change[log1p_fold_change != 0]
+            fig5.savefig(os.path.join(figpath, f'fig5_cosine_histogram.png'), bbox_inches='tight', dpi=300)
 
-        num_comparisons = len(unique_celltypes)
-        corrected_percentile = 1 - (0.05 / num_comparisons)
+            '''
+            cosine_case_hit = (cosine_case==1) * (cosine_control!=1) * cosine_valid_comparison
+            cosine_control_hit = (cosine_control==1) * (cosine_case!=1) * cosine_valid_comparison
 
-        log1p_fold_change_95th_percentile = torch.quantile(nonzero_log1p_fold_change, corrected_percentile)
-        '''
+            cosine_case_hit_by_gene = cosine_case_hit.sum(dim=0)
+            cosine_control_hit_by_gene = cosine_control_hit.sum(dim=0)
+
+            cosine_case_hit_ranked_idxs = cosine_case_hit_by_gene.argsort().flip(0)
+            cosine_case_hit_ranked_gene_names = mdd_rna.var_names[cosine_case_hit_ranked_idxs]
+
+            cosine_case_hit_idxs = torch.where(cosine_case_hit)
+            hits_idxs_dict[sex][celltype] = cosine_case_hit_idxs
+            
+
+            logfc_mean_per_gene_ranked_idxs = np.argsort(logfc_mean_per_gene)[::-1]
+            logfc_mean_per_gene_ranked_gene_names = mdd_rna.var_names[logfc_mean_per_gene_ranked_idxs]
+
+            log1p_fold_change = torch.log1p(cosine_case) - torch.log1p(cosine_control)
+            #log1p_fold_change = log1p_fold_change[cosine_valid_comparison]
+
+            nonzero_log1p_fold_change = log1p_fold_change[log1p_fold_change != 0]
+
+            num_comparisons = len(unique_celltypes)
+            corrected_percentile = 1 - (0.05 / num_comparisons)
+
+            log1p_fold_change_95th_percentile = torch.quantile(nonzero_log1p_fold_change, corrected_percentile)
+            '''
         break
     break
 #%% GSEApy
 
 import gseapy as gp
 
-ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': Z})
+ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': chi2})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
 
 pre_res = gp.prerank(rnk=ranked_list,
                      gene_sets='Reactome_2022', # apparently, GO_Biological_Process_2021 and Reactome_2022 better for neurological disorders
                      outdir=os.path.join(os.environ['OUTPATH'], 'gseapy_results'),
-                     min_size=1,
-                     max_size=500,
+                     min_size=2,
+                     max_size=len(ranked_list),
                      permutation_num=1000)
 
 pre_res.res2d.head()
