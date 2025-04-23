@@ -24,6 +24,10 @@ datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 ## Reverse the order of datasets to have pbmc_10x and mouse_brain_10x first
 datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$i]}"; done))
 
+## overwrite datasets to only have 'pbmc_10x'
+echo "Overwriting datasets to only have 'pbmc_10x'"
+datasets=('pbmc_10x')
+
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6
 N_REPLICATES=1
@@ -36,8 +40,8 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='22125454'
-total_epochs=2
+clip_job_id='21140748'
+total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)

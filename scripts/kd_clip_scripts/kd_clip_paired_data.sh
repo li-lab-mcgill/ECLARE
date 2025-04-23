@@ -36,8 +36,8 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='22125454'
-total_epochs=2
+clip_job_id='21140748'
+total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)

@@ -4,7 +4,16 @@ import pandas as pd
 import scanpy as sc
 import os
 from argparse import Namespace
-from pybedtools import BedTool
+
+import socket
+hostname = socket.gethostname()
+problematic_hostname = "hlr-10gpu"  # replace this with actual hostname
+if hostname != problematic_hostname:
+    from pybedtools import BedTool
+else:
+    print(f"Warning: Skipping pybedtools import on {hostname} due to GLIBC incompatibility.")
+    BedTool = None  # or define a dummy fallback if necessary
+
 
 #import bbknn
 from muon import atac as ac
@@ -1598,6 +1607,11 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
         dataset = model_metadata.metadata['source_dataset']
         genes_by_peaks_str = model_metadata.metadata['genes_by_peaks_str']
         target_setup_func = return_setup_func_from_dataset(args.target_dataset)
+
+        ## Check if dataset contains 'multiome', in which case convert to '10x'
+        if 'multiome' in dataset:
+            print(f"Warning: Dataset {dataset} contains 'multiome', converting to '10x'")
+            dataset = dataset.replace('multiome', '10x')
 
         print(dataset)
         datasets.append(dataset)
