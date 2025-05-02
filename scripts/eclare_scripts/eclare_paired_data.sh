@@ -21,12 +21,11 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-## Reverse the order of datasets to have pbmc_10x and mouse_brain_10x first
-datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$i]}"; done))
+## Define datasets to be ignored as sources
+ignore_sources=("pbmc_10x" "mouse_brain_10x")
 
-## overwrite datasets to only have 'pbmc_10x'
-echo "Overwriting datasets to only have 'pbmc_10x'"
-datasets=('pbmc_10x')
+## Define target datasets
+target_datasets=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams")
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6
@@ -82,11 +81,12 @@ run_eclare_task_on_gpu() {
     local experiment_job_id=$2
     local gpu_id=$3
     local target_dataset=$4
-    local task_idx=$5
-    local random_state=$6
-    local genes_by_peaks_str=$7
-    local feature=$8
-
+    local ignore_sources=$5
+    local task_idx=$6
+    local random_state=$7
+    local genes_by_peaks_str=$8
+    local feature=$9
+    
     echo "Running ${source_dataset} to ${target_dataset} (task $task_idx) on GPU $gpu_id"
 
     # for paired data, do not specify source_dataset to ensure that all datasets serve as sources
@@ -97,6 +97,7 @@ run_eclare_task_on_gpu() {
     --clip_job_id=$clip_job_id \
     --experiment_job_id=$experiment_job_id \
     --target_dataset=$target_dataset \
+    --ignore_sources=$ignore_sources \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
     --batch_size=800 \
@@ -159,7 +160,7 @@ client.create_run(experiment_id, run_name=run_name)
 
 ## Outer loop: iterate over datasets as the target_dataset
 target_datasets_idx=0
-for target_dataset in "${datasets[@]}"; do
+for target_dataset in "${target_datasets[@]}"; do
 
     ## Extract the value of `genes_by_peaks_str` for the current source and target
     genes_by_peaks_str=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "MDD")
@@ -179,7 +180,8 @@ for target_dataset in "${datasets[@]}"; do
         
         # Assign task to an idle GPU
         gpu_id=${idle_gpus[$((target_datasets_idx % ${#idle_gpus[@]}))]}
-        run_eclare_task_on_gpu $clip_job_id $JOB_ID $gpu_id $target_dataset $task_idx $random_state $genes_by_peaks_str $feature
+        ignore_sources_str=$(IFS=, ; echo "${ignore_sources[*]}")
+        run_eclare_task_on_gpu $clip_job_id $JOB_ID $gpu_id $target_dataset "$ignore_sources_str" $task_idx $random_state $genes_by_peaks_str $feature
     done
 
     # Wait for all tasks for this target dataset to complete before moving to the next one

@@ -180,13 +180,14 @@ class Knowledge_distillation_fn(torch.nn.Module):
 
         return loss, loss_T
     
-    def ot_clip_loss_forward(self, teacher_logits, student_logits=None):
+    def ot_clip_loss_forward(self, teacher_logits, student_logits=None, weights_temperature=0.01):
 
         # student loss
         if (student_logits is not None):
 
             ## obtain teacher weights - without temperature scaling, teacher weights very uniform
-            ot_clip_loss_weights = (1 - torch.stack(self.all_teacher_ot_values)).softmax(dim=0).to(device=self.device)  # in principle, would also have values & weights for plan_T
+            ot_clip_loss_logits = (1 - torch.stack(self.all_teacher_ot_values)) / weights_temperature
+            ot_clip_loss_weights = ot_clip_loss_logits.softmax(dim=0).to(device=self.device)  # in principle, would also have values & weights for plan_T
             ot_clip_loss = torch.zeros(len(student_logits), device=self.device)
             ot_clip_loss_T = torch.zeros(len(student_logits), device=self.device)
 
@@ -262,11 +263,11 @@ class Knowledge_distillation_fn(torch.nn.Module):
         return distil_loss, distil_loss_T, align_loss_scaled, align_loss_T_scaled, offset_scaled, offset_T_scaled
     
     
-    def distil_loss_weighting(self, distil_losses, distil_losses_T, align_losses_scaled_offset, align_losses_T_scaled_offset):
+    def distil_loss_weighting(self, distil_losses, distil_losses_T, align_losses_scaled_offset, align_losses_T_scaled_offset, weights_temperature=0.1):
 
         ## for 'batch' or 'sample', gets overwritten if its 'none'
-        align_losses_weights = torch.softmax(align_losses_scaled_offset, dim=0)
-        align_losses_T_weights = torch.softmax(align_losses_T_scaled_offset, dim=0)
+        align_losses_weights = torch.softmax(align_losses_scaled_offset / weights_temperature, dim=0)
+        align_losses_T_weights = torch.softmax(align_losses_T_scaled_offset / weights_temperature, dim=0)
 
         if self.weigh_distil_by_align_type == 'none': # in reality, no need to create uniform weights, but leads to losses on more similar scales than other align types
             distil_loss = 0.5 * torch.stack([distil_losses, distil_losses_T]).sum(0).mean()  # close to 'batchmean' reduction of KL divergence, but not identical

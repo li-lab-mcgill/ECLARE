@@ -21,9 +21,6 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-## Reverse the order of datasets to have pbmc_10x and mouse_brain_10x first
-datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$i]}"; done))
-
 ## Preset target dataset
 target_dataset="MDD"
 
@@ -126,6 +123,7 @@ run_eclare_task_on_gpu() {
     --clip_job_id=$clip_job_id \
     --experiment_job_id=$experiment_job_id \
     --target_dataset=$target_dataset \
+    --ignore_sources "PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" \
     --genes_by_peaks_str='17563_by_100000' \
     --total_epochs=$total_epochs \
     --batch_size=800 \

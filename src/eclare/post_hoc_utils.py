@@ -137,7 +137,7 @@ def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltype
 
     if umap_embedding is None:
         rna_atac_latents = np.concatenate([rna_latents, atac_latents], axis=0)
-        umap_embedding = UMAP(n_neighbors=15, min_dist=0.1, n_components=2, metric='cosine', random_state=42)
+        umap_embedding = UMAP(n_neighbors=50, min_dist=0.5, n_components=2, metric='cosine', random_state=42)
         umap_embedding.fit(rna_atac_latents)
 
     rna_umap = umap_embedding.transform(rna_latents)
@@ -145,20 +145,22 @@ def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltype
 
     rna_df_umap = pd.DataFrame(data={'umap_1': rna_umap[:, 0], 'umap_2': rna_umap[:, 1], 'celltypes': rna_celltypes, 'condition': rna_condition, 'modality': 'RNA'})
     atac_df_umap = pd.DataFrame(data={'umap_1': atac_umap[:, 0], 'umap_2': atac_umap[:, 1], 'celltypes': atac_celltypes, 'condition': atac_condition, 'modality': 'ATAC'})
-    rna_atac_df_umap = pd.concat([rna_df_umap, atac_df_umap], axis=0)#.sample(frac=1) # shuffle
+    rna_atac_df_umap = pd.concat([rna_df_umap, atac_df_umap], axis=0).sample(frac=1) # shuffle
+
+    marker = '.'
 
     multiple_conditions = (len(np.unique(rna_condition)) > 1) or (len(np.unique(atac_condition)) > 1)
     if multiple_conditions:
         hue_order = np.unique(np.concatenate([rna_condition, atac_condition]))
 
-        fig, ax = plt.subplots(1, 4, figsize=(15, 5))
-        sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='condition', hue_order=hue_order, alpha=0.5, ax=ax[3], legend=True)
+        fig, ax = plt.subplots(1, 4, figsize=(15, 4))
+        sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='condition', hue_order=hue_order, alpha=0.5, ax=ax[3], legend=True, marker=marker)
         ax[3].set_xticklabels([]); ax[3].set_yticklabels([]); ax[3].set_xlabel(''); ax[3].set_ylabel('')
     else:
-        fig, ax = plt.subplots(1, 3, figsize=(10, 5))
+        fig, ax = plt.subplots(1, 3, figsize=(10, 4))
 
-    sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='celltypes', palette=color_map_ct, alpha=0.8, ax=ax[1], legend=False)
-    sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, ax=ax[2], legend=True)
+    sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='celltypes', palette=color_map_ct, alpha=0.8, ax=ax[1], legend=False, marker=marker)
+    sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, ax=ax[2], legend=True, marker=marker)
 
     ax[1].set_xticklabels([]); ax[1].set_yticklabels([]); ax[2].set_xticklabels([]); ax[2].set_yticklabels([])
     ax[1].set_xlabel(''); ax[1].set_ylabel(''); ax[2].set_xlabel(''); ax[2].set_ylabel('')
@@ -179,85 +181,7 @@ def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltype
 
     fig.tight_layout()
 
-    return umap_embedding, fig
-
-def plot_umap_embeddings_multidatasets(rna_latents_dict, atac_latents_dict, mdd_rna_latents_dict, mdd_atac_latents_dict, umap_embedding=None, split_plots='domains_and_modalities'):
-
-    all_source_datasets = np.concatenate([np.repeat(dataset, latents.shape[0]) for dataset, latents in rna_latents_dict.items()] + \
-                                        [np.repeat(dataset, latents.shape[0]) for dataset, latents in atac_latents_dict.items()], axis=0)
-    
-    all_mdd_datasets = np.concatenate([np.repeat(dataset, latents.shape[0]) for dataset, latents in mdd_rna_latents_dict.items()] + \
-                                        [np.repeat(dataset, latents.shape[0]) for dataset, latents in mdd_atac_latents_dict.items()], axis=0)
-
-    source_latents_dict = { 'RNA': np.concatenate([rna_latents for rna_latents in rna_latents_dict.values()], axis=0),
-                            'ATAC': np.concatenate([atac_latents for atac_latents in atac_latents_dict.values()], axis=0) }
-    
-    mdd_latents_dict = { 'RNA': np.concatenate([mdd_rna_latents for mdd_rna_latents in mdd_rna_latents_dict.values()], axis=0),
-                         'ATAC': np.concatenate([mdd_atac_latents for mdd_atac_latents in mdd_atac_latents_dict.values()], axis=0) }
-
-    all_source_latents = np.concatenate([latents for latents in source_latents_dict.values()], axis=0)
-    all_mdd_latents = np.concatenate([latents for latents in mdd_latents_dict.values()], axis=0)
-
-    all_rna_latents = np.concatenate([rna_latents for rna_latents in rna_latents_dict.values()], axis=0)
-    all_atac_latents = np.concatenate([atac_latents for atac_latents in atac_latents_dict.values()], axis=0)
-
-    all_source_modalities = np.concatenate([np.repeat(dataset, latents.shape[0]) for dataset, latents in source_latents_dict.items()], axis=0)
-    all_mdd_modalities = np.concatenate([np.repeat(dataset, latents.shape[0]) for dataset, latents in mdd_latents_dict.items()], axis=0)
-
-    ## combine latents across "source" and "MDD" domains
-    all_latents = np.concatenate([all_source_latents, all_mdd_latents], axis=0)
-    all_datasets = np.concatenate([all_source_datasets, all_mdd_datasets], axis=0)
-    all_modalities = np.concatenate([all_source_modalities, all_mdd_modalities], axis=0)
-    all_domains = np.concatenate([np.repeat('source', all_source_latents.shape[0]), np.repeat('MDD', all_mdd_latents.shape[0])], axis=0)
-
-    if umap_embedding is None:
-        umap_embedding = UMAP(n_neighbors=15, min_dist=0.1, n_components=2, metric='cosine', random_state=42)
-        umap_embedding.fit(all_latents)
-
-    all_latents_umap = umap_embedding.transform(all_latents)
-    all_df_umap = pd.DataFrame(data={'umap_1': all_latents_umap[:, 0], 'umap_2': all_latents_umap[:, 1], 'dataset': all_datasets, 'modality': all_modalities, 'domain': all_domains})
-
-    '''
-    all_source_umap = umap_embedding.transform(all_source_latents)
-    all_mdd_umap = umap_embedding.transform(all_mdd_latents)
-    all_source_df_umap = pd.DataFrame(data={'umap_1': all_source_umap[:, 0], 'umap_2': all_source_umap[:, 1], 'dataset': all_source_datasets, 'modality': all_source_modalities, 'domain': 'source'})
-    all_mdd_df_umap = pd.DataFrame(data={'umap_1': all_mdd_umap[:, 0], 'umap_2': all_mdd_umap[:, 1], 'dataset': all_mdd_datasets, 'modality': all_mdd_modalities, 'domain': 'MDD'})
-    all_df_umap = pd.concat([all_source_df_umap, all_mdd_df_umap], axis=0)
-    '''
-
-    fig, ax = plt.subplots(2, 2, figsize=(10, 10), sharex=True, sharey=True)
-
-    if split_plots == 'domains_and_modalities':
-        sns.scatterplot(data=all_df_umap.loc[all_df_umap.domain=='source'], x='umap_1', y='umap_2', hue='dataset', alpha=0.5, ax=ax[0,0], legend=True)
-        sns.scatterplot(data=all_df_umap.loc[all_df_umap.domain=='MDD'], x='umap_1', y='umap_2', hue='dataset', alpha=0.5, ax=ax[0,1], legend=True)
-
-        sns.scatterplot(data=all_df_umap.loc[all_df_umap.modality=='RNA'], x='umap_1', y='umap_2', hue='dataset', alpha=0.5, ax=ax[1,0], legend=True)
-        sns.scatterplot(data=all_df_umap.loc[all_df_umap.modality=='ATAC'], x='umap_1', y='umap_2', hue='dataset', alpha=0.5, ax=ax[1,1], legend=True)
-
-        ax[0,0].set_title('Source nuclei')
-        ax[0,1].set_title('MDD nuclei')
-        ax[1,0].set_title('RNA nuclei')
-        ax[1,1].set_title('ATAC nuclei')
-
-    elif split_plots == 'all':
-        sns.scatterplot(data=all_df_umap[(all_df_umap.domain=='source') * (all_df_umap.modality=='RNA')], x='umap_1', y='umap_2', hue='dataset', alpha=0.5, ax=ax[0,0], legend=True)
-        sns.scatterplot(data=all_df_umap[(all_df_umap.domain=='source') * (all_df_umap.modality=='ATAC')], x='umap_1', y='umap_2', hue='dataset', alpha=0.5, ax=ax[0,1], legend=True)
-        sns.scatterplot(data=all_df_umap[(all_df_umap.domain=='MDD') * (all_df_umap.modality=='RNA')], x='umap_1', y='umap_2', hue='dataset', alpha=0.5, ax=ax[1,0], legend=True)
-        sns.scatterplot(data=all_df_umap[(all_df_umap.domain=='MDD') * (all_df_umap.modality=='ATAC')], x='umap_1', y='umap_2', hue='dataset', alpha=0.5, ax=ax[1,1], legend=True)
-
-        ax[0,0].set_title('Source RNA')
-        ax[0,1].set_title('Source ATAC')
-        ax[1,0].set_title('MDD RNA')
-        ax[1,1].set_title('MDD ATAC')
-
-    ax[0,0].set_xticklabels([]); ax[0,0].set_yticklabels([]); ax[0,0].set_xlabel(''); ax[0,0].set_ylabel('')
-    ax[0,1].set_xticklabels([]); ax[0,1].set_yticklabels([]); ax[0,1].set_xlabel(''); ax[0,1].set_ylabel('')
-    ax[1,0].set_xticklabels([]); ax[1,0].set_yticklabels([]); ax[1,0].set_xlabel(''); ax[1,0].set_ylabel('')
-    ax[1,1].set_xticklabels([]); ax[1,1].set_yticklabels([]); ax[1,1].set_xlabel(''); ax[1,1].set_ylabel('')
-
-    fig.tight_layout()
-
-    return umap_embedding
+    return umap_embedding, fig, rna_atac_df_umap
 
 def ot_pairing(rna_latent, atac_latent):
 

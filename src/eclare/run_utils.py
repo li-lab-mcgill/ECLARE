@@ -540,7 +540,7 @@ def run_ECLARE(
 
     # Instantiate the knowledge distillation loss function
     paired = (args.target_dataset != 'MDD')
-    knowledge_distillation_fn = Knowledge_distillation_fn(device=device, student_temperature=1, teacher_temperature=1, paired=paired, weigh_distil_by_align_type='batch')
+    knowledge_distillation_fn = Knowledge_distillation_fn(device=device, student_temperature=1, teacher_temperature=1, paired=paired, weigh_distil_by_align_type='sample')
 
     # Define loop_order parameter
     loop_order = args.loop_order  # 'datasets_first' or 'batches_first'

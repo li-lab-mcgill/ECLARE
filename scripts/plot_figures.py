@@ -579,18 +579,34 @@ def metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets
     # Try to convert the metric column to float, replacing errors with NaN
     df[metric] = pd.to_numeric(df[metric], errors='coerce')
 
-    sns.boxplot(
-        x="dataset",
-        y=metric,
-        data=df,
-        ax=ax,
-        color="lightgray",
-        showfliers=False,
-        boxprops=dict(alpha=0.4),
-        whiskerprops=dict(alpha=0.4),
-        capprops=dict(alpha=0.4),
-        medianprops=dict(alpha=0.7)
-    ).tick_params(axis='x', rotation=30)
+    # Check if there's only one row for any dataset-metric combination
+    dataset_metric_counts = df.groupby(['dataset']).size()
+    has_single_values = (dataset_metric_counts == 1).all()
+    
+    if has_single_values:
+        # Use barplot for datasets with single values
+        sns.barplot(
+            x="dataset",
+            y=metric,
+            data=df,
+            ax=ax,
+            color="lightgray"
+        ).tick_params(axis='x', rotation=45)
+
+    else:
+        sns.boxplot(
+            x="dataset",
+            y=metric,
+            data=df,
+            ax=ax,
+            color="lightgray",
+            showfliers=False,
+            boxprops=dict(alpha=0.4),
+            whiskerprops=dict(alpha=0.4),
+            capprops=dict(alpha=0.4),
+            medianprops=dict(alpha=0.7)
+        ).tick_params(axis='x', rotation=45)
+
     ax.set_xlabel("method")
     ax.yaxis.set_minor_locator(plt.MultipleLocator(0.05))
 
@@ -664,7 +680,7 @@ def metric_boxplots(df, target_source_combinations=False, include_paired=True):
     paired_metrics = ['1-foscttm']
     all_metrics = paired_metrics + unpaired_metrics if include_paired else unpaired_metrics
 
-    fig, axs = plt.subplots(1, len(all_metrics), figsize=(12, 4), sharex=True)
+    fig, axs = plt.subplots(1, len(all_metrics), figsize=(14, 4), sharex=True)
 
     for metric, ax in zip(all_metrics, axs):
         metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets, unique_sources, ax=ax)
@@ -748,10 +764,10 @@ cuda_available = torch.cuda.is_available()
 methods_id_dict = {
     'clip': '21140748',
     'kd_clip': '22222341',
-    'eclare': '22222419',
+    'eclare': ['22222419'],
     'clip_mdd': '16204608',
     'kd_clip_mdd': '22172306',
-    'eclare_mdd': '22172639', #16105437
+    'eclare_mdd': ['23211703'], #16105437
     'mojitoo': '20212916',
     'multiVI': '18175921',
     'glue': '18234131_19205223',
@@ -763,10 +779,18 @@ methods_id_dict = {
 search_strings = {
     'clip': 'CLIP' + '_' + methods_id_dict['clip'],
     'kd_clip': 'KD_CLIP' + '_' + methods_id_dict['kd_clip'],
-    'eclare': 'ECLARE' + '_' + methods_id_dict['eclare'],
+    'eclare': ['ECLARE' + '_' + job_id for job_id in methods_id_dict['eclare']],
     'clip_mdd': 'CLIP' + '_' + methods_id_dict['clip_mdd'],
     'kd_clip_mdd': 'KD_CLIP' + '_' + methods_id_dict['kd_clip_mdd'],
-    'eclare_mdd': 'ECLARE' + '_' + methods_id_dict['eclare_mdd']
+    'eclare_mdd': ['ECLARE' + '_' + job_id for job_id in methods_id_dict['eclare_mdd']]
+}
+
+## for ECLARE, map search_strings to 'dataset' column
+dataset_column = [
+    'eclare',
+    ]
+search_strings_to_dataset = {
+    'ECLARE' + '_' + job_id: dataset_column[j] for j, job_id in enumerate(methods_id_dict['eclare'])
 }
 
 
@@ -832,7 +856,7 @@ all_metrics_df = pd.read_csv(all_metrics_csv_path)
 
 CLIP_header_idx = np.where(all_metrics_df['run_name'].str.startswith(search_strings['clip']))[0]
 KD_CLIP_header_idx = np.where(all_metrics_df['run_name'].str.startswith(search_strings['kd_clip']))[0]
-ECLARE_header_idx = np.where(all_metrics_df['run_name'].str.startswith(search_strings['eclare']))[0]
+ECLARE_header_idx = np.where(all_metrics_df['run_name'].apply(lambda x: any(x.startswith(s) for s in search_strings['eclare'])))[0]
 
 CLIP_run_id = all_metrics_df.iloc[CLIP_header_idx]['run_id']
 KD_CLIP_run_id = all_metrics_df.iloc[KD_CLIP_header_idx]['run_id']
@@ -846,17 +870,51 @@ CLIP_metrics_df = extract_target_source_replicate(CLIP_metrics_df)
 KD_CLIP_metrics_df = extract_target_source_replicate(KD_CLIP_metrics_df)
 ECLARE_metrics_df = extract_target_source_replicate(ECLARE_metrics_df, has_source=False)
 
+## add dataset column
 CLIP_metrics_df.loc[:, 'dataset']      = 'clip'
-ECLARE_metrics_df.loc[:, 'dataset']    = 'eclare'
 KD_CLIP_metrics_df.loc[:, 'dataset']   = 'kd_clip'
+ECLARE_metrics_df.loc[:, 'dataset']    = 'eclare'
 
-combined_metrics_df = pd.concat([ECLARE_metrics_df, KD_CLIP_metrics_df, CLIP_metrics_df]) # determines order in which metrics are plotted
+if len(methods_id_dict['eclare']) > 1:
+    eclare_dfs = {}
+    for search_key, dataset_name in search_strings_to_dataset.items():
+        runs_from_eclare_experiment = ECLARE_metrics_df['parent_run_id'].isin(all_metrics_df.loc[all_metrics_df['run_name']==search_key]['run_id'].values)
+        dataset_df = ECLARE_metrics_df.loc[runs_from_eclare_experiment]
+        dataset_df.loc[:, 'dataset'] = dataset_name
+        dataset_df.loc[:, 'source'] = np.nan
+        eclare_dfs[dataset_name] = dataset_df
 
+    combined_metrics_df = pd.concat([
+        *eclare_dfs.values(),
+        KD_CLIP_metrics_df,
+        CLIP_metrics_df
+        ])
+
+else:
+    combined_metrics_df = pd.concat([
+        ECLARE_metrics_df,
+        KD_CLIP_metrics_df,
+        CLIP_metrics_df
+        ]) # determines order in which metrics are plotted
+    
 ## if source and/or target contain 'multiome', convert to '10x'
 combined_metrics_df.loc[:, 'source'] = combined_metrics_df['source'].str.replace('multiome', '10x')
 combined_metrics_df.loc[:, 'target'] = combined_metrics_df['target'].str.replace('multiome', '10x')
 
-metric_boxplots(combined_metrics_df)
+## only keep runs with 'FINISHED' status
+combined_metrics_df = combined_metrics_df[combined_metrics_df['status'] == 'FINISHED']
+
+## plot boxplots
+#metric_boxplots(combined_metrics_df.loc[combined_metrics_df['dataset'].isin(['eclare', 'kd_clip', 'clip'])])
+metric_boxplots(
+    combined_metrics_df.loc[
+        ~combined_metrics_df['source'].isin(['pbmc_10x', 'mouse_brain_10x'])
+        & ~combined_metrics_df['target'].isin(['pbmc_10x', 'mouse_brain_10x'])
+        ]
+    )
+
+if len(methods_id_dict['eclare']) > 1:
+    metric_boxplots(pd.concat([*eclare_dfs.values()]))
 
 #%% unpaired MDD data
 experiment_name = f"clip_mdd_{methods_id_dict['clip_mdd']}"
@@ -872,7 +930,7 @@ mdd_metrics_df = pd.read_csv(all_metrics_csv_path)
 
 CLIP_mdd_header_idxs = np.where(mdd_metrics_df['run_name'].str.startswith(search_strings['clip_mdd']))[0]
 KD_CLIP_mdd_header_idxs = np.where(mdd_metrics_df['run_name'].str.startswith(search_strings['kd_clip_mdd']))[0]
-ECLARE_mdd_header_idxs = np.where(mdd_metrics_df['run_name'].str.startswith(search_strings['eclare_mdd']))[0]
+ECLARE_mdd_header_idxs = np.where(mdd_metrics_df['run_name'].apply(lambda x: any(x.startswith(s) for s in search_strings['eclare_mdd'])))[0]
 
 CLIP_mdd_run_id = mdd_metrics_df.iloc[CLIP_mdd_header_idxs]['run_id']
 KD_CLIP_mdd_run_id = mdd_metrics_df.iloc[KD_CLIP_mdd_header_idxs]['run_id']
@@ -886,17 +944,48 @@ CLIP_mdd_metrics_df = extract_target_source_replicate(CLIP_mdd_metrics_df)
 KD_CLIP_mdd_metrics_df = extract_target_source_replicate(KD_CLIP_mdd_metrics_df)
 ECLARE_mdd_metrics_df = extract_target_source_replicate(ECLARE_mdd_metrics_df, has_source=False)
 
+## add dataset column
 CLIP_mdd_metrics_df.loc[:, 'dataset'] = 'clip_mdd'
 KD_CLIP_mdd_metrics_df.loc[:, 'dataset'] = 'kd_clip_mdd'
 ECLARE_mdd_metrics_df.loc[:, 'dataset'] = 'eclare_mdd'
 
-combined_mdd_metrics_df = pd.concat([ECLARE_mdd_metrics_df, KD_CLIP_mdd_metrics_df, CLIP_mdd_metrics_df])
+if len(methods_id_dict['eclare_mdd']) > 1:
+    eclare_dfs = {}
+    for search_key, dataset_name in search_strings_to_dataset.items():
+        runs_from_eclare_experiment = ECLARE_metrics_df['parent_run_id'].isin(all_metrics_df.loc[all_metrics_df['run_name']==search_key]['run_id'].values)
+        dataset_df = ECLARE_metrics_df.loc[runs_from_eclare_experiment]
+        dataset_df.loc[:, 'dataset'] = dataset_name
+        eclare_dfs[dataset_name] = dataset_df
+
+    combined_metrics_df = pd.concat([
+        *eclare_dfs.values(),
+        KD_CLIP_metrics_df,
+        CLIP_metrics_df
+        ])
+
+else:
+    combined_mdd_metrics_df = pd.concat([
+        ECLARE_mdd_metrics_df,
+        KD_CLIP_mdd_metrics_df,
+        CLIP_mdd_metrics_df
+        ]) # determines order in which metrics are plotted
 
 ## if source and/or target contain 'multiome', convert to '10x'
 combined_mdd_metrics_df.loc[:, 'source'] = combined_mdd_metrics_df['source'].str.replace('multiome', '10x')
 combined_mdd_metrics_df.loc[:, 'target'] = combined_mdd_metrics_df['target'].str.replace('multiome', '10x')
 
-metric_boxplots(combined_mdd_metrics_df, target_source_combinations=True, include_paired=False)
+## only keep runs with 'FINISHED' status
+combined_mdd_metrics_df = combined_mdd_metrics_df[combined_mdd_metrics_df['status'] == 'FINISHED']
+
+## plot boxplots for main models
+metric_boxplots(combined_mdd_metrics_df.loc[combined_mdd_metrics_df['dataset'].isin(['eclare_mdd', 'kd_clip_mdd', 'clip_mdd'])], 
+                target_source_combinations=True, include_paired=False)
+
+## plot boxplots for ablation studies
+if len(methods_id_dict['eclare_mdd']) > 1:
+    metric_boxplots(combined_mdd_metrics_df.loc[
+        combined_mdd_metrics_df['dataset'].isin(['eclare_mdd', 'w/o_p_mdd', 'w/o_m_mdd', 'w/o_pm_mdd'])
+        ], target_source_combinations=True, include_paired=False)
 
 
 '''
@@ -943,7 +1032,77 @@ if len(mdd_df_multiclip) != 1*3:
     print(f'multiclip_mdd: {len(mdd_df_multiclip)}')
 '''
 
-    
+#%% compare KD-CLIP with pbmc and mouse brain VS ECLARE with pbmc + mouse brain
+
+## paired data
+
+## CLIP
+ablation_clip_metrics_df = combined_metrics_df.loc[combined_metrics_df['dataset'].isin(['clip'])]
+ablation_clip_metrics_df = ablation_clip_metrics_df.loc[ablation_clip_metrics_df['source'].isin(['pbmc_10x', 'mouse_brain_10x'])]
+ablation_clip_metrics_df = ablation_clip_metrics_df.loc[~ablation_clip_metrics_df['target'].isin(['pbmc_10x', 'mouse_brain_10x'])]
+
+ablation_clip_metrics_df.loc[ablation_clip_metrics_df['source']=='pbmc_10x', 'dataset'] = 'pbmc (clip)'
+ablation_clip_metrics_df.loc[ablation_clip_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'mb (clip)'
+
+## KD-CLIP
+ablation_kd_clip_metrics_df = combined_metrics_df.loc[combined_metrics_df['dataset'].isin(['kd_clip'])]
+ablation_kd_clip_metrics_df = ablation_kd_clip_metrics_df.loc[ablation_kd_clip_metrics_df['source'].isin(['pbmc_10x', 'mouse_brain_10x'])]
+ablation_kd_clip_metrics_df = ablation_kd_clip_metrics_df.loc[~ablation_kd_clip_metrics_df['target'].isin(['pbmc_10x', 'mouse_brain_10x'])]
+
+ablation_kd_clip_metrics_df.loc[ablation_kd_clip_metrics_df['source']=='pbmc_10x', 'dataset'] = 'pbmc (kd)'
+ablation_kd_clip_metrics_df.loc[ablation_kd_clip_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'mb (kd)'
+
+## ECLARE
+ablation_eclare_metrics_df = combined_metrics_df.loc[combined_metrics_df['dataset'].isin(['eclare'])]
+ablation_eclare_metrics_df.loc[:, 'dataset'] = 'both'
+
+## Combined ablation
+ablation_metrics_df = pd.concat([
+    ablation_eclare_metrics_df,
+    ablation_kd_clip_metrics_df,
+    ablation_clip_metrics_df
+    ])
+
+## Reorder rows using "dataset" field
+ablation_metrics_df = ablation_metrics_df.sort_values('dataset')
+
+metric_boxplots(ablation_metrics_df, target_source_combinations=False, include_paired=True)
+
+## MDD
+
+## CLIP
+ablation_clip_mdd_metrics_df = combined_mdd_metrics_df.loc[combined_mdd_metrics_df['dataset'].isin(['clip_mdd'])]
+ablation_clip_mdd_metrics_df = ablation_clip_mdd_metrics_df.loc[ablation_clip_mdd_metrics_df['source'].isin(['pbmc_10x', 'mouse_brain_10x'])]
+ablation_clip_mdd_metrics_df = ablation_clip_mdd_metrics_df.loc[~ablation_clip_mdd_metrics_df['target'].isin(['pbmc_10x', 'mouse_brain_10x'])]
+
+ablation_clip_mdd_metrics_df.loc[ablation_clip_mdd_metrics_df['source']=='pbmc_10x', 'dataset'] = 'pbmc (clip)'
+ablation_clip_mdd_metrics_df.loc[ablation_clip_mdd_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'mb (clip)'
+
+## KD-CLIP
+ablation_kd_clip_mdd_metrics_df = combined_mdd_metrics_df.loc[combined_mdd_metrics_df['dataset'].isin(['kd_clip_mdd'])]
+ablation_kd_clip_mdd_metrics_df = ablation_kd_clip_mdd_metrics_df.loc[ablation_kd_clip_mdd_metrics_df['source'].isin(['pbmc_10x', 'mouse_brain_10x'])]
+ablation_kd_clip_mdd_metrics_df = ablation_kd_clip_mdd_metrics_df.loc[~ablation_kd_clip_mdd_metrics_df['target'].isin(['pbmc_10x', 'mouse_brain_10x'])]
+
+ablation_kd_clip_mdd_metrics_df.loc[ablation_kd_clip_mdd_metrics_df['source']=='pbmc_10x', 'dataset'] = 'pbmc (kd)'
+ablation_kd_clip_mdd_metrics_df.loc[ablation_kd_clip_mdd_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'mb (kd)'
+
+## ECLARE
+ablation_eclare_mdd_metrics_df = combined_mdd_metrics_df.loc[combined_mdd_metrics_df['dataset'].isin(['eclare_mdd'])]
+ablation_eclare_mdd_metrics_df.loc[:, 'dataset'] = 'both'
+
+## Combined ablation
+ablation_mdd_metrics_df = pd.concat([
+    ablation_eclare_mdd_metrics_df,
+    ablation_kd_clip_mdd_metrics_df,
+    ablation_clip_mdd_metrics_df
+    ])
+
+## Reorder rows using "dataset" field
+ablation_mdd_metrics_df = ablation_mdd_metrics_df.sort_values('dataset')
+
+metric_boxplots(ablation_mdd_metrics_df, target_source_combinations=True, include_paired=False)
+
+
 #%%
 metrics = ['1 - foscttm_score', 'ilisis', 'ari', 'nmi', 'asw_ct']
 metrics_mdd = ['ilisis', 'ari', 'nmi', 'asw_ct']
@@ -1000,22 +1159,36 @@ fig4_clips_mdd.savefig(os.path.join(figpath, 'fig4_clips_mdd.png'), bbox_inches=
 
 device = 'cuda' if cuda_available else 'cpu'
 
-## Find path to best ECLARE model
-best_eclare_mdd = str(ECLARE_mdd_metrics_df['multimodal_ilisi'].argmax())
-student_job_id = f'eclare_mdd_{methods_id_dict["eclare_mdd"]}'
-paths_root = os.path.join(os.environ['OUTPATH'], student_job_id)
-student_model_path = os.path.join(paths_root, 'MDD', best_eclare_mdd, 'model_uri.txt')
+## Find path to best ECLARE, KD-CLIP and CLIP models
+best_eclare_mdd     = str(ECLARE_mdd_metrics_df['multimodal_ilisi'].argmax())
+best_kd_clip_mdd    = KD_CLIP_mdd_metrics_df['source'].iloc[KD_CLIP_mdd_metrics_df['multimodal_ilisi'].argmax()]
 
-## Load the model and metadata
-with open(student_model_path, 'r') as f:
-    model_uris = f.read().strip().splitlines()
-    model_uri = model_uris[0]
+def load_model_and_metadata(student_job_id, best_model_idx, target_dataset='MDD'):
 
-## Set tracking URI to ECLARE_ROOT/mlruns and load model & metadata
-mlflow.set_tracking_uri(os.path.join(os.environ['ECLARE_ROOT'], 'mlruns'))
-student_model = mlflow.pytorch.load_model(model_uri)
-student_model_metadata = Model.load(model_uri)
+    ## replace 'multiome' by '10x'
+    best_model_idx = best_model_idx.replace('multiome', '10x')
+ 
+    paths_root = os.path.join(os.environ['OUTPATH'], student_job_id)
+    student_model_path = os.path.join(paths_root, target_dataset, best_model_idx, 'model_uri.txt')
 
+    ## Load the model and metadata
+    with open(student_model_path, 'r') as f:
+        model_uris = f.read().strip().splitlines()
+        model_uri = model_uris[0]
+
+    ## Set tracking URI to ECLARE_ROOT/mlruns and load model & metadata
+    mlflow.set_tracking_uri(os.path.join(os.environ['ECLARE_ROOT'], 'mlruns'))
+    student_model = mlflow.pytorch.load_model(model_uri)
+    student_model_metadata = Model.load(model_uri)
+
+    return student_model, student_model_metadata
+
+#eclare_student_model, eclare_student_model_metadata     = load_model_and_metadata(f'eclare_mdd_{methods_id_dict["eclare_mdd"]}', best_eclare_mdd)
+eclare_student_model, eclare_student_model_metadata     = load_model_and_metadata(f'eclare_mdd_{methods_id_dict["eclare_mdd"][0]}', best_eclare_mdd)
+kd_clip_student_model, kd_clip_student_model_metadata   = load_model_and_metadata(f'kd_clip_mdd_{methods_id_dict["kd_clip_mdd"]}', os.path.join(best_kd_clip_mdd, '0'))
+
+eclare_student_model = eclare_student_model.train().to('cpu')
+kd_clip_student_model = kd_clip_student_model.train().to('cpu')
 
 #%% load data
 
@@ -1041,14 +1214,21 @@ atac_condition_key='condition'
 rna_subject_key='OriginalSub'
 atac_subject_key='BrainID'
 
+rna_sex_key = 'Sex'
+atac_sex_key = 'sex'
+
 unique_celltypes = np.unique(np.concatenate([mdd_rna.obs[rna_celltype_key], mdd_atac.obs[atac_celltype_key]]))
 unique_conditions = np.unique(np.concatenate([mdd_rna.obs[rna_condition_key], mdd_atac.obs[atac_condition_key]]))
-unique_sexes = ['Female', 'Male']
+unique_sexes = np.unique(np.concatenate([mdd_rna.obs[rna_sex_key].str.lower(), mdd_atac.obs[atac_sex_key].str.lower()]))
 
 #%% project MDD nuclei into latent space
 
 mdd_rna_sampled, mdd_atac_sampled, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition = \
-   sample_proportional_celltypes_and_condition(mdd_rna, mdd_atac, batch_size=10000)
+   sample_proportional_celltypes_and_condition(mdd_rna, mdd_atac, batch_size=5000)
+
+## extract sex labels (ideally, extract from sample_proportional_celltypes_and_condition)
+mdd_rna_sex = mdd_rna_sampled.obs[rna_sex_key].str.lower()
+mdd_atac_sex = mdd_atac_sampled.obs[atac_sex_key].str.lower()
 
 # subset to 'Mic' celltype right away
 '''
@@ -1060,15 +1240,130 @@ mdd_rna_celltypes = mdd_rna.obs[rna_celltype_key][mdd_rna.obs[rna_celltype_key] 
 mdd_atac_celltypes = mdd_atac.obs[atac_celltype_key][mdd_atac.obs[atac_celltype_key] == 'Mic']
 '''
 
+## get latents
+eclare_rna_latents, eclare_atac_latents = get_latents(eclare_student_model, mdd_rna_sampled, mdd_atac_sampled, return_tensor=False)
+kd_clip_rna_latents, kd_clip_atac_latents = get_latents(kd_clip_student_model, mdd_rna_sampled, mdd_atac_sampled, return_tensor=False)
 
-student_model = student_model.to('cpu')
-rna_latents, atac_latents = get_latents(student_model, mdd_rna_sampled, mdd_atac_sampled, return_tensor=True)
+## compute metrics
+from scib_metrics.nearest_neighbors import jax_approx_min_k
+from scib_metrics import ilisi_knn, nmi_ari_cluster_labels_leiden, silhouette_label, kbet
+def unpaired_metrics(latents, labels, modalities, batches, k=30): # taken from eval_utils.py, should avoid having other copy here
 
-rna_latents = rna_latents.cpu().numpy()
-atac_latents = atac_latents.cpu().numpy()
+    ## get neighbors object & initialize metrics dict
+    neighbors = jax_approx_min_k(latents.detach().cpu(), k)
+    unpaired_metrics = {}
 
+    ## bioconservation
+    nmi_ari_dict = nmi_ari_cluster_labels_leiden(neighbors, labels, optimize_resolution=True)
+    silhouette_celltype = silhouette_label(latents.detach().cpu().numpy(), labels, rescale=True)
+
+    ## multimodal & batch integration
+    multimodal_ilisi = ilisi_knn(neighbors, modalities, scale=True)
+    batches_ilisi = ilisi_knn(neighbors, batches, scale=True)
+
+    ## sex conservation
+    sex_kbet = kbet(neighbors, sexes, alpha=0.05)[0]
+
+    ## update nmi_ari_dict to include other metrics
+    unpaired_metrics.update({
+        'nmi': nmi_ari_dict['nmi'],
+        'ari': nmi_ari_dict['ari'],
+        'silhouette_celltype': silhouette_celltype,
+        'multimodal_ilisi': multimodal_ilisi,
+        'batches_ilisi': batches_ilisi,
+        'sex_kbet': sex_kbet
+    })
+
+    return unpaired_metrics
+
+## concatenate latents
+eclare_latents = np.concatenate([eclare_rna_latents, eclare_atac_latents], axis=0)
+kd_clip_latents = np.concatenate([kd_clip_rna_latents, kd_clip_atac_latents], axis=0)
+#clip_latents = np.concatenate([clip_rna_latents, clip_atac_latents], axis=0)
+
+## concatenate sexes
+mdd_sexes = np.concatenate([mdd_rna_sex, mdd_atac_sex], axis=0)
+
+## plot umaps
 color_map_ct = create_celltype_palette(unique_celltypes, unique_celltypes, plot_color_palette=False)
-plot_umap_embeddings(rna_latents, atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=color_map_ct, umap_embedding=None)
+_, fig, rna_atac_df_umap = plot_umap_embeddings(eclare_rna_latents, eclare_atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=color_map_ct, umap_embedding=None)
+#plot_umap_embeddings(kd_clip_rna_latents, kd_clip_atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=color_map_ct, umap_embedding=None)
+
+#%% flashtalk
+
+## scramble MDD umap
+rna_atac_df_umap_scrambled = rna_atac_df_umap.copy()
+rna_atac_df_umap_scrambled = pd.concat([rna_atac_df_umap_scrambled[::4], rna_atac_df_umap_scrambled[1::4]])
+
+## plot modality umap
+fig, ax = plt.subplots(figsize=(6, 6))
+modality_colors = {'RNA': 'purple', 'ATAC': 'green'}
+sns.scatterplot(data=rna_atac_df_umap_scrambled, x='umap_1', y='umap_2', hue=rna_atac_df_umap_scrambled['modality'], 
+                palette=modality_colors, edgecolor='grey', ax=ax, marker='.', alpha=1.)
+ax.set_axis_off()
+fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_modality.png'), bbox_inches='tight', dpi=300, transparent=True)
+
+fig, ax = plt.subplots(figsize=(6, 6))
+sns.scatterplot(data=rna_atac_df_umap_scrambled.loc[rna_atac_df_umap_scrambled['modality'] == 'RNA'], x='umap_1', y='umap_2', 
+                color='purple', edgecolor='grey', ax=ax, marker='.', alpha=1.)
+ax.set_axis_off()
+fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_rna.png'), bbox_inches='tight', dpi=300, transparent=True)
+
+fig, ax = plt.subplots(figsize=(6, 6))
+sns.scatterplot(data=rna_atac_df_umap_scrambled.loc[rna_atac_df_umap_scrambled['modality'] == 'ATAC'], x='umap_1', y='umap_2', 
+                color='green', edgecolor='grey', ax=ax, marker='.', alpha=1.)
+ax.set_axis_off()
+fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_atac.png'), bbox_inches='tight', dpi=300, transparent=True)
+
+## plot celltypes umap
+fig, ax = plt.subplots(figsize=(8, 8))
+sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='celltypes', edgecolor='grey', ax=ax, marker='.', alpha=1.)
+ax.set_axis_off()
+fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_celltypes.png'), bbox_inches='tight', dpi=300, transparent=True)
+
+
+## load ECLARE model with paired data as target
+best_clip_mdd       = 'DLPFC_Anderson' #CLIP_mdd_metrics_df['source'].iloc[CLIP_mdd_metrics_df['multimodal_ilisi'].argmax()]
+clip_student_model, clip_student_model_metadata         = load_model_and_metadata(f'clip_mdd_{methods_id_dict["clip_mdd"]}', os.path.join(best_clip_mdd, '0'))
+clip_student_model = clip_student_model.to('cpu')
+
+## load aligned paired data
+args = SimpleNamespace(
+    source_dataset=best_clip_mdd,
+    target_dataset='MDD',
+    genes_by_peaks_str='9918_by_43840'
+)
+
+from eclare.setup_utils import return_setup_func_from_dataset
+setup_function = return_setup_func_from_dataset(best_clip_mdd)
+
+rna_aligned_paired, atac_aligned_paired, cell_group, _, _, _, _ = \
+    setup_function(args, return_raw_data=True, return_type='data')
+
+## sample aligned paired data
+rna_aligned_paired_sampled = rna_aligned_paired[::6].copy()
+atac_aligned_paired_sampled = atac_aligned_paired[::6].copy()
+
+## get celltypes
+rna_celltypes = rna_aligned_paired_sampled.obs[cell_group]
+atac_celltypes = atac_aligned_paired_sampled.obs[cell_group]
+unique_celltypes = np.unique(np.concatenate([rna_celltypes, atac_celltypes]))
+
+## get latents
+eclare_student_model_paired, eclare_student_model_metadata_paired = load_model_and_metadata(f'eclare_{methods_id_dict["eclare"][0]}', '0', target_dataset=best_clip_mdd)
+eclare_student_model_paired.train()
+
+eclare_rna_latents_paired, eclare_atac_latents_paired = get_latents(eclare_student_model_paired, rna_aligned_paired_sampled, atac_aligned_paired_sampled, return_tensor=False)
+
+## plot umap
+color_map_ct = create_celltype_palette(unique_celltypes, unique_celltypes, plot_color_palette=False)
+_, fig, _ = plot_umap_embeddings(eclare_rna_latents_paired, eclare_atac_latents_paired, rna_celltypes, atac_celltypes, None, None, color_map_ct=color_map_ct, umap_embedding=None)
+
+## save the figure
+fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk2_umap_embeddings.png'), bbox_inches='tight', dpi=300, transparent=True)
+
+
+
 
 #%% define function for computing corrected Pearson correlation coefficient based on BigSur paper
 
@@ -1121,7 +1416,7 @@ def c_sweep(X, Y, c_range=[0.1, 0.5, 2, 10]):
 import SEACells
 import scanpy as sc
 
-def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key='X_umap'):
+def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key='X_umap', n_SEACells=None):
 
     # Copy the counts to ".raw" attribute of the anndata since it is necessary for downstream analysis
     # This step should be performed after filtering 
@@ -1141,7 +1436,7 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
     ## User defined parameters
 
     ## Core parameters 
-    n_SEACells = max(adata_train.n_obs // 75, 15)
+    n_SEACells = n_SEACells if n_SEACells is not None else max(adata_train.n_obs // 75, 15)
     print(f'Number of SEACells: {n_SEACells}')
     n_waypoint_eigs = 15 # Number of eigenvalues to consider when initializing metacells
 
@@ -1197,16 +1492,19 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
 
 #%% get peak-gene correlations
 
+from sklearn.model_selection import StratifiedShuffleSplit
+
 def tree(): return defaultdict(tree)
 genes_by_peaks_corrs_dict = tree()
 n_dict = tree()
 
-cutoff = 1300  # 1300 for Mic
+cutoff = 5000  # 1300 for Mic
 
 ## sex='Female'; celltype='Mic'
-## sex='Female'; celltype='In'
+## sex='Female'; celltype='Ex'
+## sex=''; celltype=''
 
-maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData6', header=2)
+maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
 #maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
 
@@ -1215,8 +1513,8 @@ sc.pp.highly_variable_genes(mdd_rna)
 sc.pp.highly_variable_genes(mdd_atac, n_top_genes=10000)
 
 ## use all peaks and genes
-peaks_indices_hvg = mdd_atac.var['highly_variable'].astype(bool)
 genes_indices_hvg = mdd_rna.var['highly_variable'].astype(bool)
+peaks_indices_hvg = mdd_atac.var['highly_variable'].astype(bool)
 
 do_corrs_or_cosines = 'correlations'
 
@@ -1248,13 +1546,17 @@ for sex in unique_sexes:
             print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {peaks_indices.sum()} - DEG genes: {genes_indices.sum()}')
 
             ## select cell indices
-            rna_indices = np.where((mdd_rna.obs[rna_celltype_key].str.startswith(celltype)) & (mdd_rna.obs[rna_condition_key] == condition) & (mdd_rna.obs['Sex'] == sex))[0]
-            atac_indices = np.where((mdd_atac.obs[atac_celltype_key].str.startswith(celltype)) & (mdd_atac.obs[atac_condition_key] == condition) & (mdd_atac.obs['sex'] == sex.lower()))[0]
+            rna_indices = np.where((mdd_rna.obs[rna_celltype_key].str.startswith(celltype)) & (mdd_rna.obs[rna_condition_key] == condition) & (mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower())))[0]
+            atac_indices = np.where((mdd_atac.obs[atac_celltype_key].str.startswith(celltype)) & (mdd_atac.obs[atac_condition_key] == condition) & (mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower())))[0]
 
             if len(rna_indices) > cutoff:
-                rna_indices = np.random.choice(rna_indices, cutoff, replace=False)
+                sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
+                _, sampled_indices = next(sss.split(rna_indices, mdd_rna.obs[rna_celltype_key].iloc[rna_indices]))
+                rna_indices = rna_indices[sampled_indices]
             if len(atac_indices) > cutoff:
-                atac_indices = np.random.choice(atac_indices, cutoff, replace=False)
+                sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
+                _, sampled_indices = next(sss.split(atac_indices, mdd_atac.obs[atac_celltype_key].iloc[atac_indices]))
+                atac_indices = atac_indices[sampled_indices]
 
             mdd_rna_sampled_group = mdd_rna[rna_indices]
             mdd_atac_sampled_group = mdd_atac[atac_indices]
@@ -1263,7 +1565,7 @@ for sex in unique_sexes:
                 print(f'No indices')
 
             ## get latents
-            rna_latents, atac_latents = get_latents(student_model, mdd_rna_sampled_group, mdd_atac_sampled_group, return_tensor=True)
+            rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_sampled_group, mdd_atac_sampled_group, return_tensor=True)
             rna_latents = rna_latents.cpu()
             atac_latents = atac_latents.cpu()
 
@@ -1516,7 +1818,7 @@ for sex in unique_sexes:
 
 import gseapy as gp
 
-ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': chi2})
+ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': Z})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
 
 pre_res = gp.prerank(rnk=ranked_list,
