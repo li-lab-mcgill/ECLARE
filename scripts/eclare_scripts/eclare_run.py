@@ -31,7 +31,7 @@ if __name__ == "__main__":
                         help='Job ID of experiment')
     parser.add_argument('--total_epochs', type=int, default=2,
                         help='number of epochs')
-    parser.add_argument('--batch_size', type=int, default=1000,
+    parser.add_argument('--batch_size', type=int, default=800,
                         help='batch size')
     parser.add_argument('--loss_type', type=str, default='knowledge_distillation',
                         help='type of loss to use for training')
@@ -57,6 +57,8 @@ if __name__ == "__main__":
                         help='feature to run')
     parser.add_argument('--tune_hyperparameters', action='store_true', default=False,
                         help='tune hyperparameters')
+    parser.add_argument('--ignore_sources', nargs='+', type=str,
+                        help='List of sources to ignore')
     args = parser.parse_args()
     #args = parser.parse_known_args()[0]
 
@@ -118,7 +120,7 @@ if __name__ == "__main__":
     
     ## Setup teachers
     datasets, models, teacher_rna_train_loaders, teacher_atac_train_loaders, teacher_rna_valid_loaders, teacher_atac_valid_loaders = \
-        teachers_setup(model_uri_paths, device, args)
+        teachers_setup(model_uri_paths, args)
     
 
     run_args = {
@@ -161,7 +163,13 @@ if __name__ == "__main__":
         exp_type_run = exp_type_runs[0]  # Take the first (is the most recent?)
 
     # 2. Get or create data run with more specific filtering
-    data_run_and_replicate_name = f'{args.source_dataset}-to-{args.target_dataset}-{args.replicate_idx}' if args.source_dataset is not None else f'{args.target_dataset}-{args.replicate_idx}'
+    if args.source_dataset is not None:
+        data_run_and_replicate_name = f'{args.source_dataset}-to-{args.target_dataset}-{args.replicate_idx}'
+    elif (args.source_dataset is None) and (args.ignore_sources is not None):
+        data_run_and_replicate_name = f'{args.target_dataset}-IGNORE-{"_".join(args.ignore_sources)}-{args.replicate_idx}'
+    else:
+        data_run_and_replicate_name = f'{args.target_dataset}-{args.replicate_idx}'
+
     data_run_filter = (
         f"tags.mlflow.runName = '{data_run_and_replicate_name}' and "
         f"tags.mlflow.parentRunId = '{exp_type_run.info.run_id}'"
@@ -187,6 +195,7 @@ if __name__ == "__main__":
         with mlflow.start_run(run_id=data_run.info.run_id, nested=True):
             print(f"Running {data_run_and_replicate_name}")
 
+            mlflow.set_tag("ignore_sources", args.ignore_sources)
             mlflow.set_tag("outdir", args.outdir)
             mlflow.set_tag("hostname", socket.gethostname())
 

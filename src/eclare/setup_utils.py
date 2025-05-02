@@ -1582,7 +1582,7 @@ def get_genes_by_peaks_str(datasets = ["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", 
     genes_by_peaks_str_timestamp_df.to_csv(os.path.join(datapath, 'genes_by_peaks_str_timestamp.csv'))
 
 
-def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
+def teachers_setup(model_paths, args, dataset_idx_dict=None):
     
     datasets = []
     models = {}
@@ -1600,10 +1600,9 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
             model_uris = f.read().strip().splitlines()
             model_uri = model_uris[0]
         
-        model = mlflow.pytorch.load_model(model_uri)
-        model_metadata = Model.load(model_uri)
 
-        ## Determine the dataset
+        ## Get metadata and determine the dataset
+        model_metadata = Model.load(model_uri)
         dataset = model_metadata.metadata['source_dataset']
         genes_by_peaks_str = model_metadata.metadata['genes_by_peaks_str']
         target_setup_func = return_setup_func_from_dataset(args.target_dataset)
@@ -1612,6 +1611,15 @@ def teachers_setup(model_paths, device, args, dataset_idx_dict=None):
         if 'multiome' in dataset:
             print(f"Warning: Dataset {dataset} contains 'multiome', converting to '10x'")
             dataset = dataset.replace('multiome', '10x')
+
+        ## Check if dataset is in args.ignore_sources
+        if dataset in args.ignore_sources:
+            print(f"Skipping dataset {dataset} because it is in args.ignore_sources")
+            continue
+
+        ## Load the model
+        model = mlflow.pytorch.load_model(model_uri)
+
 
         print(dataset)
         datasets.append(dataset)

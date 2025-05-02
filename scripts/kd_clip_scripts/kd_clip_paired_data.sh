@@ -21,9 +21,6 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-## Reverse the order of datasets to have pbmc_10x and mouse_brain_10x first
-datasets=($(for i in $(seq $((${#datasets[@]} - 1)) -1 0); do echo "${datasets[$i]}"; done))
-
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=3
 N_REPLICATES=1
@@ -51,7 +48,7 @@ is_gpu_idle() {
     # Define thresholds for idle state
     local utilization_threshold=10
     local memory_threshold=500 # in MB
-
+    
     if [ "$utilization" -lt "$utilization_threshold" ] && [ "$memory_used" -lt "$memory_threshold" ]; then
         return 0 # GPU is idle
     else
