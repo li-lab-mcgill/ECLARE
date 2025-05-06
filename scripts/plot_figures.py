@@ -1488,35 +1488,42 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
     return SEACell_ad_train, SEACell_ad_apply
 
 
-
-
 #%% get peak-gene correlations
 
 from sklearn.model_selection import StratifiedShuffleSplit
+from umap import UMAP
+from eclare.setup_utils import get_genes_by_peaks
+from torchmetrics.functional import kendall_rank_corrcoef
+from tqdm import tqdm
+from scipy.stats import norm
+
 
 def tree(): return defaultdict(tree)
 genes_by_peaks_corrs_dict = tree()
+genes_by_peaks_masks_dict = tree()
 n_dict = tree()
 
 cutoff = 5000  # 1300 for Mic
 
 ## sex='Female'; celltype='Mic'
 ## sex='Female'; celltype='Ex'
-## sex=''; celltype=''
+## sex='Female'; celltype=''
 
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
 #maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
 
+do_corrs_or_cosines = 'spearman'
+
 ## get HVG features
+'''
 sc.pp.highly_variable_genes(mdd_rna)
 sc.pp.highly_variable_genes(mdd_atac, n_top_genes=10000)
 
 ## use all peaks and genes
 genes_indices_hvg = mdd_rna.var['highly_variable'].astype(bool)
 peaks_indices_hvg = mdd_atac.var['highly_variable'].astype(bool)
-
-do_corrs_or_cosines = 'correlations'
+'''
 
 for sex in unique_sexes:
     for celltype in unique_celltypes:
@@ -1586,13 +1593,44 @@ for sex in unique_sexes:
             value = ot_res.value_linear
 
             ## re-order RNA latents to match plan (can rerun OT analysis to ensure diagonal matching structure)
-            rna_latents = rna_latents[plan.argmax(axis=1)]
-            mdd_rna_sampled_group = mdd_rna_sampled_group[plan.argmax(axis=1).numpy()]
+            atac_latents = atac_latents[plan.argmax(axis=0)]
+            mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
 
             ## select genes and peaks before SEACells
             mdd_rna_sampled_group = mdd_rna_sampled_group[:,genes_indices]
             mdd_atac_sampled_group = mdd_atac_sampled_group[:,peaks_indices]
 
+            ## get genes by peaks mask and save to dict
+            genes_to_peaks_binary_mask, genes_peaks_dict = get_genes_by_peaks(mdd_rna_sampled_group, mdd_atac_sampled_group, None, window_size = 1e6, feature_selection_method = None)
+
+            peaks_sort_idxs = np.argsort(genes_peaks_dict['peaks'].tolist())
+            genes_peaks_dict['peaks'] = genes_peaks_dict['peaks'][peaks_sort_idxs]
+            genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[:, peaks_sort_idxs]
+
+            mdd_rna_sampled_group   = mdd_rna_sampled_group[:, mdd_rna_sampled_group.var_names.isin(genes_peaks_dict['genes'])]
+            mdd_atac_sampled_group  = mdd_atac_sampled_group[:, mdd_atac_sampled_group.var_names.isin(genes_peaks_dict['peaks'])]
+
+            assert (mdd_rna_sampled_group.var_names == genes_peaks_dict['genes']).all()
+            assert (mdd_atac_sampled_group.var_names == genes_peaks_dict['peaks']).all()
+
+            genes_by_peaks_masks_dict[sex][celltype][condition] = genes_to_peaks_binary_mask
+
+            ## plot UMAP of aligned RNA latents and ATAC latents
+            umap_embeddings = UMAP(n_neighbors=50, min_dist=0.5, n_components=2, metric='cosine', random_state=42)
+            umap_embeddings.fit(np.concatenate([rna_latents, atac_latents], axis=0))
+            rna_umap = umap_embeddings.transform(rna_latents)
+            atac_umap = umap_embeddings.transform(atac_latents)
+
+            rna_df_umap = pd.DataFrame(data={'umap_1': rna_umap[:, 0], 'umap_2': rna_umap[:, 1],'modality': 'RNA'})
+            atac_df_umap = pd.DataFrame(data={'umap_1': atac_umap[:, 0], 'umap_2': atac_umap[:, 1], 'modality': 'ATAC'})
+            rna_atac_df_umap = pd.concat([rna_df_umap, atac_df_umap], axis=0)#.sample(frac=1) # shuffle            sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, ax=ax[2], legend=True, marker=marker)
+
+            fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+            sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, legend=True, marker='.')
+            ax.set_xticklabels([]); ax.set_yticklabels([]); ax.set_xlabel(''); ax.set_ylabel('')
+            plt.show()
+
+            ## run SEACells to obtain pseudobulked counts
             mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_UMAP_Harmony_Batch_Sample_Chemistry')
 
             X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
@@ -1623,7 +1661,7 @@ for sex in unique_sexes:
                 X_rna_atac = torch.cat([X_rna, X_atac], dim=0)
 
                 corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
-                corr = corr[0:genes_indices.sum(), genes_indices.sum():]
+                corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
 
                 if corr.isnan().any():
                     print(f'NaN values in correlation matrix')
@@ -1631,6 +1669,40 @@ for sex in unique_sexes:
 
                 genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
                 n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
+
+            elif do_corrs_or_cosines == 'spearman':
+
+                X_rna_argsort = torch.argsort(X_rna, dim=1) 
+                X_atac_argsort = torch.argsort(X_atac, dim=1)
+
+                X_rna_atac = torch.cat([X_rna_argsort, X_atac_argsort], dim=0)
+                corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
+                corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
+
+                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+                n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
+                    
+            elif do_corrs_or_cosines == 'kendall':
+
+                corr = torch.zeros(X_rna.shape[0], X_atac.shape[0])
+                p_values = torch.zeros(X_rna.shape[0], X_atac.shape[0])
+                
+                for g, gene in tqdm(enumerate(mdd_rna_sampled_group.var_names), total=len(mdd_rna_sampled_group.var_names), desc="Computing Kendall correlations"):
+                    x_rna = X_rna[g,:]
+                    X_rna_g = x_rna.repeat(len(X_atac), 1)
+                    corrs_g, p_values_g = kendall_rank_corrcoef(X_rna_g.T.cuda(), X_atac.T.cuda(), variant='b', t_test=True, alternative='less')
+                    corr[g,:] = corrs_g.detach().cpu()
+                    p_values[g,:] = p_values_g.detach().cpu()
+
+                p_values[p_values==0] = 1e-5
+                p_values[p_values==1] = 1-1e-5
+
+                z_scores = norm.ppf(p_values)
+
+                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+                n_dict[sex][celltype][condition] = X_rna.shape[1]
+
+                
 
             elif do_corrs_or_cosines == 'cosines':
 
@@ -1654,7 +1726,7 @@ gene_candidates_dict['Female']['InN'] = gene_candidates_dict['Female']['Mic']
 hits_idxs_dict = tree()
 from scipy.stats import norm
 
-score_type = 'fisher'
+score_type = 'kendall'
 
 for sex in unique_sexes:
     for celltype in unique_celltypes:
@@ -1663,13 +1735,19 @@ for sex in unique_sexes:
         celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
 
         #genes_names = mdd_rna.var_names[mdd_rna.var_names.isin(celltype_degs_df['gene'])]
-        genes_names = mdd_rna.var_names[genes_indices]
+        genes_names = genes_peaks_dict['genes']
 
         corr_case = genes_by_peaks_corrs_dict[sex][celltype]['Case']
         corr_control = genes_by_peaks_corrs_dict[sex][celltype]['Control']
 
         corr_case = corr_case.numpy()
         corr_control = corr_control.numpy()
+
+        genes_by_peaks_masks_case = genes_by_peaks_masks_dict[sex][celltype]['Case']
+        genes_by_peaks_masks_control = genes_by_peaks_masks_dict[sex][celltype]['Control']
+
+        corr_case[genes_by_peaks_masks_case==0] = 0
+        corr_control[genes_by_peaks_masks_control==0] = 0
 
         if score_type == 'corrdiff':
 
@@ -1694,8 +1772,9 @@ for sex in unique_sexes:
             fisher_sums_case = np.sum(fisher_case, axis=1)
             fisher_sums_control = np.sum(fisher_control, axis=1)
 
-            K_case = fisher_case.shape[1]
-            K_control = fisher_control.shape[1]
+            K_case = genes_by_peaks_masks_case.sum(1)
+            K_control = genes_by_peaks_masks_control.sum(1)
+            
             n_case = n_dict[sex][celltype]['Case']
             n_control = n_dict[sex][celltype]['Control']
 
@@ -1710,6 +1789,24 @@ for sex in unique_sexes:
             hits_idxs = np.where(p_value < p_value_threshold)[0]
 
             hits_idxs_dict[sex][celltype] = hits_idxs
+
+        elif score_type == 'kendall':
+
+            ## get weights from distance mask
+            weights_case = genes_by_peaks_masks_case.copy()
+            weights_control = genes_by_peaks_masks_control.copy()
+
+            ## corrs linearly correlated with z-scores
+            kendall_sums_case = (corr_case * weights_case).sum(1)
+            kendall_sums_control = (corr_control * weights_control).sum(1)
+
+            K_case = (weights_case**2).sum(1)
+            K_control = (weights_control**2).sum(1)
+
+            Z = (kendall_sums_case - kendall_sums_control) / np.sqrt(K_case + K_control)
+            Z[np.isnan(Z)] = 0
+
+            chi2 = Z**2
 
         elif score_type == 'ismb_cosine':
 
@@ -1822,14 +1919,51 @@ ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': Z})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
 
 pre_res = gp.prerank(rnk=ranked_list,
-                     gene_sets='Reactome_2022', # apparently, GO_Biological_Process_2021 and Reactome_2022 better for neurological disorders
+                     gene_sets='GO_Biological_Process_2021', # apparently, GO_Biological_Process_2021 and Reactome_2022 better for neurological disorders. Also have Human_Phenotype_Ontology
                      outdir=os.path.join(os.environ['OUTPATH'], 'gseapy_results'),
                      min_size=2,
                      max_size=len(ranked_list),
                      permutation_num=1000)
 
-pre_res.res2d.head()
+pre_res.res2d.head(10)
 
 #%%
+import networkx as nx
+
+nodes, edges = gp.enrichment_map(pre_res.res2d)
+
+# build graph
+G = nx.from_pandas_edgelist(edges,
+                            source='src_idx',
+                            target='targ_idx',
+                            edge_attr=['jaccard_coef', 'overlap_coef', 'overlap_genes'])
+
+# Add missing node if there is any
+for node in nodes.index:
+    if node not in G.nodes():
+        G.add_node(node)
+
+fig, ax = plt.subplots(figsize=(8, 8))
+
+# init node cooridnates
+pos=nx.layout.spiral_layout(G)
+#node_size = nx.get_node_attributes()
+# draw node
+nx.draw_networkx_nodes(G,
+                       pos=pos,
+                       cmap=plt.cm.RdYlBu,
+                       node_color=list(nodes.NES),
+                       node_size=list(nodes.Hits_ratio *1000))
+# draw node label
+nx.draw_networkx_labels(G,
+                        pos=pos,
+                        labels=nodes.Term.to_dict())
+# draw edge
+edge_weight = nx.get_edge_attributes(G, 'jaccard_coef').values()
+nx.draw_networkx_edges(G,
+                       pos=pos,
+                       width=list(map(lambda x: x*10, edge_weight)),
+                       edge_color='#CDDBD4')
+plt.show()
 
 
