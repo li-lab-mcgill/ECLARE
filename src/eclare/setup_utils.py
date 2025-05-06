@@ -78,7 +78,7 @@ def get_protein_coding_genes(rna):
     rna = rna[:, rna.var.index.isin(protein_coding_genes_list)].to_memory()
     return rna
 
-def get_genes_by_peaks(rna, atac, genes_to_peaks_binary_mask_path, window_size = 1e6, feature_selection_method = None):
+def get_genes_by_peaks(rna, atac, genes_to_peaks_mask_path, window_size = 1e6, feature_selection_method = None):
 
         ## Merge gene coordinates to RNA
         if np.isin( ['Chromosome/scaffold name', 'Gene start (bp)', 'Gene end (bp)'] , rna.var.columns ).all():
@@ -102,10 +102,14 @@ def get_genes_by_peaks(rna, atac, genes_to_peaks_binary_mask_path, window_size =
             rna_var_tmp = rna_var_tmp.groupby('Gene name', sort=False).agg({
                         'Chromosome/scaffold name': 'max',
                         'TSS start (bp)': 'mean',
-                        'TSS end (bp)': 'mean'})
+                        'TSS end (bp)': 'mean',
+                        'Gene start (bp)': 'mean',
+                        'Gene end (bp)': 'mean'})
         
             rna_var_tmp['TSS start (bp)'] = rna_var_tmp['TSS start (bp)'].astype(int).astype(str)
             rna_var_tmp['TSS end (bp)'] = rna_var_tmp['TSS end (bp)'].astype(int).astype(str)
+            rna_var_tmp['Gene start (bp)'] = rna_var_tmp['Gene start (bp)'].astype(int).astype(str)
+            rna_var_tmp['Gene end (bp)'] = rna_var_tmp['Gene end (bp)'].astype(int).astype(str)
             rna_var_tmp['Chromosome/scaffold name'] = 'chr' + rna_var_tmp['Chromosome/scaffold name']
 
             #rna.var = pd.merge(rna.var, rna_var_tmp, left_index=True, right_index=True, how='left')
@@ -119,12 +123,12 @@ def get_genes_by_peaks(rna, atac, genes_to_peaks_binary_mask_path, window_size =
         atac_bed = BedTool.from_dataframe(atac_bed_df)
 
         #rna_bed = BedTool.from_dataframe(rna.var.reset_index()[['Chromosome/scaffold name', 'TSS start (bp)', 'TSS end (bp)', 'index']])
-        rna_bed = BedTool.from_dataframe(rna_var_tmp.reset_index()[['Chromosome/scaffold name', 'TSS start (bp)', 'TSS end (bp)', 'Gene name']])
+        rna_bed = BedTool.from_dataframe(rna_var_tmp.reset_index()[['Chromosome/scaffold name', 'TSS start (bp)', 'TSS end (bp)', 'Gene start (bp)', 'Gene end (bp)', 'Gene name']])
 
         ## Find in-cis overlapping intervals
         cis_overlaps = rna_bed.window(atac_bed, w=window_size).to_dataframe()
-        i, r = pd.factorize(cis_overlaps['name'])       # genes
-        j, c = pd.factorize(cis_overlaps['thickEnd'])   # peaks
+        i, r = pd.factorize(cis_overlaps['strand'])       # genes
+        j, c = pd.factorize(cis_overlaps['blockCount'])   # peaks
         n, m = len(r), len(c)
 
         ## check if some genes have no peaks in cis
@@ -193,19 +197,52 @@ def get_genes_by_peaks(rna, atac, genes_to_peaks_binary_mask_path, window_size =
 
             genes_to_peaks_binary_mask_path = os.path.join(genes_to_peaks_binary_mask_path, f'genes_to_peaks_binary_mask_{n}_by_{m}_with_GBR.npz')
 
-        genes_to_peaks_binary_mask = np.zeros((n, m), dtype=np.int64)
-        np.add.at(genes_to_peaks_binary_mask, (i, j), 1)
+        ## Compute distances
+        tss = cis_overlaps['start']
+        gene_start = cis_overlaps['name']
+        gene_end = cis_overlaps['score']
+        gene_centre = (tss + gene_end)/2 - 5000/2
+        gene_size = gene_end - tss
+
+        peak_start = cis_overlaps['thickEnd']
+        peak_end = cis_overlaps['itemRgb']
+        peak_centre = (peak_start + peak_end)/2
+
+        distance = np.abs(gene_centre - peak_centre)
+        distance_with_gb = distance.copy()
+        distance_with_gb = distance_with_gb
+        distance_with_gb[distance_with_gb < 0] = 0
+
+        archr_weights = np.exp(-np.abs(distance_with_gb/5000)) + np.exp(-1)
+        archr_weights[distance_with_gb > window_size] = 0
+        archr_weights = archr_weights.values
+
+        ''' visualise weights by distance
+        x = (gene_centre - peak_centre)
+        y = archr_weights
+        fig, ax = plt.subplots(1,2,figsize=[8,4])
+        trim = np.abs(x) < window_size
+        ax[0].scatter(x[trim], y[trim])
+        trim = np.abs(x) < 2e4
+        ax[1].scatter(x[trim], y[trim])
+        fig.show()
+        '''
+
+        ## Create mask
+        genes_to_peaks_distance_mask = np.zeros((n, m), dtype=np.float32)
+        np.add.at(genes_to_peaks_distance_mask, (i, j), archr_weights)
+        genes_peaks_dict = {'genes':r, 'peaks':c}
         #genes_to_peaks_binary_mask_df = pd.DataFrame(genes_to_peaks_binary_mask, index=r, columns=c)
 
         ## Save mask
-        genes_to_peaks_binary_mask = csr_matrix(genes_to_peaks_binary_mask)
-        save_npz(genes_to_peaks_binary_mask_path, genes_to_peaks_binary_mask)
+        if genes_to_peaks_mask_path:
+            genes_to_peaks_distance_mask = csr_matrix(genes_to_peaks_distance_mask)
+            save_npz(genes_to_peaks_distance_mask_path, genes_to_peaks_distance_mask)
 
-        pkl_path = os.path.splitext(genes_to_peaks_binary_mask_path)[0] + '.pkl'
-        genes_peaks_dict = {'genes':r, 'peaks':c}
-        with open(pkl_path, 'wb') as f: pkl_dump(genes_peaks_dict, f)
+            pkl_path = os.path.splitext(genes_to_peaks_mask_path)[0] + '.pkl'
+            with open(pkl_path, 'wb') as f: pkl_dump(genes_peaks_dict, f)
 
-        return genes_to_peaks_binary_mask, genes_peaks_dict
+        return genes_to_peaks_distance_mask, genes_peaks_dict
 
 def get_gas(rna, atac):
         
