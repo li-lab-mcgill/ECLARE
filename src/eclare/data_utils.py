@@ -10,6 +10,7 @@ import anndata
 from scipy.sparse import issparse
 import h5py
 from warnings import warn
+from pybedtools import BedTool
 
 from eclare.custom_annloader import CustomAnnLoader as AnnLoader
 
@@ -416,3 +417,43 @@ class PrintableLambda:
 
     def __repr__(self):
         return f"<PrintableLambda: {self.name}>"
+
+
+
+def get_gene_peak_links(cre_gene_links_3d, cre_gene_links_crispr, cre_gene_links_eqtl):
+
+    def load_links(filepath, psychscreen_cre_ensembl, chunksize=10000):
+        filtered_rows = []
+
+        for chunk in pd.read_csv(filepath, chunksize=chunksize, delimiter='\t', header=None):
+
+            is_protein_coding = chunk.iloc[:,3] == "protein_coding"
+            is_psychscreen = chunk.iloc[:,0].isin(psychscreen_cre_ensembl)
+
+            filtered_chunk = chunk[is_protein_coding & is_psychscreen]
+            filtered_rows.append(filtered_chunk)
+
+        df = pd.concat(filtered_rows)
+        return df
+
+    psychscreen_bed_path = os.path.join(os.environ['datapath'], 'brainSCOPE', 'adult_bCREs.bed')
+    cre_gene_links_3d_path = os.path.join(os.environ['datapath'], 'SCREEN', 'Human-Gene-Links', 'V4-hg38.Gene-Links.3D-Chromatin.txt')
+    cre_gene_links_crispr_path = os.path.join(os.environ['datapath'], 'SCREEN', 'Human-Gene-Links', 'V4-hg38.Gene-Links.CRISPR.txt')
+    cre_gene_links_eqtl_path = os.path.join(os.environ['datapath'], 'SCREEN', 'Human-Gene-Links', 'V4-hg38.Gene-Links.eQTLs.txt')
+
+    psychscreen_bed = BedTool(psychscreen_bed_path) # PsychSCREEN
+    psychscreen_bed_df = psychscreen_bed.to_dataframe()
+    psychscreen_cre_ensembl = psychscreen_bed_df['score']
+    #bed = BedTool('/Users/dmannk/Downloads/All.celltypes.Union.PeakCalls.bed') # BrainSCOPE
+
+    cre_gene_links_3d = load_links('/Users/dmannk/Downloads/Human-Gene-Links/V4-hg38.Gene-Links.3D-Chromatin.txt', psychscreen_cre_ensembl) # 10119573 cCREs (tbnk)
+    cre_gene_links_crispr = load_links('/Users/dmannk/Downloads/Human-Gene-Links/V4-hg38.Gene-Links.CRISPR.txt', psychscreen_cre_ensembl) # 1918 cCREs
+    cre_gene_links_eqtl = load_links('/Users/dmannk/Downloads/Human-Gene-Links/V4-hg38.Gene-Links.eQTLs.txt', psychscreen_cre_ensembl) # 194344 cCREs
+
+    ## Format as matrices
+    cre_gene_links_3d_matrix = pd.crosstab(cre_gene_links_3d[0], cre_gene_links_3d[1])
+    cre_gene_links_crispr_matrix = pd.crosstab(cre_gene_links_crispr[0], cre_gene_links_crispr[1])
+    cre_gene_links_eqtl_matrix = pd.crosstab(cre_gene_links_eqtl[0], cre_gene_links_eqtl[1])
+
+    ## example where multiple hits for same gene-peak pair
+    cre_gene_links_crispr[(cre_gene_links_crispr[0]=="EH38E2911701") & (cre_gene_links_crispr[1]=="ENSG00000108179")]
