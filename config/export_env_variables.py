@@ -1,5 +1,6 @@
 import os
 import subprocess
+import re
 
 def export_env_variables(config_path='config'):
     # Ensure that the environment variables set by the script are accessible in this notebook
@@ -10,7 +11,9 @@ def export_env_variables(config_path='config'):
     # Parse the output and set the environment variables in the current Python environment
     for line in result.stdout.splitlines():
         if '=' in line:
-            key, value = line.split('=', 1)
+            splits = re.split(r'=|\t - ', line)
+            key = splits[1]
+            value = splits[2]
             os.environ[key] = value
 
     # Verify that the environment variables are set

@@ -11,6 +11,8 @@ export_commands=$(python -c """
 import os
 import yaml
 import sys
+import re
+import socket
 
 def load_config(config_file):
     with open(config_file, 'r') as file:
@@ -19,8 +21,28 @@ def load_config(config_file):
 def main(config_file):
     config = load_config(config_file)
 
-    # Extract the active environment
-    active_env = config.get('active_environment')
+    # Get the hostname mapping and current hostname
+    hostname_mapping = config.get('hostname_mapping', {})
+    hostname = socket.gethostname()
+
+    # Try to match the hostname (exact or regex)
+    active_env = None
+    for pattern, env in hostname_mapping.items():
+        if pattern.startswith('/') and pattern.endswith('/'):
+            # Regex pattern
+            regex = pattern[1:-1]
+            if re.match(regex, hostname):
+                active_env = env
+                break
+        else:
+            # Exact match
+            if pattern == hostname:
+                active_env = env
+                break
+
+    # Fallback to default active_environment if no match
+    if not active_env:
+        active_env = config.get('active_environment')
 
     # Extract values based on the active environment
     env_config = config.get(active_env, {})
