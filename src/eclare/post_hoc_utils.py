@@ -183,6 +183,7 @@ def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltype
 
     return umap_embedding, fig, rna_atac_df_umap
 
+
 def ot_pairing(rna_latent, atac_latent):
 
     rna_latent_tensor = torch.from_numpy(rna_latent).float()

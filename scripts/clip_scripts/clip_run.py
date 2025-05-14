@@ -204,7 +204,7 @@ if __name__ == "__main__":
             rna_condition = ['nan'] * len(rna_celltypes)
             atac_condition = ['nan'] * len(atac_celltypes)
 
-            umap_embedding, umap_figure = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
+            umap_embedding, umap_figure, _ = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
             umap_figure.suptitle(f"source dataset: {args.source_dataset}", fontsize=14, y=0.98)
             umap_figure.tight_layout()
             umap_figure.savefig(os.path.join(args.outdir, 'source_umap_embeddings.png'))
@@ -220,7 +220,7 @@ if __name__ == "__main__":
             rna_condition = ['nan'] * len(rna_celltypes)
             atac_condition = ['nan'] * len(atac_celltypes)
             
-            umap_embedding, umap_figure = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
+            umap_embedding, umap_figure, _ = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
             umap_figure.suptitle(f"target dataset: {args.target_dataset}", fontsize=14, y=0.98)
             umap_figure.tight_layout()
             umap_figure.savefig(os.path.join(args.outdir, 'target_umap_embeddings.png'))
