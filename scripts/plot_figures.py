@@ -1178,8 +1178,20 @@ def load_model_and_metadata(student_job_id, best_model_idx, target_dataset='MDD'
 
     ## Set tracking URI to ECLARE_ROOT/mlruns and load model & metadata
     mlflow.set_tracking_uri(os.path.join(os.environ['ECLARE_ROOT'], 'mlruns'))
-    student_model = mlflow.pytorch.load_model(model_uri)
-    student_model_metadata = Model.load(model_uri)
+
+    run_id = model_uri.split('/')[1]
+    print(f'run_id: {run_id}')
+
+    model_dir = os.path.join(os.environ['ECLARE_ROOT'], "mlruns", '*', run_id, "artifacts", "trained_model")
+    model_dir = glob(model_dir)[0]
+    print(f'model_dir: {model_dir}')
+
+    model_uri = f"file://{model_dir}"
+    student_model = mlflow.pytorch.load_model(model_uri, map_location=device)
+    student_model_metadata = Model.load(model_dir)
+
+    #student_model = mlflow.pytorch.load_model(model_uri)
+    #student_model_metadata = Model.load(model_uri)
 
     return student_model, student_model_metadata
 
@@ -1198,9 +1210,25 @@ args = SimpleNamespace(
     genes_by_peaks_str='17563_by_100000'
 )
 
+'''
 mdd_rna, mdd_atac, mdd_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, _, _ = \
     mdd_setup(args, return_raw_data=True, return_type='data',\
     overlapping_subjects_only=False)
+'''
+import anndata
+rna_datapath = atac_datapath = os.path.join(os.environ['DATAPATH'], 'mdd_data')
+
+RNA_file = f"rna_{args.genes_by_peaks_str}.h5ad"
+ATAC_file = f"atac_{args.genes_by_peaks_str}.h5ad"
+
+rna_fullpath = os.path.join(rna_datapath, RNA_file)
+atac_fullpath = os.path.join(atac_datapath, ATAC_file)
+
+atac = anndata.read_h5ad(atac_fullpath, backed='r')
+rna  = anndata.read_h5ad(rna_fullpath, backed='r')
+
+mdd_atac = atac[::10].to_memory()
+mdd_rna = rna[::10].to_memory()
 
 mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
 
@@ -1288,81 +1316,6 @@ mdd_sexes = np.concatenate([mdd_rna_sex, mdd_atac_sex], axis=0)
 color_map_ct = create_celltype_palette(unique_celltypes, unique_celltypes, plot_color_palette=False)
 _, fig, rna_atac_df_umap = plot_umap_embeddings(eclare_rna_latents, eclare_atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=color_map_ct, umap_embedding=None)
 #plot_umap_embeddings(kd_clip_rna_latents, kd_clip_atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=color_map_ct, umap_embedding=None)
-
-#%% flashtalk
-
-## scramble MDD umap
-rna_atac_df_umap_scrambled = rna_atac_df_umap.copy()
-rna_atac_df_umap_scrambled = pd.concat([rna_atac_df_umap_scrambled[::4], rna_atac_df_umap_scrambled[1::4]])
-
-## plot modality umap
-fig, ax = plt.subplots(figsize=(6, 6))
-modality_colors = {'RNA': 'purple', 'ATAC': 'green'}
-sns.scatterplot(data=rna_atac_df_umap_scrambled, x='umap_1', y='umap_2', hue=rna_atac_df_umap_scrambled['modality'], 
-                palette=modality_colors, edgecolor='grey', ax=ax, marker='.', alpha=1.)
-ax.set_axis_off()
-fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_modality.png'), bbox_inches='tight', dpi=300, transparent=True)
-
-fig, ax = plt.subplots(figsize=(6, 6))
-sns.scatterplot(data=rna_atac_df_umap_scrambled.loc[rna_atac_df_umap_scrambled['modality'] == 'RNA'], x='umap_1', y='umap_2', 
-                color='purple', edgecolor='grey', ax=ax, marker='.', alpha=1.)
-ax.set_axis_off()
-fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_rna.png'), bbox_inches='tight', dpi=300, transparent=True)
-
-fig, ax = plt.subplots(figsize=(6, 6))
-sns.scatterplot(data=rna_atac_df_umap_scrambled.loc[rna_atac_df_umap_scrambled['modality'] == 'ATAC'], x='umap_1', y='umap_2', 
-                color='green', edgecolor='grey', ax=ax, marker='.', alpha=1.)
-ax.set_axis_off()
-fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_atac.png'), bbox_inches='tight', dpi=300, transparent=True)
-
-## plot celltypes umap
-fig, ax = plt.subplots(figsize=(8, 8))
-sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='celltypes', edgecolor='grey', ax=ax, marker='.', alpha=1.)
-ax.set_axis_off()
-fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_celltypes.png'), bbox_inches='tight', dpi=300, transparent=True)
-
-
-## load ECLARE model with paired data as target
-best_clip_mdd       = 'DLPFC_Anderson' #CLIP_mdd_metrics_df['source'].iloc[CLIP_mdd_metrics_df['multimodal_ilisi'].argmax()]
-clip_student_model, clip_student_model_metadata         = load_model_and_metadata(f'clip_mdd_{methods_id_dict["clip_mdd"]}', os.path.join(best_clip_mdd, '0'))
-clip_student_model = clip_student_model.to('cpu')
-
-## load aligned paired data
-args = SimpleNamespace(
-    source_dataset=best_clip_mdd,
-    target_dataset='MDD',
-    genes_by_peaks_str='9918_by_43840'
-)
-
-from eclare.setup_utils import return_setup_func_from_dataset
-setup_function = return_setup_func_from_dataset(best_clip_mdd)
-
-rna_aligned_paired, atac_aligned_paired, cell_group, _, _, _, _ = \
-    setup_function(args, return_raw_data=True, return_type='data')
-
-## sample aligned paired data
-rna_aligned_paired_sampled = rna_aligned_paired[::6].copy()
-atac_aligned_paired_sampled = atac_aligned_paired[::6].copy()
-
-## get celltypes
-rna_celltypes = rna_aligned_paired_sampled.obs[cell_group]
-atac_celltypes = atac_aligned_paired_sampled.obs[cell_group]
-unique_celltypes = np.unique(np.concatenate([rna_celltypes, atac_celltypes]))
-
-## get latents
-eclare_student_model_paired, eclare_student_model_metadata_paired = load_model_and_metadata(f'eclare_{methods_id_dict["eclare"][0]}', '0', target_dataset=best_clip_mdd)
-eclare_student_model_paired.train()
-
-eclare_rna_latents_paired, eclare_atac_latents_paired = get_latents(eclare_student_model_paired, rna_aligned_paired_sampled, atac_aligned_paired_sampled, return_tensor=False)
-
-## plot umap
-color_map_ct = create_celltype_palette(unique_celltypes, unique_celltypes, plot_color_palette=False)
-_, fig, _ = plot_umap_embeddings(eclare_rna_latents_paired, eclare_atac_latents_paired, rna_celltypes, atac_celltypes, None, None, color_map_ct=color_map_ct, umap_embedding=None)
-
-## save the figure
-fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk2_umap_embeddings.png'), bbox_inches='tight', dpi=300, transparent=True)
-
-
 
 
 #%% define function for computing corrected Pearson correlation coefficient based on BigSur paper
@@ -2027,5 +1980,75 @@ plt.axis('off')
 plt.show()
 
 
+#%% flashtalk
 
-# %%
+## scramble MDD umap
+rna_atac_df_umap_scrambled = rna_atac_df_umap.copy()
+rna_atac_df_umap_scrambled = pd.concat([rna_atac_df_umap_scrambled[::4], rna_atac_df_umap_scrambled[1::4]])
+
+## plot modality umap
+fig, ax = plt.subplots(figsize=(6, 6))
+modality_colors = {'RNA': 'purple', 'ATAC': 'green'}
+sns.scatterplot(data=rna_atac_df_umap_scrambled, x='umap_1', y='umap_2', hue=rna_atac_df_umap_scrambled['modality'], 
+                palette=modality_colors, edgecolor='grey', ax=ax, marker='.', alpha=1.)
+ax.set_axis_off()
+fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_modality.png'), bbox_inches='tight', dpi=300, transparent=True)
+
+fig, ax = plt.subplots(figsize=(6, 6))
+sns.scatterplot(data=rna_atac_df_umap_scrambled.loc[rna_atac_df_umap_scrambled['modality'] == 'RNA'], x='umap_1', y='umap_2', 
+                color='purple', edgecolor='grey', ax=ax, marker='.', alpha=1.)
+ax.set_axis_off()
+fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_rna.png'), bbox_inches='tight', dpi=300, transparent=True)
+
+fig, ax = plt.subplots(figsize=(6, 6))
+sns.scatterplot(data=rna_atac_df_umap_scrambled.loc[rna_atac_df_umap_scrambled['modality'] == 'ATAC'], x='umap_1', y='umap_2', 
+                color='green', edgecolor='grey', ax=ax, marker='.', alpha=1.)
+ax.set_axis_off()
+fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_atac.png'), bbox_inches='tight', dpi=300, transparent=True)
+
+## plot celltypes umap
+fig, ax = plt.subplots(figsize=(8, 8))
+sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='celltypes', edgecolor='grey', ax=ax, marker='.', alpha=1.)
+ax.set_axis_off()
+fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk1_celltypes.png'), bbox_inches='tight', dpi=300, transparent=True)
+
+
+## load ECLARE model with paired data as target
+best_clip_mdd       = 'DLPFC_Anderson' #CLIP_mdd_metrics_df['source'].iloc[CLIP_mdd_metrics_df['multimodal_ilisi'].argmax()]
+clip_student_model, clip_student_model_metadata         = load_model_and_metadata(f'clip_mdd_{methods_id_dict["clip_mdd"]}', os.path.join(best_clip_mdd, '0'))
+clip_student_model = clip_student_model.to('cpu')
+
+## load aligned paired data
+args = SimpleNamespace(
+    source_dataset=best_clip_mdd,
+    target_dataset='MDD',
+    genes_by_peaks_str='9918_by_43840'
+)
+
+from eclare.setup_utils import return_setup_func_from_dataset
+setup_function = return_setup_func_from_dataset(best_clip_mdd)
+
+rna_aligned_paired, atac_aligned_paired, cell_group, _, _, _, _ = \
+    setup_function(args, return_raw_data=True, return_type='data')
+
+## sample aligned paired data
+rna_aligned_paired_sampled = rna_aligned_paired[::6].copy()
+atac_aligned_paired_sampled = atac_aligned_paired[::6].copy()
+
+## get celltypes
+rna_celltypes = rna_aligned_paired_sampled.obs[cell_group]
+atac_celltypes = atac_aligned_paired_sampled.obs[cell_group]
+unique_celltypes = np.unique(np.concatenate([rna_celltypes, atac_celltypes]))
+
+## get latents
+eclare_student_model_paired, eclare_student_model_metadata_paired = load_model_and_metadata(f'eclare_{methods_id_dict["eclare"][0]}', '0', target_dataset=best_clip_mdd)
+eclare_student_model_paired.train()
+
+eclare_rna_latents_paired, eclare_atac_latents_paired = get_latents(eclare_student_model_paired, rna_aligned_paired_sampled, atac_aligned_paired_sampled, return_tensor=False)
+
+## plot umap
+color_map_ct = create_celltype_palette(unique_celltypes, unique_celltypes, plot_color_palette=False)
+_, fig, _ = plot_umap_embeddings(eclare_rna_latents_paired, eclare_atac_latents_paired, rna_celltypes, atac_celltypes, None, None, color_map_ct=color_map_ct, umap_embedding=None)
+
+## save the figure
+fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk2_umap_embeddings.png'), bbox_inches='tight', dpi=300, transparent=True)
