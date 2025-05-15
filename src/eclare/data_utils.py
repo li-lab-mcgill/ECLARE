@@ -8,9 +8,12 @@ import os
 import anndata
 #from anndata.experimental import AnnLoader
 from scipy.sparse import issparse
+from scipy.stats import linregress
 import h5py
 from warnings import warn
 from pybedtools import BedTool
+from glob import glob
+from tqdm import tqdm
 
 from eclare.custom_annloader import CustomAnnLoader as AnnLoader
 
@@ -457,3 +460,124 @@ def get_gene_peak_links(cre_gene_links_3d, cre_gene_links_crispr, cre_gene_links
 
     ## example where multiple hits for same gene-peak pair
     cre_gene_links_crispr[(cre_gene_links_crispr[0]=="EH38E2911701") & (cre_gene_links_crispr[1]=="ENSG00000108179")]
+
+def get_unified_grns(grn_path, mdd_atac_sampled, mdd_rna_sampled):
+
+    grn_files = glob(os.path.join(grn_path,'*GRN.txt'))
+
+    ## load all GRNs and concatenate
+    grns = []
+    for grn_file in grn_files:
+        grn_df = pd.read_csv(grn_file, delimiter='\t')
+        grns.append(grn_df)
+
+    grn_df = pd.concat(grns)
+
+    ## clean GRNs
+    grn_df_clean = grn_df[~grn_df['Correlation'].isna() & ~grn_df['edgeWeight'].isna()] # remove rows with missing values, or else will corrupt mean
+    mean_grn_df = grn_df_clean.groupby(['TF','enhancer','TG'])[['edgeWeight','Correlation']].mean() # take average across all cell types
+    mean_grn_df.reset_index(inplace=True)
+
+    ## get peaks from GRNs
+    peaks_df = pd.DataFrame(index=mdd_atac_sampled.var_names.str.split(':|-', expand=True)).reset_index()
+    peaks_bedtool = BedTool.from_dataframe(peaks_df)
+
+    unique_peaks = pd.Series(mean_grn_df['enhancer'].unique())
+    grns_peaks_df = pd.DataFrame(unique_peaks.str.split(':|-', expand=True))
+    grns_peaks_bedtool = BedTool.from_dataframe(grns_peaks_df)
+
+    # Get indices of ATAC peaks that overlap with GRN peaks
+    grn_peaks_in_data = peaks_bedtool.intersect(grns_peaks_bedtool, wa=True, wb=True)
+    grn_peaks_in_data_df = grn_peaks_in_data.to_dataframe()
+
+    # Get names of peaks to create mapper
+    atac_peak_names = grn_peaks_in_data_df.iloc[:,:3].astype(str).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1)
+    grn_peak_names = grn_peaks_in_data_df.iloc[:,3:].astype(str).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1)
+    peaks_names_mapper = dict(zip(atac_peak_names, grn_peak_names)) # not necessarly one-to-one map, can have many-to-one
+
+    if len(np.unique(list(peaks_names_mapper.keys()))) == len(peaks_names_mapper):
+        print(f'all peaks from ATAC data are unique in mapper')
+    if len(np.unique(list(peaks_names_mapper.values()))) == len(peaks_names_mapper):
+        print(f'all peaks from GRN are unique in mapper')
+
+    ## map ATAC peaks to create separate GRN peaks in ATAC data
+    atac_peaks_mapped_to_grn = pd.Series(mdd_atac_sampled.var_names).map(peaks_names_mapper)
+    mdd_atac_sampled.var['GRN_peak_interval'] = atac_peaks_mapped_to_grn.values
+
+    ## keep only peaks that have a GRN peak interval
+    peaks_indices = mdd_atac_sampled.var['GRN_peak_interval'].notna()
+    mdd_atac_sampled_group = mdd_atac_sampled[:, peaks_indices]
+
+    ## keep only GRNs that have a peak in the ATAC data
+    mean_grn_df = mean_grn_df[mean_grn_df['enhancer'].isin(mdd_atac_sampled_group.var['GRN_peak_interval'])]
+
+    ## get genes from GRNs
+    genes = mdd_rna_sampled.var_names
+    is_target_gene = genes.isin(mean_grn_df['TG'])
+    is_tf = genes.isin(mean_grn_df['TF'])
+    is_both = is_target_gene & is_tf
+
+    ## keep only genes that are target genes or transcription factors
+    mdd_rna_sampled.var['is_target_gene'] = is_target_gene
+    mdd_rna_sampled.var['is_tf'] = is_tf
+    genes_indices = is_target_gene | is_tf
+    mdd_rna_sampled_group = mdd_rna_sampled[:, genes_indices]
+
+    ## create mappers that can be used to track indices of genes and peaks in ATAC and RNA data
+    data_gene_idx_mapper = dict(zip(mdd_rna_sampled_group.var['features'], np.arange(len(mdd_rna_sampled_group.var['features']))))
+    data_peak_idx_mapper = dict(zip(mdd_atac_sampled_group.var['GRN_peak_interval'], np.arange(len(mdd_atac_sampled_group.var['GRN_peak_interval']))))
+
+    ## create mappers that can be used to track indices of genes and peaks in ATAC and RNA data
+    mean_grn_df['TF_idx_in_data'] = mean_grn_df['TF'].map(data_gene_idx_mapper)
+    mean_grn_df['TG_idx_in_data'] = mean_grn_df['TG'].map(data_gene_idx_mapper)
+    mean_grn_df['enhancer_idx_in_data'] = mean_grn_df['enhancer'].map(data_peak_idx_mapper)
+    mean_grn_df.loc[:, 'enhancer_idx_in_data'] = mean_grn_df['enhancer_idx_in_data'].astype(int).values
+
+    return mean_grn_df
+
+def get_tfrp(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs):
+
+    ## prototype on one gene
+    #overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
+    #overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
+    #X_rna = mdd_rna_sampled_group.X.toarray()
+    #X_atac = mdd_atac_sampled_group.X.toarray()
+
+    mean_grn_df_grouped = mean_grn_df.groupby('TG')
+
+    def get_tfrp_iter(gene):
+
+        #mean_grn_df_gene = mean_grn_df[mean_grn_df['TG'] == gene].set_index('TG')
+        mean_grn_df_gene = mean_grn_df_grouped.get_group(gene)
+        mean_grn_df_gene = mean_grn_df_gene[mean_grn_df_gene['TF'].isin(overlapping_tfs)]
+        BI = mean_grn_df_gene['Correlation'].values[None, :] # encapsulates effects of both TF-peak (B) and peak-gene (I) interactions as per sc-compReg
+        n_linked_peaks = mean_grn_df_gene['enhancer'].nunique()
+
+        #if n_linked_peaks > 0:
+        #    print(f'{gene} has {n_linked_peaks} linked peaks')
+        #     break
+
+        peak_idxs = mean_grn_df_gene['enhancer_idx_in_data'].astype(int).values
+        peak_expressions = X_atac[:, peak_idxs]
+
+        tf_idxs = mean_grn_df_gene['TF_idx_in_data'].astype(int).values
+        tf_expressions = X_rna[:, tf_idxs]
+
+        tg_idx = mean_grn_df_gene['TG_idx_in_data'].astype(int).unique().item() # should be unique
+        tg_expression = X_rna[:, tg_idx]
+
+        peak_tg_expressions = np.concatenate([peak_expressions, tg_expression[:,None]], axis=1)
+        peak_tg_correlations = np.corrcoef(peak_tg_expressions.T)[:-1, -1]
+        peak_tg_correlations = peak_tg_correlations[None, :]
+
+        tfrp = tf_expressions * peak_expressions * BI #* peak_tg_correlations
+        tfrp = tfrp.sum(axis=1)
+
+        slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
+        tfrp_predictions = slope * tg_expression + intercept
+    
+    for gene in tqdm(overlapping_target_genes):
+        tfrp = get_tfrp_iter(gene)
+
+    #%load_ext line_profiler
+    #%lprun -f process_gene process_gene(gene)
