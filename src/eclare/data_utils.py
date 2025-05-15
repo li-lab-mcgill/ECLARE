@@ -536,7 +536,7 @@ def get_unified_grns(grn_path, mdd_rna, mdd_atac):
 
     return mean_grn_df, mdd_rna, mdd_atac
 
-def get_tfrp(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs):
+def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs):
 
     ## prototype on one gene
     #overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
@@ -546,7 +546,7 @@ def get_tfrp(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_t
 
     mean_grn_df_grouped = mean_grn_df.groupby('TG')
 
-    def get_tfrp_iter(gene):
+    def _scompreg_loglikelihood(gene):
 
         #mean_grn_df_gene = mean_grn_df[mean_grn_df['TG'] == gene].set_index('TG')
         mean_grn_df_gene = mean_grn_df_grouped.get_group(gene)
@@ -571,14 +571,30 @@ def get_tfrp(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_t
         peak_tg_correlations = np.corrcoef(peak_tg_expressions.T)[:-1, -1]
         peak_tg_correlations = peak_tg_correlations[None, :]
 
+        ## compute tfrp - note that peak_expressions are sparse, leading to sparse tfrp
         tfrp = tf_expressions * peak_expressions * BI #* peak_tg_correlations
         tfrp = tfrp.sum(axis=1)
 
+        ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
         slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
         tfrp_predictions = slope * tg_expression + intercept
-    
+
+        ## compute residuals and variance
+        n = len(tfrp)
+        sq_residuals = (tfrp - tfrp_predictions)**2
+        var = sq_residuals.sum() / n
+        log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
+
+        return log_gaussian_likelihood
+
+    log_gaussian_likelihoods = {}
     for gene in tqdm(overlapping_target_genes):
-        tfrp = get_tfrp_iter(gene)
+        log_gaussian_likelihood = _scompreg_loglikelihood(gene)
+        log_gaussian_likelihood = log_gaussian_likelihood.item()
+        log_gaussian_likelihoods[gene] = log_gaussian_likelihood
+
+    return log_gaussian_likelihoods
+
 
     #%load_ext line_profiler
     #%lprun -f process_gene process_gene(gene)
