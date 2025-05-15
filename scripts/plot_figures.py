@@ -1272,38 +1272,6 @@ mdd_atac_celltypes = mdd_atac.obs[atac_celltype_key][mdd_atac.obs[atac_celltype_
 eclare_rna_latents, eclare_atac_latents = get_latents(eclare_student_model, mdd_rna_sampled, mdd_atac_sampled, return_tensor=False)
 kd_clip_rna_latents, kd_clip_atac_latents = get_latents(kd_clip_student_model, mdd_rna_sampled, mdd_atac_sampled, return_tensor=False)
 
-## compute metrics
-from scib_metrics.nearest_neighbors import jax_approx_min_k
-from scib_metrics import ilisi_knn, nmi_ari_cluster_labels_leiden, silhouette_label, kbet
-def unpaired_metrics(latents, labels, modalities, batches, k=30): # taken from eval_utils.py, should avoid having other copy here
-
-    ## get neighbors object & initialize metrics dict
-    neighbors = jax_approx_min_k(latents.detach().cpu(), k)
-    unpaired_metrics = {}
-
-    ## bioconservation
-    nmi_ari_dict = nmi_ari_cluster_labels_leiden(neighbors, labels, optimize_resolution=True)
-    silhouette_celltype = silhouette_label(latents.detach().cpu().numpy(), labels, rescale=True)
-
-    ## multimodal & batch integration
-    multimodal_ilisi = ilisi_knn(neighbors, modalities, scale=True)
-    batches_ilisi = ilisi_knn(neighbors, batches, scale=True)
-
-    ## sex conservation
-    sex_kbet = kbet(neighbors, sexes, alpha=0.05)[0]
-
-    ## update nmi_ari_dict to include other metrics
-    unpaired_metrics.update({
-        'nmi': nmi_ari_dict['nmi'],
-        'ari': nmi_ari_dict['ari'],
-        'silhouette_celltype': silhouette_celltype,
-        'multimodal_ilisi': multimodal_ilisi,
-        'batches_ilisi': batches_ilisi,
-        'sex_kbet': sex_kbet
-    })
-
-    return unpaired_metrics
-
 ## concatenate latents
 eclare_latents = np.concatenate([eclare_rna_latents, eclare_atac_latents], axis=0)
 kd_clip_latents = np.concatenate([kd_clip_rna_latents, kd_clip_atac_latents], axis=0)
@@ -1440,39 +1408,6 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
 
     return SEACell_ad_train, SEACell_ad_apply
 
-#%% get GRN diffusion scores from brainSCOPE
-
-brainscope_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE')
-grn_diff = os.path.join(brainscope_path, 'Unified_GRN_diffusion.txt')
-grn_diff_df = pd.read_csv(grn_diff, sep='\t')
-
-grn_diff_df = grn_diff_df[['TF','TG','Unified Score']]
-
-tf_genes = grn_diff_df['TF'].unique()
-tf_genes_in_data = np.isin(mdd_rna_sampled_group_seacells.var_names, tf_genes)
-
-target_genes = grn_diff_df['TG'].unique()
-target_genes_in_data = np.isin(mdd_rna_sampled_group_seacells.var_names, target_genes)
-
-## prototype on one gene
-gene_idx = np.where(target_genes_in_data)[0][0]
-gene = mdd_rna_sampled_group_seacells.var_names[gene_idx]
-grn_diff_df_gene = grn_diff_df[grn_diff_df['TG'] == gene].set_index('TG')
-
-rna_genes = mdd_rna_sampled_group_seacells.var_names
-rna_genes_to_idx = dict(zip(rna_genes, range(len(rna_genes))))
-tf_genes = grn_diff_df_gene['TF']
-
-tf_genes_idx = np.array([rna_genes_to_idx.get(x, np.nan) for x in tf_genes])
-tf_genes = tf_genes[~np.isnan(tf_genes_idx)]
-tf_genes_idx = tf_genes_idx[~np.isnan(tf_genes_idx)].astype(int)
-assert (tf_genes == mdd_rna_sampled_group_seacells.var_names.values[tf_genes_idx]).all()
-
-X_tf = X_rna[tf_genes_idx]
-
-## import full GRN
-
-
 
 
 #%% get peak-gene correlations
@@ -1484,11 +1419,12 @@ from tqdm import tqdm
 from scipy.stats import norm
 
 from eclare.setup_utils import get_genes_by_peaks
-from eclare.data_utils import get_unified_grns, get_tfrp
+from eclare.data_utils import get_unified_grns, get_scompreg_loglikelihood
 
 def tree(): return defaultdict(tree)
 genes_by_peaks_corrs_dict = tree()
 genes_by_peaks_masks_dict = tree()
+scompreg_loglikelihoods_dict = tree()
 n_dict = tree()
 
 cutoff = 10000  # 1300 for Mic
@@ -1496,6 +1432,9 @@ cutoff = 10000  # 1300 for Mic
 ## sex='Female'; celltype='Mic'
 ## sex='Female'; celltype='Ex'
 ## sex='Female'; celltype=''
+
+unique_conditions = list(unique_conditions)
+unique_conditions.append('')
 
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
@@ -1542,9 +1481,19 @@ for sex in unique_sexes:
             #print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {mdd_atac.n_vars} - DEG genes: {mdd_rna.n_vars}')
 
             ## select cell indices
-            rna_indices = np.where((mdd_rna.obs[rna_celltype_key].str.startswith(celltype)) & (mdd_rna.obs[rna_condition_key] == condition) & (mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower())))[0]
-            atac_indices = np.where((mdd_atac.obs[atac_celltype_key].str.startswith(celltype)) & (mdd_atac.obs[atac_condition_key] == condition) & (mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower())))[0]
+            rna_indices = pd.DataFrame({
+                'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype),
+                'is_condition': mdd_rna.obs[rna_condition_key].str.startswith(condition),
+                'is_sex': mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower())
+            }).prod(axis=1).astype(bool).values.nonzero()[0]
 
+            atac_indices = pd.DataFrame({
+                'is_celltype': mdd_atac.obs[atac_celltype_key].str.startswith(celltype),
+                'is_condition': mdd_atac.obs[atac_condition_key].str.startswith(condition),
+                'is_sex': mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower())
+            }).prod(axis=1).astype(bool).values.nonzero()[0]
+
+            ## sample indices
             if len(rna_indices) > cutoff:
                 sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
                 _, sampled_indices = next(sss.split(rna_indices, mdd_rna.obs[rna_celltype_key].iloc[rna_indices]))
@@ -1651,10 +1600,11 @@ for sex in unique_sexes:
             #bulk_atac_abc = X_atac.mean(0, keepdim=True).detach().cpu().numpy()
             #genes_to_peaks_binary_mask *= bulk_atac_abc
 
-            genes_by_peaks_masks_dict[sex][celltype][condition] = genes_to_peaks_binary_mask
+            #genes_by_peaks_masks_dict[sex][celltype][condition] = genes_to_peaks_binary_mask
 
             ## get tfrp
-            get_tfrp(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
+            scompreg_loglikelihoods = get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
+            scompreg_loglikelihoods_dict[sex][celltype][condition if condition != '' else 'all'] = scompreg_loglikelihoods
 
             ## transpose
             X_rna = X_rna.T
@@ -1730,7 +1680,7 @@ gene_candidates_dict['Female']['InN'] = gene_candidates_dict['Female']['Mic']
 hits_idxs_dict = tree()
 from scipy.stats import norm
 
-score_type = 'kendall'
+score_type = 'sc-compReg'
 
 
 for sex in unique_sexes:
@@ -1825,6 +1775,24 @@ for sex in unique_sexes:
             Z[np.isnan(Z)] = 0
 
             chi2 = Z**2
+
+        elif score_type == 'sc-compReg':
+
+            scompreg_loglikelihoods_case = scompreg_loglikelihoods_dict[sex][celltype]['Case']
+            scompreg_loglikelihoods_control = scompreg_loglikelihoods_dict[sex][celltype]['Control']
+            scompreg_loglikelihoods_all = scompreg_loglikelihoods_dict[sex][celltype]['all']
+
+            scompreg_loglikelihoods_df = pd.DataFrame({
+                'case': scompreg_loglikelihoods_case,
+                'control': scompreg_loglikelihoods_control,
+                'all': scompreg_loglikelihoods_all
+            })
+            genes_names = scompreg_loglikelihoods_df.index
+
+            LR = -2 * (scompreg_loglikelihoods_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
+            
+            if (LR < 0).any():
+                print(f'LR is negative for {celltype} {sex}')
 
         elif score_type == 'ismb_cosine':
 
@@ -1933,11 +1901,11 @@ for sex in unique_sexes:
 
 import gseapy as gp
 
-ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': Z})
+ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': LR})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
 
 pre_res = gp.prerank(rnk=ranked_list,
-                     gene_sets='GO_Biological_Process_2021', # apparently, GO_Biological_Process_2021 and Reactome_2022 better for neurological disorders. Also have Human_Phenotype_Ontology
+                     gene_sets='DisGeNET', # apparently, GO_Biological_Process_2021 and Reactome_2022 better for neurological disorders. Also have Human_Phenotype_Ontology
                      outdir=os.path.join(os.environ['OUTPATH'], 'gseapy_results'),
                      min_size=2,
                      max_size=len(ranked_list),
@@ -1947,6 +1915,7 @@ pre_res = gp.prerank(rnk=ranked_list,
 gene sets of interest:
 - GO_Biological_Process_2021/2023/2025
 - Human_Phenotype_Ontology
+- DisGeNET
 
 - ENCODE_and_ChEA_Consensus_TFs_from_ChIP-X
 - ENCODE_TF_ChIP-seq_2014/2015
