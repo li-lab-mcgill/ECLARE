@@ -522,7 +522,6 @@ def get_unified_grns(grn_path, mdd_rna, mdd_atac):
     mdd_rna.var['is_target_gene'] = is_target_gene
     mdd_rna.var['is_tf'] = is_tf
     genes_indices = is_target_gene | is_tf
-    mdd_rna_group = mdd_rna[:, genes_indices]
 
     ## create mappers that can be used to track indices of genes and peaks in ATAC and RNA data
     data_gene_idx_mapper = dict(zip(mdd_rna.var['features'], np.arange(len(mdd_rna.var['features']))))
@@ -585,15 +584,24 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
         var = sq_residuals.sum() / n
         log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
 
-        return log_gaussian_likelihood
+        return log_gaussian_likelihood, tg_expression, tfrp, tfrp_predictions
 
-    log_gaussian_likelihoods = {}
+    log_gaussian_likelihoods    = {}
+    tg_expressions              = pd.DataFrame(columns=overlapping_target_genes)
+    tfrps                       = pd.DataFrame(columns=overlapping_target_genes)
+    tfrp_predictions            = pd.DataFrame(columns=overlapping_target_genes)
+
     for gene in tqdm(overlapping_target_genes):
-        log_gaussian_likelihood = _scompreg_loglikelihood(gene)
+        log_gaussian_likelihood, tg_expression, tfrp, tfrp_prediction = _scompreg_loglikelihood(gene)
+
         log_gaussian_likelihood = log_gaussian_likelihood.item()
         log_gaussian_likelihoods[gene] = log_gaussian_likelihood
 
-    return log_gaussian_likelihoods
+        tg_expressions.loc[:,gene]      = tg_expression
+        tfrps.loc[:,gene]               = tfrp
+        tfrp_predictions.loc[:,gene]    = tfrp_prediction
+
+    return log_gaussian_likelihoods, tg_expressions, tfrps, tfrp_predictions
 
 
     #%load_ext line_profiler
