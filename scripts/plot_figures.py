@@ -1441,15 +1441,37 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
     return SEACell_ad_train, SEACell_ad_apply
 
 #%% get GRN diffusion scores from brainSCOPE
+
 brainscope_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE')
 grn_diff = os.path.join(brainscope_path, 'Unified_GRN_diffusion.txt')
 grn_diff_df = pd.read_csv(grn_diff, sep='\t')
 
+grn_diff_df = grn_diff_df[['TF','TG','Unified Score']]
+
 tf_genes = grn_diff_df['TF'].unique()
-tf_genes_in_data = np.isin(tf_genes, mdd_rna.var_names)
+tf_genes_in_data = np.isin(mdd_rna_sampled_group_seacells.var_names, tf_genes)
 
 target_genes = grn_diff_df['TG'].unique()
-target_genes_in_data = np.isin(target_genes, mdd_rna.var_names)
+target_genes_in_data = np.isin(mdd_rna_sampled_group_seacells.var_names, target_genes)
+
+## prototype on one gene
+gene_idx = np.where(target_genes_in_data)[0][0]
+gene = mdd_rna_sampled_group_seacells.var_names[gene_idx]
+grn_diff_df_gene = grn_diff_df[grn_diff_df['TG'] == gene].set_index('TG')
+
+rna_genes = mdd_rna_sampled_group_seacells.var_names
+rna_genes_to_idx = dict(zip(rna_genes, range(len(rna_genes))))
+tf_genes = grn_diff_df_gene['TF']
+
+tf_genes_idx = np.array([rna_genes_to_idx.get(x, np.nan) for x in tf_genes])
+tf_genes = tf_genes[~np.isnan(tf_genes_idx)]
+tf_genes_idx = tf_genes_idx[~np.isnan(tf_genes_idx)].astype(int)
+assert (tf_genes == mdd_rna_sampled_group_seacells.var_names.values[tf_genes_idx]).all()
+
+X_tf = X_rna[tf_genes_idx]
+
+
+
 
 #%% get peak-gene correlations
 
