@@ -461,7 +461,8 @@ def get_gene_peak_links(cre_gene_links_3d, cre_gene_links_crispr, cre_gene_links
     ## example where multiple hits for same gene-peak pair
     cre_gene_links_crispr[(cre_gene_links_crispr[0]=="EH38E2911701") & (cre_gene_links_crispr[1]=="ENSG00000108179")]
 
-def get_unified_grns(grn_path, mdd_atac_sampled, mdd_rna_sampled):
+
+def get_unified_grns(grn_path, mdd_rna, mdd_atac):
 
     grn_files = glob(os.path.join(grn_path,'*GRN.txt'))
 
@@ -479,7 +480,7 @@ def get_unified_grns(grn_path, mdd_atac_sampled, mdd_rna_sampled):
     mean_grn_df.reset_index(inplace=True)
 
     ## get peaks from GRNs
-    peaks_df = pd.DataFrame(index=mdd_atac_sampled.var_names.str.split(':|-', expand=True)).reset_index()
+    peaks_df = pd.DataFrame(index=mdd_atac.var_names.str.split(':|-', expand=True)).reset_index()
     peaks_bedtool = BedTool.from_dataframe(peaks_df)
 
     unique_peaks = pd.Series(mean_grn_df['enhancer'].unique())
@@ -501,31 +502,31 @@ def get_unified_grns(grn_path, mdd_atac_sampled, mdd_rna_sampled):
         print(f'all peaks from GRN are unique in mapper')
 
     ## map ATAC peaks to create separate GRN peaks in ATAC data
-    atac_peaks_mapped_to_grn = pd.Series(mdd_atac_sampled.var_names).map(peaks_names_mapper)
-    mdd_atac_sampled.var['GRN_peak_interval'] = atac_peaks_mapped_to_grn.values
+    atac_peaks_mapped_to_grn = pd.Series(mdd_atac.var_names).map(peaks_names_mapper)
+    mdd_atac.var['GRN_peak_interval'] = atac_peaks_mapped_to_grn.values
 
     ## keep only peaks that have a GRN peak interval
-    peaks_indices = mdd_atac_sampled.var['GRN_peak_interval'].notna()
-    mdd_atac_sampled_group = mdd_atac_sampled[:, peaks_indices]
+    peaks_indices = mdd_atac.var['GRN_peak_interval'].notna()
+    mdd_atac = mdd_atac[:, peaks_indices]
 
     ## keep only GRNs that have a peak in the ATAC data
-    mean_grn_df = mean_grn_df[mean_grn_df['enhancer'].isin(mdd_atac_sampled_group.var['GRN_peak_interval'])]
+    mean_grn_df = mean_grn_df[mean_grn_df['enhancer'].isin(mdd_atac.var['GRN_peak_interval'])]
 
     ## get genes from GRNs
-    genes = mdd_rna_sampled.var_names
+    genes = mdd_rna.var_names
     is_target_gene = genes.isin(mean_grn_df['TG'])
     is_tf = genes.isin(mean_grn_df['TF'])
     is_both = is_target_gene & is_tf
 
     ## keep only genes that are target genes or transcription factors
-    mdd_rna_sampled.var['is_target_gene'] = is_target_gene
-    mdd_rna_sampled.var['is_tf'] = is_tf
+    mdd_rna.var['is_target_gene'] = is_target_gene
+    mdd_rna.var['is_tf'] = is_tf
     genes_indices = is_target_gene | is_tf
-    mdd_rna_sampled_group = mdd_rna_sampled[:, genes_indices]
+    mdd_rna_group = mdd_rna[:, genes_indices]
 
     ## create mappers that can be used to track indices of genes and peaks in ATAC and RNA data
-    data_gene_idx_mapper = dict(zip(mdd_rna_sampled_group.var['features'], np.arange(len(mdd_rna_sampled_group.var['features']))))
-    data_peak_idx_mapper = dict(zip(mdd_atac_sampled_group.var['GRN_peak_interval'], np.arange(len(mdd_atac_sampled_group.var['GRN_peak_interval']))))
+    data_gene_idx_mapper = dict(zip(mdd_rna.var['features'], np.arange(len(mdd_rna.var['features']))))
+    data_peak_idx_mapper = dict(zip(mdd_atac.var['GRN_peak_interval'], np.arange(len(mdd_atac.var['GRN_peak_interval']))))
 
     ## create mappers that can be used to track indices of genes and peaks in ATAC and RNA data
     mean_grn_df['TF_idx_in_data'] = mean_grn_df['TF'].map(data_gene_idx_mapper)
@@ -533,7 +534,7 @@ def get_unified_grns(grn_path, mdd_atac_sampled, mdd_rna_sampled):
     mean_grn_df['enhancer_idx_in_data'] = mean_grn_df['enhancer'].map(data_peak_idx_mapper)
     mean_grn_df.loc[:, 'enhancer_idx_in_data'] = mean_grn_df['enhancer_idx_in_data'].astype(int).values
 
-    return mean_grn_df
+    return mean_grn_df, mdd_rna, mdd_atac
 
 def get_tfrp(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs):
 
