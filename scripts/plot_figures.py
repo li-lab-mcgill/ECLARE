@@ -1470,6 +1470,8 @@ assert (tf_genes == mdd_rna_sampled_group_seacells.var_names.values[tf_genes_idx
 
 X_tf = X_rna[tf_genes_idx]
 
+## import full GRN
+
 
 
 
@@ -1477,11 +1479,12 @@ X_tf = X_rna[tf_genes_idx]
 
 from sklearn.model_selection import StratifiedShuffleSplit
 from umap import UMAP
-from eclare.setup_utils import get_genes_by_peaks
 from torchmetrics.functional import kendall_rank_corrcoef
 from tqdm import tqdm
 from scipy.stats import norm
 
+from eclare.setup_utils import get_genes_by_peaks
+from eclare.data_utils import get_unified_grns, get_tfrp
 
 def tree(): return defaultdict(tree)
 genes_by_peaks_corrs_dict = tree()
@@ -1525,18 +1528,18 @@ for sex in unique_sexes:
         celltype_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame({'chrom': celltype_peaks[:,0], 'start': celltype_peaks[:,1], 'end': celltype_peaks[:,2]}))
         
         ## select peaks indices using bedtools intersect
-        peaks_indices_dar = mdd_peaks_bed.intersect(celltype_peaks_bed, c=True).to_dataframe()['name'].astype(bool)
-        genes_indices_deg = mdd_rna.var_names.isin(celltype_degs_df['gene'])
+        #peaks_indices_dar = mdd_peaks_bed.intersect(celltype_peaks_bed, c=True).to_dataframe()['name'].astype(bool)
+        #genes_indices_deg = mdd_rna.var_names.isin(celltype_degs_df['gene'])
 
         #peaks_indices = peaks_indices_hvg.values | peaks_indices_dar.values
         #genes_indices = genes_indices_hvg.values | genes_indices_deg
-        peaks_indices = peaks_indices_dar
+        #peaks_indices = peaks_indices_dar
         #genes_indices = genes_indices_deg
-        genes_indices = np.ones(len(mdd_rna.var_names), dtype=bool)
+        #genes_indices = np.ones(len(mdd_rna.var_names), dtype=bool)
 
         for condition in unique_conditions:
 
-            print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {peaks_indices.sum()} - DEG genes: {genes_indices.sum()}')
+            #print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {mdd_atac.n_vars} - DEG genes: {mdd_rna.n_vars}')
 
             ## select cell indices
             rna_indices = np.where((mdd_rna.obs[rna_celltype_key].str.startswith(celltype)) & (mdd_rna.obs[rna_condition_key] == condition) & (mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower())))[0]
@@ -1582,10 +1585,18 @@ for sex in unique_sexes:
             atac_latents = atac_latents[plan.argmax(axis=0)]
             mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
 
-            ## select genes and peaks before SEACells
-            mdd_rna_sampled_group = mdd_rna_sampled_group[:,genes_indices]
-            mdd_atac_sampled_group = mdd_atac_sampled_group[:,peaks_indices]
+            ## get DAR peaks
+            grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
+            mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = get_unified_grns(grn_path, mdd_rna_sampled_group, mdd_atac_sampled_group)
 
+            overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
+            overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
+
+            ## select genes and peaks before SEACells
+            #mdd_rna_sampled_group = mdd_rna_sampled_group[:,genes_indices]
+            #mdd_atac_sampled_group = mdd_atac_sampled_group[:,peaks_indices]
+
+            '''
             ## get genes by peaks mask and save to dict
             genes_to_peaks_binary_mask, genes_peaks_dict = get_genes_by_peaks(mdd_rna_sampled_group, mdd_atac_sampled_group, None, window_size = 1e6, feature_selection_method = None)
 
@@ -1598,6 +1609,7 @@ for sex in unique_sexes:
 
             assert (mdd_rna_sampled_group.var_names == genes_peaks_dict['genes']).all()
             assert (mdd_atac_sampled_group.var_names == genes_peaks_dict['peaks']).all()
+            '''
 
             ## plot UMAP of aligned RNA latents and ATAC latents
             umap_embeddings = UMAP(n_neighbors=50, min_dist=0.5, n_components=2, metric='cosine', random_state=42)
@@ -1640,6 +1652,9 @@ for sex in unique_sexes:
             #genes_to_peaks_binary_mask *= bulk_atac_abc
 
             genes_by_peaks_masks_dict[sex][celltype][condition] = genes_to_peaks_binary_mask
+
+            ## get tfrp
+            get_tfrp(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
 
             ## transpose
             X_rna = X_rna.T
