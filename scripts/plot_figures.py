@@ -1482,9 +1482,6 @@ for sex in unique_sexes:
 
         for condition in unique_conditions:
 
-            ## if no condition, double number of cells (ie cutoff) 
-            cutoff = cutoff * 2 if condition == '' else cutoff
-
             #print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {mdd_atac.n_vars} - DEG genes: {mdd_rna.n_vars}')
 
             ## select cell indices
@@ -1617,6 +1614,17 @@ for sex in unique_sexes:
             tfrps_dict[sex][celltype][condition if condition != '' else 'all'] = tfrps
             tfrp_predictions_dict[sex][celltype][condition if condition != '' else 'all'] = tfrp_predictions
 
+            # tg_expressions_degs = tg_expressions.loc[:,tg_expressions.columns.isin(celltype_degs_df['gene'])]
+            # tfrps_degs = tfrps.loc[:,tfrps.columns.isin(celltype_degs_df['gene'])]
+            # x_degs = tg_expressions_degs.values.flatten()
+            # y_degs = tfrps_degs.values.flatten()
+
+            # tf_expressions = mdd_rna_sampled_group_seacells[:,mdd_rna_sampled_group.var['is_tf']].X.toarray()
+            # x_tfs = tf_expressions.flatten()
+            # y_tfs = tfrps.loc[:,mdd_rna_sampled_group.var['is_tf']].values.flatten()
+
+            
+
             ## transpose
             X_rna = X_rna.T
             X_atac = X_atac.T
@@ -1692,7 +1700,6 @@ hits_idxs_dict = tree()
 from scipy.stats import norm
 
 score_type = 'sc-compReg'
-
 
 for sex in unique_sexes:
     for celltype in unique_celltypes:
