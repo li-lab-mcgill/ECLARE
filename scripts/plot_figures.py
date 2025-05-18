@@ -45,6 +45,80 @@ from eclare.post_hoc_utils import get_latents, sample_proportional_celltypes_and
 
 from datetime import datetime
 from glob import glob
+import SEACells
+import scanpy as sc
+
+def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key='X_umap', n_SEACells=None):
+
+    # Copy the counts to ".raw" attribute of the anndata since it is necessary for downstream analysis
+    # This step should be performed after filtering 
+    raw_ad = sc.AnnData(adata_train.X)
+    raw_ad.obs_names, raw_ad.var_names = adata_train.obs_names, adata_train.var_names
+    adata_train.raw = raw_ad
+
+    raw_ad = sc.AnnData(adata_apply.X)
+    raw_ad.obs_names, raw_ad.var_names = adata_apply.obs_names, adata_apply.var_names
+    adata_apply.raw = raw_ad
+
+    # Normalize cells, log transform and compute highly variable genes
+    #sc.pp.normalize_per_cell(adata_train)
+    #sc.pp.log1p(adata_train)
+    #sc.pp.highly_variable_genes(adata_train, n_top_genes=1500)
+
+    ## User defined parameters
+
+    ## Core parameters 
+    n_SEACells = n_SEACells if n_SEACells is not None else max(adata_train.n_obs // 75, 15)
+    print(f'Number of SEACells: {n_SEACells}')
+    n_waypoint_eigs = 15 # Number of eigenvalues to consider when initializing metacells
+
+    ## Initialize SEACells model
+    model = SEACells.core.SEACells(adata_train, 
+                    build_kernel_on=build_kernel_on, 
+                    n_SEACells=n_SEACells, 
+                    n_waypoint_eigs=n_waypoint_eigs,
+                    convergence_epsilon = 1e-5,
+                    max_franke_wolfe_iters=100,
+                    use_gpu=False)
+
+    model.construct_kernel_matrix()
+    M = model.kernel_matrix
+
+    # Initialize archetypes
+    model.initialize_archetypes()
+
+    # Fit SEACells model
+    model.fit(min_iter=10, max_iter=100)
+
+    ## Get number of cells in each SEACell
+    n_cells_per_SEACell = adata_train.obs['SEACell'].value_counts(sort=False)
+    assert np.all(n_cells_per_SEACell.index == adata_train.obs['SEACell'].unique()) # unique() is how SEACells gather cells into SEACells
+
+    ## add SEACell labels to apply data
+    adata_apply.obs['SEACell'] = adata_train.obs['SEACell'].values
+
+    ## summarize by SEACell
+    SEACell_ad_train = SEACells.core.summarize_by_SEACell(adata_train, SEACells_label='SEACell', summarize_layer='raw')
+    SEACell_ad_apply = SEACells.core.summarize_by_SEACell(adata_apply, SEACells_label='SEACell', summarize_layer='raw')
+
+    ## divide aggregated SEACell counts by number of cells in each SEACell
+    SEACell_ad_train.X = SEACell_ad_train.X.multiply(1 / n_cells_per_SEACell.values[:,None]).tocsr()
+    SEACell_ad_apply.X = SEACell_ad_apply.X.multiply(1 / n_cells_per_SEACell.values[:,None]).tocsr()
+
+    if redo_umap:
+        #sc.pp.pca(adata, n_comps=15)
+        sc.pp.neighbors(adata_train)
+        sc.tl.umap(adata_train)
+
+        SEACells.plot.plot_2D(adata_train, key='X_umap', colour_metacells=False)
+        SEACells.plot.plot_2D(adata_train, key='X_umap', colour_metacells=True)
+
+    else:
+        SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=False)
+        SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=True)
+
+    return SEACell_ad_train, SEACell_ad_apply
+
 
 def get_metrics(method, job_id, target_only=False):
 
@@ -1245,9 +1319,21 @@ atac_subject_key='BrainID'
 rna_sex_key = 'Sex'
 atac_sex_key = 'sex'
 
+rna_subjects_key = 'OriginalSub'
+atac_subjects_key = 'BrainID'
+
 unique_celltypes = np.unique(np.concatenate([mdd_rna.obs[rna_celltype_key], mdd_atac.obs[atac_celltype_key]]))
 unique_conditions = np.unique(np.concatenate([mdd_rna.obs[rna_condition_key], mdd_atac.obs[atac_condition_key]]))
 unique_sexes = np.unique(np.concatenate([mdd_rna.obs[rna_sex_key].str.lower(), mdd_atac.obs[atac_sex_key].str.lower()]))
+
+subjects_by_condition_n_sex_df = pd.DataFrame({
+    'subject': np.concatenate([mdd_rna.obs[rna_subjects_key], mdd_atac.obs[atac_subjects_key]]),
+    'condition': np.concatenate([mdd_rna.obs[rna_condition_key], mdd_atac.obs[atac_condition_key]]),
+    'sex': np.concatenate([mdd_rna.obs[rna_sex_key].str.lower(), mdd_atac.obs[atac_sex_key].str.lower()])
+})
+overlapping_subjects = np.intersect1d(mdd_rna.obs[rna_subjects_key], mdd_atac.obs[atac_subjects_key])
+subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df[subjects_by_condition_n_sex_df['subject'].isin(overlapping_subjects)]
+subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condition', 'sex'])['subject'].unique()
 
 #%% project MDD nuclei into latent space
 
@@ -1286,137 +1372,13 @@ _, fig, rna_atac_df_umap = plot_umap_embeddings(eclare_rna_latents, eclare_atac_
 #plot_umap_embeddings(kd_clip_rna_latents, kd_clip_atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=color_map_ct, umap_embedding=None)
 
 
-#%% define function for computing corrected Pearson correlation coefficient based on BigSur paper
-
-def compute_corrected_pearson_correlation(X, Y, c=0.5):
-
-    ## will treat both genes and peaks as features of the same type
-    Z = torch.cat([X, Y], dim=1)
-    n = Z.shape[0]
-    kx = X.shape[1]
-    ky = Y.shape[1]
-
-    mus_gene_cells = (Z.sum(0, keepdim=True) * Z.sum(1, keepdim=True)) / Z.sum()
-    fano_sampling_n_fluctuation = 1 + c**2 * mus_gene_cells
-
-    corrected_pearson_residual = (Z - mus_gene_cells) / np.sqrt(mus_gene_cells * fano_sampling_n_fluctuation)
-    corrected_fano = (corrected_pearson_residual**2).mean(0)
-
-    corrected_pcc_scale = 1 / ( (n-1) * np.sqrt(corrected_fano.unsqueeze(0) * corrected_fano.unsqueeze(1)) )
-    corrected_pcc_effect = (corrected_pearson_residual.unsqueeze(1) * corrected_pearson_residual.unsqueeze(2)).sum(0)
-    corrected_pcc = corrected_pcc_scale * corrected_pcc_effect
-    corrected_pcc_clamped = torch.clamp(corrected_pcc, min=-1, max=1)
-
-    corrected_pcc_X_by_Y = corrected_pcc[:kx, kx:]
-
-    return corrected_pcc_X_by_Y
-
-def c_sweep(X, Y, c_range=[0.1, 0.5, 2, 10]):
-
-    #Z = torch.cat([X, Y], dim=1)
-    Z = Y.clone()
-
-    mus_gene_cells = (Z.sum(0, keepdim=True) * Z.sum(1, keepdim=True)) / Z.sum()
-    mus_genes = mus_gene_cells.mean(0) #Z.mean(0)
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    for c in c_range:
-
-        fano_sampling_n_fluctuation = 1 + c**2 * mus_gene_cells
-        corrected_pearson_residual = (Z - mus_gene_cells) / np.sqrt(mus_gene_cells * fano_sampling_n_fluctuation)
-        corrected_fano = (corrected_pearson_residual**2).mean(0)
-
-        ax.scatter(mus_genes, corrected_fano, label=f'c={c}', marker='.')
-
-    ax.legend()
-    plt.show()
-
-
-#%% SEACells
-import SEACells
-import scanpy as sc
-
-def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key='X_umap', n_SEACells=None):
-
-    # Copy the counts to ".raw" attribute of the anndata since it is necessary for downstream analysis
-    # This step should be performed after filtering 
-    raw_ad = sc.AnnData(adata_train.X)
-    raw_ad.obs_names, raw_ad.var_names = adata_train.obs_names, adata_train.var_names
-    adata_train.raw = raw_ad
-
-    raw_ad = sc.AnnData(adata_apply.X)
-    raw_ad.obs_names, raw_ad.var_names = adata_apply.obs_names, adata_apply.var_names
-    adata_apply.raw = raw_ad
-
-    # Normalize cells, log transform and compute highly variable genes
-    #sc.pp.normalize_per_cell(adata_train)
-    #sc.pp.log1p(adata_train)
-    #sc.pp.highly_variable_genes(adata_train, n_top_genes=1500)
-
-    ## User defined parameters
-
-    ## Core parameters 
-    n_SEACells = n_SEACells if n_SEACells is not None else max(adata_train.n_obs // 75, 15)
-    print(f'Number of SEACells: {n_SEACells}')
-    n_waypoint_eigs = 15 # Number of eigenvalues to consider when initializing metacells
-
-    ## Initialize SEACells model
-    model = SEACells.core.SEACells(adata_train, 
-                    build_kernel_on=build_kernel_on, 
-                    n_SEACells=n_SEACells, 
-                    n_waypoint_eigs=n_waypoint_eigs,
-                    convergence_epsilon = 1e-5,
-                    max_franke_wolfe_iters=100,
-                    use_gpu=False)
-
-    model.construct_kernel_matrix()
-    M = model.kernel_matrix
-
-    # Initialize archetypes
-    model.initialize_archetypes()
-
-    # Fit SEACells model
-    model.fit(min_iter=10, max_iter=100)
-
-    ## Get number of cells in each SEACell
-    n_cells_per_SEACell = adata_train.obs['SEACell'].value_counts(sort=False)
-    assert np.all(n_cells_per_SEACell.index == adata_train.obs['SEACell'].unique()) # unique() is how SEACells gather cells into SEACells
-
-    ## add SEACell labels to apply data
-    adata_apply.obs['SEACell'] = adata_train.obs['SEACell'].values
-
-    ## summarize by SEACell
-    SEACell_ad_train = SEACells.core.summarize_by_SEACell(adata_train, SEACells_label='SEACell', summarize_layer='raw')
-    SEACell_ad_apply = SEACells.core.summarize_by_SEACell(adata_apply, SEACells_label='SEACell', summarize_layer='raw')
-
-    ## divide aggregated SEACell counts by number of cells in each SEACell
-    SEACell_ad_train.X = SEACell_ad_train.X.multiply(1 / n_cells_per_SEACell.values[:,None]).tocsr()
-    SEACell_ad_apply.X = SEACell_ad_apply.X.multiply(1 / n_cells_per_SEACell.values[:,None]).tocsr()
-
-    if redo_umap:
-        #sc.pp.pca(adata, n_comps=15)
-        sc.pp.neighbors(adata_train)
-        sc.tl.umap(adata_train)
-
-        SEACells.plot.plot_2D(adata_train, key='X_umap', colour_metacells=False)
-        SEACells.plot.plot_2D(adata_train, key='X_umap', colour_metacells=True)
-
-    else:
-        SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=False)
-        SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=True)
-
-    return SEACell_ad_train, SEACell_ad_apply
-
-
-
 #%% get peak-gene correlations
 
 from sklearn.model_selection import StratifiedShuffleSplit
 from umap import UMAP
 from torchmetrics.functional import kendall_rank_corrcoef
 from tqdm import tqdm
-from scipy.stats import norm
+from scipy.stats import norm, linregress
 
 from eclare.setup_utils import get_genes_by_peaks
 from eclare.data_utils import get_unified_grns, get_scompreg_loglikelihood
@@ -1435,10 +1397,7 @@ cutoff = 10000  # 1300 for Mic
 
 ## sex='Female'; celltype='Mic'
 ## sex='Female'; celltype='Ex'
-## sex='Female'; celltype=''
-
-unique_conditions = list(unique_conditions)
-unique_conditions.append('')
+sex='Female'; celltype=''
 
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
@@ -1456,31 +1415,38 @@ genes_indices_hvg = mdd_rna.var['highly_variable'].astype(bool)
 peaks_indices_hvg = mdd_atac.var['highly_variable'].astype(bool)
 '''
 
-for sex in unique_sexes:
-    for celltype in unique_celltypes:
+for celltype in unique_celltypes:
 
-        celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
-        #celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id'].str.startswith(celltype)]
+    celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
+    #celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id'].str.startswith(celltype)]
 
-        celltype_peaks_df = doruk_peaks_df[doruk_peaks_df['cluster'].str.startswith(celltype)]
+    celltype_peaks_df = doruk_peaks_df[doruk_peaks_df['cluster'].str.startswith(celltype)]
 
-        #celltype_peaks = celltype_peaks_df['peakName'].str.split('-')
-        #celltype_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame({'chrom': celltype_peaks.str[0], 'start': celltype_peaks.str[1], 'end': celltype_peaks.str[2]}))
+    #celltype_peaks = celltype_peaks_df['peakName'].str.split('-')
+    #celltype_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame({'chrom': celltype_peaks.str[0], 'start': celltype_peaks.str[1], 'end': celltype_peaks.str[2]}))
 
-        celltype_peaks = celltype_peaks_df[['Chromosome', 'Start', 'End']].values
-        celltype_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame({'chrom': celltype_peaks[:,0], 'start': celltype_peaks[:,1], 'end': celltype_peaks[:,2]}))
-        
-        ## select peaks indices using bedtools intersect
-        #peaks_indices_dar = mdd_peaks_bed.intersect(celltype_peaks_bed, c=True).to_dataframe()['name'].astype(bool)
-        #genes_indices_deg = mdd_rna.var_names.isin(celltype_degs_df['gene'])
+    celltype_peaks = celltype_peaks_df[['Chromosome', 'Start', 'End']].values
+    celltype_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame({'chrom': celltype_peaks[:,0], 'start': celltype_peaks[:,1], 'end': celltype_peaks[:,2]}))
+    
+    ## select peaks indices using bedtools intersect
+    #peaks_indices_dar = mdd_peaks_bed.intersect(celltype_peaks_bed, c=True).to_dataframe()['name'].astype(bool)
+    #genes_indices_deg = mdd_rna.var_names.isin(celltype_degs_df['gene'])
 
-        #peaks_indices = peaks_indices_hvg.values | peaks_indices_dar.values
-        #genes_indices = genes_indices_hvg.values | genes_indices_deg
-        #peaks_indices = peaks_indices_dar
-        #genes_indices = genes_indices_deg
-        #genes_indices = np.ones(len(mdd_rna.var_names), dtype=bool)
+    #peaks_indices = peaks_indices_hvg.values | peaks_indices_dar.values
+    #genes_indices = genes_indices_hvg.values | genes_indices_deg
+    #peaks_indices = peaks_indices_dar
+    #genes_indices = genes_indices_deg
+    #genes_indices = np.ones(len(mdd_rna.var_names), dtype=bool)
 
-        for condition in unique_conditions:
+    for condition in unique_conditions:
+
+        mdd_rna_aligned = []
+        mdd_atac_aligned = []
+
+        all_rna_indices = []
+        all_atac_indices = []
+
+        for subject in subjects_by_condition_n_sex_df[condition, sex.lower()]:
 
             #print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {mdd_atac.n_vars} - DEG genes: {mdd_rna.n_vars}')
 
@@ -1488,16 +1454,21 @@ for sex in unique_sexes:
             rna_indices = pd.DataFrame({
                 'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype),
                 'is_condition': mdd_rna.obs[rna_condition_key].str.startswith(condition),
-                'is_sex': mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower())
+                'is_sex': mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
+                'is_subject': mdd_rna.obs[rna_subjects_key] == subject # do not use startswith to avoid multiple subjects
             }).prod(axis=1).astype(bool).values.nonzero()[0]
 
             atac_indices = pd.DataFrame({
                 'is_celltype': mdd_atac.obs[atac_celltype_key].str.startswith(celltype),
                 'is_condition': mdd_atac.obs[atac_condition_key].str.startswith(condition),
-                'is_sex': mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower())
+                'is_sex': mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower()),
+                'is_subject': mdd_atac.obs[atac_subjects_key] == subject # do not use startswith to avoid multiple subjects
             }).prod(axis=1).astype(bool).values.nonzero()[0]
 
-            assert len(rna_indices) > 0 and len(atac_indices) > 0, "No indices"
+            all_rna_indices.append(pd.DataFrame(np.vstack([rna_indices, [subject]*len(rna_indices), [celltype]*len(rna_indices), [condition]*len(rna_indices), [sex]*len(rna_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
+            all_atac_indices.append(pd.DataFrame(np.vstack([atac_indices, [subject]*len(atac_indices), [celltype]*len(atac_indices), [condition]*len(atac_indices), [sex]*len(atac_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
+
+            assert len(rna_indices) > 0 and len(atac_indices) > 0, f"No indices found for sex: {sex} - celltype: {celltype} - condition: {condition} - subject: {subject}"
 
             ## sample indices
             if len(rna_indices) > cutoff:
@@ -1530,6 +1501,7 @@ for sex in unique_sexes:
             atac_latents = torch.nn.functional.normalize(atac_latents, p=2, dim=1)
             student_logits = torch.matmul(atac_latents, rna_latents.T)
 
+            ## compute optimal transport plan for alignment
             ot_res = ot_solve(1 - student_logits)
             plan = ot_res.plan
             value = ot_res.value_linear
@@ -1538,156 +1510,173 @@ for sex in unique_sexes:
             atac_latents = atac_latents[plan.argmax(axis=0)]
             mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
 
-            ## select genes and peaks before SEACells
-            #mdd_rna_sampled_group = mdd_rna_sampled_group[:,genes_indices]
-            #mdd_atac_sampled_group = mdd_atac_sampled_group[:,peaks_indices]
+            ## append to list
+            mdd_rna_aligned.append(mdd_rna_sampled_group)
+            mdd_atac_aligned.append(mdd_atac_sampled_group)
 
-            '''
-            ## get genes by peaks mask and save to dict
-            genes_to_peaks_binary_mask, genes_peaks_dict = get_genes_by_peaks(mdd_rna_sampled_group, mdd_atac_sampled_group, None, window_size = 1e6, feature_selection_method = None)
+        ## concatenate aligned anndatas
+        mdd_rna_aligned = anndata.concat(mdd_rna_aligned, axis=0)
+        mdd_atac_aligned = anndata.concat(mdd_atac_aligned, axis=0)
+        assert (mdd_rna_aligned.obs_names.nunique() == mdd_rna_aligned.n_obs) & (mdd_atac_aligned.obs_names.nunique() == mdd_atac_aligned.n_obs)
 
-            peaks_sort_idxs = np.argsort(genes_peaks_dict['peaks'].tolist())
-            genes_peaks_dict['peaks'] = genes_peaks_dict['peaks'][peaks_sort_idxs]
-            genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[:, peaks_sort_idxs]
+        mdd_rna_aligned.var = mdd_rna.var
+        mdd_atac_aligned.var = mdd_atac.var
 
-            mdd_rna_sampled_group   = mdd_rna_sampled_group[:, mdd_rna_sampled_group.var_names.isin(genes_peaks_dict['genes'])]
-            mdd_atac_sampled_group  = mdd_atac_sampled_group[:, mdd_atac_sampled_group.var_names.isin(genes_peaks_dict['peaks'])]
+        
+        ## select genes and peaks before SEACells
+        #mdd_rna_sampled_group = mdd_rna_sampled_group[:,genes_indices]
+        #mdd_atac_sampled_group = mdd_atac_sampled_group[:,peaks_indices]
 
-            assert (mdd_rna_sampled_group.var_names == genes_peaks_dict['genes']).all()
-            assert (mdd_atac_sampled_group.var_names == genes_peaks_dict['peaks']).all()
-            '''
+        '''
+        ## get genes by peaks mask and save to dict
+        genes_to_peaks_binary_mask, genes_peaks_dict = get_genes_by_peaks(mdd_rna_sampled_group, mdd_atac_sampled_group, None, window_size = 1e6, feature_selection_method = None)
 
-            ## plot UMAP of aligned RNA latents and ATAC latents
-            umap_embeddings = UMAP(n_neighbors=50, min_dist=0.5, n_components=2, metric='cosine', random_state=42)
-            umap_embeddings.fit(np.concatenate([rna_latents, atac_latents], axis=0))
-            rna_umap = umap_embeddings.transform(rna_latents)
-            atac_umap = umap_embeddings.transform(atac_latents)
+        peaks_sort_idxs = np.argsort(genes_peaks_dict['peaks'].tolist())
+        genes_peaks_dict['peaks'] = genes_peaks_dict['peaks'][peaks_sort_idxs]
+        genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[:, peaks_sort_idxs]
 
-            rna_df_umap = pd.DataFrame(data={'umap_1': rna_umap[:, 0], 'umap_2': rna_umap[:, 1],'modality': 'RNA'})
-            atac_df_umap = pd.DataFrame(data={'umap_1': atac_umap[:, 0], 'umap_2': atac_umap[:, 1], 'modality': 'ATAC'})
-            rna_atac_df_umap = pd.concat([rna_df_umap, atac_df_umap], axis=0)#.sample(frac=1) # shuffle            sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, ax=ax[2], legend=True, marker=marker)
+        mdd_rna_sampled_group   = mdd_rna_sampled_group[:, mdd_rna_sampled_group.var_names.isin(genes_peaks_dict['genes'])]
+        mdd_atac_sampled_group  = mdd_atac_sampled_group[:, mdd_atac_sampled_group.var_names.isin(genes_peaks_dict['peaks'])]
 
-            fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-            sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, legend=True, marker='.')
-            ax.set_xticklabels([]); ax.set_yticklabels([]); ax.set_xlabel(''); ax.set_ylabel('')
-            plt.show()
+        assert (mdd_rna_sampled_group.var_names == genes_peaks_dict['genes']).all()
+        assert (mdd_atac_sampled_group.var_names == genes_peaks_dict['peaks']).all()
+        '''
 
-            ## get DAR peaks
-            grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
-            mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = get_unified_grns(grn_path, mdd_rna_sampled_group, mdd_atac_sampled_group)
+        ## plot UMAP of aligned RNA latents and ATAC latents
+        rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_aligned, mdd_atac_aligned, return_tensor=True)
 
-            overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
-            overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
+        umap_embeddings = UMAP(n_neighbors=50, min_dist=0.5, n_components=2, metric='cosine', random_state=42)
+        umap_embeddings.fit(np.concatenate([rna_latents, atac_latents], axis=0))
+        rna_umap = umap_embeddings.transform(rna_latents)
+        atac_umap = umap_embeddings.transform(atac_latents)
 
-            ## run SEACells to obtain pseudobulked counts
-            mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_UMAP_Harmony_Batch_Sample_Chemistry')
+        rna_df_umap = pd.DataFrame(data={'umap_1': rna_umap[:, 0], 'umap_2': rna_umap[:, 1],'modality': 'RNA'})
+        atac_df_umap = pd.DataFrame(data={'umap_1': atac_umap[:, 0], 'umap_2': atac_umap[:, 1], 'modality': 'ATAC'})
+        rna_atac_df_umap = pd.concat([rna_df_umap, atac_df_umap], axis=0)#.sample(frac=1) # shuffle            sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, ax=ax[2], legend=True, marker=marker)
 
-            X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
-            X_atac = torch.from_numpy(mdd_atac_sampled_group_seacells.X.toarray())
+        fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+        sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, legend=True, marker='.', ax=ax[0])
+        sns.scatterplot(data=rna_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, legend=False, marker='.', ax=ax[1])
+        sns.scatterplot(data=atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, legend=False, marker='.', ax=ax[2])
+        ax[0].set_xticklabels([]); ax[0].set_yticklabels([]); ax[0].set_xlabel(''); ax[0].set_ylabel('')
+        ax[1].set_xticklabels([]); ax[1].set_yticklabels([]); ax[1].set_xlabel(''); ax[1].set_ylabel('')
+        ax[2].set_xticklabels([]); ax[2].set_yticklabels([]); ax[2].set_xlabel(''); ax[2].set_ylabel('')
+        plt.show()
 
-            #X_rna = torch.from_numpy(mdd_rna_sampled_group.X.toarray())
-            #X_atac = torch.from_numpy(mdd_atac_sampled_group.X.toarray())
+        ## get mean GRN from brainSCOPE
+        grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
+        mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = get_unified_grns(grn_path, mdd_rna_aligned, mdd_atac_aligned)
 
-            ## select DEG genes and DAR peaks
-            #X_rna = X_rna[:,genes_indices]
-            #X_atac = X_atac[:,peaks_indices]
+        overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
+        overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
 
-            ## detect cells with no gene expression and no chromatin accessibility
-            no_rna_cells = X_rna.sum(1) == 0
-            no_atac_cells = X_atac.sum(1) == 0
-            no_rna_atac_cells = no_rna_cells | no_atac_cells
+        ## run SEACells to obtain pseudobulked counts
+        mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = \
+            run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_UMAP_Harmony_Batch_Sample_Chemistry')
 
-            ## remove cells with no expression
-            X_rna = X_rna[~no_rna_atac_cells]
-            X_atac = X_atac[~no_rna_atac_cells]
+        X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
+        X_atac = torch.from_numpy(mdd_atac_sampled_group_seacells.X.toarray())
 
-            #bulk_atac_abc = X_atac.mean(0, keepdim=True).detach().cpu().numpy()
-            #genes_to_peaks_binary_mask *= bulk_atac_abc
+        #X_rna = torch.from_numpy(mdd_rna_sampled_group.X.toarray())
+        #X_atac = torch.from_numpy(mdd_atac_sampled_group.X.toarray())
 
-            #genes_by_peaks_masks_dict[sex][celltype][condition] = genes_to_peaks_binary_mask
+        ## select DEG genes and DAR peaks
+        #X_rna = X_rna[:,genes_indices]
+        #X_atac = X_atac[:,peaks_indices]
 
-            ## get tfrp
-            scompreg_loglikelihoods, tg_expressions, tfrps, tfrp_predictions = get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
+        ## detect cells with no gene expression and no chromatin accessibility
+        no_rna_cells = X_rna.sum(1) == 0
+        no_atac_cells = X_atac.sum(1) == 0
+        no_rna_atac_cells = no_rna_cells | no_atac_cells
 
-            scompreg_loglikelihoods_dict[sex][celltype][condition if condition != '' else 'all'] = scompreg_loglikelihoods
-            tg_expressions_dict[sex][celltype][condition if condition != '' else 'all'] = tg_expressions
-            tfrps_dict[sex][celltype][condition if condition != '' else 'all'] = tfrps
-            tfrp_predictions_dict[sex][celltype][condition if condition != '' else 'all'] = tfrp_predictions
+        ## remove cells with no expression
+        X_rna = X_rna[~no_rna_atac_cells]
+        X_atac = X_atac[~no_rna_atac_cells]
 
-            # tg_expressions_degs = tg_expressions.loc[:,tg_expressions.columns.isin(celltype_degs_df['gene'])]
-            # tfrps_degs = tfrps.loc[:,tfrps.columns.isin(celltype_degs_df['gene'])]
-            # x_degs = tg_expressions_degs.values.flatten()
-            # y_degs = tfrps_degs.values.flatten()
+        #bulk_atac_abc = X_atac.mean(0, keepdim=True).detach().cpu().numpy()
+        #genes_to_peaks_binary_mask *= bulk_atac_abc
 
-            # tf_expressions = mdd_rna_sampled_group_seacells[:,mdd_rna_sampled_group.var['is_tf']].X.toarray()
-            # x_tfs = tf_expressions.flatten()
-            # y_tfs = tfrps.loc[:,mdd_rna_sampled_group.var['is_tf']].values.flatten()
+        #genes_by_peaks_masks_dict[sex][celltype][condition] = genes_to_peaks_binary_mask
 
+        ## get tfrp
+        scompreg_loglikelihoods, tg_expressions, tfrps, tfrp_predictions = get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
+
+        scompreg_loglikelihoods_dict[sex][celltype][condition if condition != '' else 'all'] = scompreg_loglikelihoods
+        tg_expressions_dict[sex][celltype][condition if condition != '' else 'all'] = tg_expressions
+        tfrps_dict[sex][celltype][condition if condition != '' else 'all'] = tfrps
+        tfrp_predictions_dict[sex][celltype][condition if condition != '' else 'all'] = tfrp_predictions
+
+        # tg_expressions_degs = tg_expressions.loc[:,tg_expressions.columns.isin(celltype_degs_df['gene'])]
+        # tfrps_degs = tfrps.loc[:,tfrps.columns.isin(celltype_degs_df['gene'])]
+        # x_degs = tg_expressions_degs.values.flatten()
+        # y_degs = tfrps_degs.values.flatten()
+
+        # tf_expressions = mdd_rna_sampled_group_seacells[:,mdd_rna_sampled_group.var['is_tf']].X.toarray()
+        # x_tfs = tf_expressions.flatten()
+        # y_tfs = tfrps.loc[:,mdd_rna_sampled_group.var['is_tf']].values.flatten()
+
+        
+
+        ## transpose
+        X_rna = X_rna.T
+        X_atac = X_atac.T
+
+        if do_corrs_or_cosines == 'correlations':
+            ## concatenate
+            X_rna_atac = torch.cat([X_rna, X_atac], dim=0)
+
+            corr = torch.corrcoef(X_rna_atac) #torch.corrcoef(X_rna_atac.cuda(9) if cuda_available else X_rna_atac)
+            corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
+
+            if corr.isnan().any():
+                print(f'NaN values in correlation matrix')
+                corr[corr.isnan()] = 0
+
+            genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+            n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
+
+        elif do_corrs_or_cosines == 'spearman':
+
+            X_rna_argsort = torch.argsort(X_rna, dim=1) 
+            X_atac_argsort = torch.argsort(X_atac, dim=1)
+
+            X_rna_atac = torch.cat([X_rna_argsort, X_atac_argsort], dim=0)
+            corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
+            corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
+
+            genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+            n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
+                
+        elif do_corrs_or_cosines == 'kendall':
+
+            corr = torch.zeros(X_rna.shape[0], X_atac.shape[0])
+            p_values = torch.zeros(X_rna.shape[0], X_atac.shape[0])
             
+            for g, gene in tqdm(enumerate(mdd_rna_sampled_group.var_names), total=len(mdd_rna_sampled_group.var_names), desc="Computing Kendall correlations"):
+                x_rna = X_rna[g,:]
+                X_rna_g = x_rna.repeat(len(X_atac), 1)
+                corrs_g, p_values_g = kendall_rank_corrcoef(X_rna_g.T.cuda(), X_atac.T.cuda(), variant='b', t_test=True, alternative='less')
+                corr[g,:] = corrs_g.detach().cpu()
+                p_values[g,:] = p_values_g.detach().cpu()
 
-            ## transpose
-            X_rna = X_rna.T
-            X_atac = X_atac.T
+            p_values[p_values==0] = 1e-5
+            p_values[p_values==1] = 1-1e-5
 
-            if do_corrs_or_cosines == 'correlations':
-                ## concatenate
-                X_rna_atac = torch.cat([X_rna, X_atac], dim=0)
+            z_scores = norm.ppf(p_values)
 
-                corr = torch.corrcoef(X_rna_atac) #torch.corrcoef(X_rna_atac.cuda(9) if cuda_available else X_rna_atac)
-                corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
+            genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+            n_dict[sex][celltype][condition] = X_rna.shape[1]
 
-                if corr.isnan().any():
-                    print(f'NaN values in correlation matrix')
-                    corr[corr.isnan()] = 0
+        elif do_corrs_or_cosines == 'cosines':
 
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
+            ## normalize gene expression and chromatin accessibility
+            X_rna = torch.nn.functional.normalize(X_rna, p=2, dim=1)
+            X_atac = torch.nn.functional.normalize(X_atac, p=2, dim=1)
 
-            elif do_corrs_or_cosines == 'spearman':
+            ## correlate gene expression with chromatin accessibility
+            cosine = torch.matmul(X_atac, X_rna.T)
+            genes_by_peaks_corrs_dict[sex][celltype][condition] = cosine
 
-                X_rna_argsort = torch.argsort(X_rna, dim=1) 
-                X_atac_argsort = torch.argsort(X_atac, dim=1)
-
-                X_rna_atac = torch.cat([X_rna_argsort, X_atac_argsort], dim=0)
-                corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
-                corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
-
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
-                    
-            elif do_corrs_or_cosines == 'kendall':
-
-                corr = torch.zeros(X_rna.shape[0], X_atac.shape[0])
-                p_values = torch.zeros(X_rna.shape[0], X_atac.shape[0])
-                
-                for g, gene in tqdm(enumerate(mdd_rna_sampled_group.var_names), total=len(mdd_rna_sampled_group.var_names), desc="Computing Kendall correlations"):
-                    x_rna = X_rna[g,:]
-                    X_rna_g = x_rna.repeat(len(X_atac), 1)
-                    corrs_g, p_values_g = kendall_rank_corrcoef(X_rna_g.T.cuda(), X_atac.T.cuda(), variant='b', t_test=True, alternative='less')
-                    corr[g,:] = corrs_g.detach().cpu()
-                    p_values[g,:] = p_values_g.detach().cpu()
-
-                p_values[p_values==0] = 1e-5
-                p_values[p_values==1] = 1-1e-5
-
-                z_scores = norm.ppf(p_values)
-
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                n_dict[sex][celltype][condition] = X_rna.shape[1]
-
-                
-
-            elif do_corrs_or_cosines == 'cosines':
-
-                ## normalize gene expression and chromatin accessibility
-                X_rna = torch.nn.functional.normalize(X_rna, p=2, dim=1)
-                X_atac = torch.nn.functional.normalize(X_atac, p=2, dim=1)
-
-                ## correlate gene expression with chromatin accessibility
-                cosine = torch.matmul(X_atac, X_rna.T)
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = cosine
-
-        break
     break
 
 #%% get MDD-association gene scores
@@ -1810,7 +1799,7 @@ for sex in unique_sexes:
 
             LR_precomputed = -2 * (scompreg_loglikelihoods_precomputed_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
 
-            ## re-computed log likelihoods
+            ## re-computed log likelihoods and confirm that same as pre-computed
             for condition in ['Case', 'Control']:
 
                 tfrps               = tfrps_dict[sex][celltype][condition]
@@ -1855,14 +1844,15 @@ for sex in unique_sexes:
                 log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
                 scompreg_loglikelihoods_all[gene] = log_gaussian_likelihood
 
-                diff = np.abs(log_gaussian_likelihood - scompreg_loglikelihoods_dict[sex][celltype]['all'][gene])
-                diffs_all.append(diff)
+                #diff = np.abs(log_gaussian_likelihood - scompreg_loglikelihoods_dict[sex][celltype]['all'][gene])
+                #diffs_all.append(diff)
 
             scompreg_loglikelihoods_df = pd.DataFrame({
                 'case': scompreg_loglikelihoods_case_precomputed,
                 'control': scompreg_loglikelihoods_control_precomputed,
                 'all': scompreg_loglikelihoods_all
             })
+
             LR = -2 * (scompreg_loglikelihoods_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
 
             ## apply Wilson-Hilferty cube-root transformation
@@ -1872,6 +1862,9 @@ for sex in unique_sexes:
             ## Hawkins & Wixley 1986
             lambd = 0.2887  # optimal value for dof=3
             Z = (LR**lambd - 1) / lambd
+
+            ## Recenter Z distribution
+            Z = Z - Z.mean()
             
             if (LR < 0).any():
                 print(f'LR is negative for {celltype} {sex}')
@@ -1987,11 +1980,11 @@ ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': Z})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
 
 pre_res = gp.prerank(rnk=ranked_list,
-                     gene_sets='GO_Biological_Process_2021', # apparently, GO_Biological_Process_2021 and Reactome_2022 better for neurological disorders. Also have Human_Phenotype_Ontology
+                     gene_sets='GO_Biological_Process_2025', # apparently, GO_Biological_Process_2021 and Reactome_2022 better for neurological disorders. Also have Human_Phenotype_Ontology
                      outdir=os.path.join(os.environ['OUTPATH'], 'gseapy_results'),
                      min_size=2,
                      max_size=len(ranked_list),
-                     permutation_num=100)
+                     permutation_num=1000)
 
 '''
 gene sets of interest:
@@ -2140,3 +2133,49 @@ _, fig, _ = plot_umap_embeddings(eclare_rna_latents_paired, eclare_atac_latents_
 
 ## save the figure
 fig.savefig(os.path.join(os.environ['OUTPATH'], 'flashtalk2_umap_embeddings.png'), bbox_inches='tight', dpi=300, transparent=True)
+
+#%% define function for computing corrected Pearson correlation coefficient based on BigSur paper
+
+def compute_corrected_pearson_correlation(X, Y, c=0.5):
+
+    ## will treat both genes and peaks as features of the same type
+    Z = torch.cat([X, Y], dim=1)
+    n = Z.shape[0]
+    kx = X.shape[1]
+    ky = Y.shape[1]
+
+    mus_gene_cells = (Z.sum(0, keepdim=True) * Z.sum(1, keepdim=True)) / Z.sum()
+    fano_sampling_n_fluctuation = 1 + c**2 * mus_gene_cells
+
+    corrected_pearson_residual = (Z - mus_gene_cells) / np.sqrt(mus_gene_cells * fano_sampling_n_fluctuation)
+    corrected_fano = (corrected_pearson_residual**2).mean(0)
+
+    corrected_pcc_scale = 1 / ( (n-1) * np.sqrt(corrected_fano.unsqueeze(0) * corrected_fano.unsqueeze(1)) )
+    corrected_pcc_effect = (corrected_pearson_residual.unsqueeze(1) * corrected_pearson_residual.unsqueeze(2)).sum(0)
+    corrected_pcc = corrected_pcc_scale * corrected_pcc_effect
+    corrected_pcc_clamped = torch.clamp(corrected_pcc, min=-1, max=1)
+
+    corrected_pcc_X_by_Y = corrected_pcc[:kx, kx:]
+
+    return corrected_pcc_X_by_Y
+
+def c_sweep(X, Y, c_range=[0.1, 0.5, 2, 10]):
+
+    #Z = torch.cat([X, Y], dim=1)
+    Z = Y.clone()
+
+    mus_gene_cells = (Z.sum(0, keepdim=True) * Z.sum(1, keepdim=True)) / Z.sum()
+    mus_genes = mus_gene_cells.mean(0) #Z.mean(0)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    for c in c_range:
+
+        fano_sampling_n_fluctuation = 1 + c**2 * mus_gene_cells
+        corrected_pearson_residual = (Z - mus_gene_cells) / np.sqrt(mus_gene_cells * fano_sampling_n_fluctuation)
+        corrected_fano = (corrected_pearson_residual**2).mean(0)
+
+        ax.scatter(mus_genes, corrected_fano, label=f'c={c}', marker='.')
+
+    ax.legend()
+    plt.show()

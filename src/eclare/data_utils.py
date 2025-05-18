@@ -550,8 +550,11 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
         #mean_grn_df_gene = mean_grn_df[mean_grn_df['TG'] == gene].set_index('TG')
         mean_grn_df_gene = mean_grn_df_grouped.get_group(gene)
         mean_grn_df_gene = mean_grn_df_gene[mean_grn_df_gene['TF'].isin(overlapping_tfs)]
-        BI = mean_grn_df_gene['Correlation'].values[None, :] # encapsulates effects of both TF-peak (B) and peak-gene (I) interactions as per sc-compReg
         n_linked_peaks = mean_grn_df_gene['enhancer'].nunique()
+
+        ## term that encapsulates effects of both TF-peak (B) and peak-gene (I) interactions as per sc-compReg
+        #BI = mean_grn_df_gene['Correlation'].values[None, :]
+        BI = mean_grn_df_gene['edgeWeight'].values[None, :]
 
         #if n_linked_peaks > 0:
         #    print(f'{gene} has {n_linked_peaks} linked peaks')
