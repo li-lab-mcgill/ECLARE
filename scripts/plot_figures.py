@@ -1301,8 +1301,8 @@ atac_fullpath = os.path.join(atac_datapath, ATAC_file)
 atac = anndata.read_h5ad(atac_fullpath, backed='r')
 rna  = anndata.read_h5ad(rna_fullpath, backed='r')
 
-mdd_atac = atac[::10].to_memory()
-mdd_rna = rna[::10].to_memory()
+mdd_atac = atac[::1].to_memory()
+mdd_rna = rna[::1].to_memory()
 
 mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
 
@@ -1415,6 +1415,32 @@ genes_indices_hvg = mdd_rna.var['highly_variable'].astype(bool)
 peaks_indices_hvg = mdd_atac.var['highly_variable'].astype(bool)
 '''
 
+def cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd'):
+
+    if type == 'emd':
+        res = ot_solve(1 - student_logits)
+        plan = res.plan
+        value = res.value_linear
+
+    elif type == 'partial':
+        a, b = torch.ones((len(student_logits.shape[0]),)) / len(student_logits.shape[0]), torch.ones((len(student_logits.shape[1]),)) / len(student_logits.shape[1])
+        mass = 1 - (a[0] * cells_gap).item()
+        plan = ot.partial.partial_wasserstein(a, b, 1-student_logits, m=mass)
+
+    if student_logits.shape[0] > student_logits.shape[1]:
+        keep_atac_cells = plan.max(1).values.argsort()[cells_gap:].sort().values.detach().cpu().numpy()
+        atac_latents = atac_latents[keep_atac_cells]
+        mdd_atac_sampled_group = mdd_atac_sampled_group[keep_atac_cells]
+    else:
+        keep_rna_cells = plan.max(0).values.argsort()[cells_gap:].sort().values.detach().cpu().numpy()
+        rna_latents = rna_latents[keep_rna_cells]
+        mdd_rna_sampled_group = mdd_rna_sampled_group[keep_rna_cells]
+
+    student_logits = torch.matmul(atac_latents, rna_latents.T)
+
+    return mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits
+
+
 for celltype in unique_celltypes:
 
     celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
@@ -1489,6 +1515,27 @@ for celltype in unique_celltypes:
             rna_latents = rna_latents.cpu()
             atac_latents = atac_latents.cpu()
 
+            ## get logits - already normalized during clip loss, but need to normalize before to be consistent with Concerto
+            rna_latents = torch.nn.functional.normalize(rna_latents, p=2, dim=1)
+            atac_latents = torch.nn.functional.normalize(atac_latents, p=2, dim=1)
+            student_logits = torch.matmul(atac_latents, rna_latents.T)
+
+            a, b = torch.ones((len(atac_latents),)) / len(atac_latents), torch.ones((len(rna_latents),)) / len(rna_latents)
+
+            cells_gap = np.abs(len(atac_latents) - len(rna_latents))
+
+            ## if imbalance, use partial wasserstein to find cells to reject and resample accordingly
+            if cells_gap > 0:
+                print(f'cells_gap: {cells_gap}')
+                mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits = \
+                    cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd')
+
+            ## compute optimal transport plan for alignment on remaining cells
+            res = ot_solve(1 - student_logits)
+            plan = res.plan
+            value = res.value_linear
+
+            '''
             ## trim latents to smallest size
             min_size = min(rna_latents.shape[0], atac_latents.shape[0])
             rna_latents = rna_latents[:min_size]
@@ -1496,17 +1543,13 @@ for celltype in unique_celltypes:
             mdd_rna_sampled_group = mdd_rna_sampled_group[:min_size]
             mdd_atac_sampled_group = mdd_atac_sampled_group[:min_size]
 
-            ## get logits - already normalized during clip loss, but need to normalize before to be consistent with Concerto
-            rna_latents = torch.nn.functional.normalize(rna_latents, p=2, dim=1)
-            atac_latents = torch.nn.functional.normalize(atac_latents, p=2, dim=1)
-            student_logits = torch.matmul(atac_latents, rna_latents.T)
-
             ## compute optimal transport plan for alignment
             ot_res = ot_solve(1 - student_logits)
             plan = ot_res.plan
             value = ot_res.value_linear
+            '''
 
-            ## re-order RNA latents to match plan (can rerun OT analysis to ensure diagonal matching structure)
+            ## re-order ATAC latents to match plan (can rerun OT analysis to ensure diagonal matching structure)
             atac_latents = atac_latents[plan.argmax(axis=0)]
             mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
 
