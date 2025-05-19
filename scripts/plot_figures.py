@@ -68,7 +68,7 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
     ## User defined parameters
 
     ## Core parameters 
-    n_SEACells = n_SEACells if n_SEACells is not None else max(adata_train.n_obs // 75, 15)
+    n_SEACells = n_SEACells if n_SEACells is not None else max(adata_train.n_obs // 75, 15) # 75 cells per SEACell, for a minimum of 15 SEACells
     print(f'Number of SEACells: {n_SEACells}')
     n_waypoint_eigs = 15 # Number of eigenvalues to consider when initializing metacells
 
@@ -79,7 +79,7 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
                     n_waypoint_eigs=n_waypoint_eigs,
                     convergence_epsilon = 1e-5,
                     max_franke_wolfe_iters=100,
-                    use_gpu=False)
+                    use_gpu=True)
 
     model.construct_kernel_matrix()
     M = model.kernel_matrix
@@ -1393,7 +1393,8 @@ tg_expressions_dict = tree()
 tfrps_dict = tree()
 tfrp_predictions_dict = tree()
 
-cutoff = 10000  # 1300 for Mic
+## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
+cutoff = 5000
 
 ## sex='Female'; celltype='Mic'
 sex='Female'; celltype='Ex'
@@ -1560,6 +1561,8 @@ for celltype in unique_celltypes:
         ## concatenate aligned anndatas
         mdd_rna_aligned = anndata.concat(mdd_rna_aligned, axis=0)
         mdd_atac_aligned = anndata.concat(mdd_atac_aligned, axis=0)
+
+        assert (mdd_rna_aligned.obs[rna_subjects_key].values.to_numpy() == mdd_atac_aligned.obs[atac_subjects_key].values.to_numpy()).all()
         assert (mdd_rna_aligned.obs_names.nunique() == mdd_rna_aligned.n_obs) & (mdd_atac_aligned.obs_names.nunique() == mdd_atac_aligned.n_obs)
 
         mdd_rna_aligned.var = mdd_rna.var
@@ -1612,6 +1615,16 @@ for celltype in unique_celltypes:
 
         overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
         overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
+
+        ## remove excess cells beyond cutoff with stratified sampling - or else SEACells way too slow
+        if len(mdd_rna_sampled_group) > cutoff:
+            print(f'Removing {len(mdd_rna_sampled_group) - cutoff} cells')
+
+            sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
+            _, sampled_indices = next(sss.split(mdd_rna_sampled_group.obs_names, mdd_rna_sampled_group.obs[rna_subjects_key]))
+
+            mdd_rna_sampled_group = mdd_rna_sampled_group[sampled_indices]
+            mdd_atac_sampled_group = mdd_atac_sampled_group[sampled_indices]
 
         ## run SEACells to obtain pseudobulked counts
         mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = \
@@ -1850,6 +1863,10 @@ for sex in unique_sexes:
 
                 for gene in tqdm(genes_names):
 
+                    log_gaussian_likelihood_pre = scompreg_loglikelihoods_dict[sex][celltype][condition][gene]
+                    if np.isnan(log_gaussian_likelihood_pre):
+                        continue
+
                     tfrp                = tfrps.loc[:,gene].values.astype(float)
                     tg_expression       = tg_expressions.loc[:,gene].values.astype(float)
 
@@ -1863,12 +1880,13 @@ for sex in unique_sexes:
                     var = sq_residuals.sum() / n
                     log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
 
-                    diff = np.abs(log_gaussian_likelihood - scompreg_loglikelihoods_dict[sex][celltype][condition][gene])
+                    diff = np.abs(log_gaussian_likelihood - log_gaussian_likelihood_pre)
                     assert diff < 1e-6
 
             ## re-compute log likelihoods for pooled conditions
-            tfrps_all = pd.concat([ tfrps_dict[sex][celltype]['Case'], tfrps_dict[sex][celltype]['Control'] ])
-            tg_expressions_all = pd.concat([ tg_expressions_dict[sex][celltype]['Case'], tg_expressions_dict[sex][celltype]['Control'] ])
+            tfrps_all = pd.concat([ tfrps_dict[sex][celltype]['Case'], tfrps_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
+            tg_expressions_all = pd.concat([ tg_expressions_dict[sex][celltype]['Case'], tg_expressions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
+            tfrp_predictions_all = pd.concat([ tfrp_predictions_dict[sex][celltype]['Case'], tfrp_predictions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
 
             diffs_all = []
             scompreg_loglikelihoods_all = {}
@@ -1878,24 +1896,35 @@ for sex in unique_sexes:
                 tfrp = tfrps_all.loc[:,gene].values.astype(float)
                 tg_expression = tg_expressions_all.loc[:,gene].values.astype(float)
 
-                slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
-                tfrp_predictions = slope * tg_expression + intercept
-
-                n = len(tfrp)
-                sq_residuals = (tfrp - tfrp_predictions)**2
-                var = sq_residuals.sum() / n
-                log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
-                scompreg_loglikelihoods_all[gene] = log_gaussian_likelihood
+                try:
+                    slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
+                    tfrp_predictions = slope * tg_expression + intercept
+                except:
+                    print(f'{gene} has no variance in tg_expression')
+                    tfrp_predictions = np.ones_like(tg_expression) * np.nan
+                    log_gaussian_likelihood = np.array([np.nan])
+                else:
+                    n = len(tfrp)
+                    sq_residuals = (tfrp - tfrp_predictions)**2
+                    var = sq_residuals.sum() / n
+                    log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
+                finally:
+                    scompreg_loglikelihoods_all[gene] = log_gaussian_likelihood
 
                 #diff = np.abs(log_gaussian_likelihood - scompreg_loglikelihoods_dict[sex][celltype]['all'][gene])
                 #diffs_all.append(diff)
 
+            ## collect all log likelihoods
             scompreg_loglikelihoods_df = pd.DataFrame({
                 'case': scompreg_loglikelihoods_case_precomputed,
                 'control': scompreg_loglikelihoods_control_precomputed,
                 'all': scompreg_loglikelihoods_all
-            })
+            }).dropna() # drop rows with nan
 
+            ## extract gene names from dataframe since some genes were dropped due to nan
+            genes_names = scompreg_loglikelihoods_df.index
+
+            ## compute log likelihood ratio LR
             LR = -2 * (scompreg_loglikelihoods_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
 
             ## apply Wilson-Hilferty cube-root transformation
@@ -2023,7 +2052,7 @@ from scipy.optimize import minimize
 # 1) Suppose `lr` is your 1-D array of empirical LR statistics:
 lr = np.array(LR)
 
-# 2) Compute the empirical 5%, 10%, …, 50% quantiles:
+# 2) Compute subset of empirical quantiles:
 max_null_quantile = 0.5
 probs = np.linspace(0.05, max_null_quantile, 10)
 emp_q = np.quantile(lr, probs)
@@ -2086,7 +2115,7 @@ genes_names_filtered = genes_names[where_filtered]
 
 import gseapy as gp
 
-ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': Z})
+ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': LR})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
 
 pre_res = gp.prerank(rnk=ranked_list,
@@ -2101,6 +2130,8 @@ gene sets of interest:
 - GO_Biological_Process_2021/2023/2025
 - Human_Phenotype_Ontology
 - DisGeNET
+
+- Reactome_2022
 
 - ENCODE_and_ChEA_Consensus_TFs_from_ChIP-X
 - ENCODE_TF_ChIP-seq_2014/2015
@@ -2125,12 +2156,13 @@ ax = dotplot(pre_res.res2d,
              figsize=(4,5), cutoff=0.25, show_ring=False)
 
 #%% EnrichR
+from IPython.display import display
 
 enr = gp.enrichr(genes_names_filtered.to_list(),
-                    gene_sets='GO_Biological_Process_2021',
+                    gene_sets='Reactome_2022',
                     outdir=None)
 
-enr.res2d.head(10)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']]
+display(enr.res2d.head(10)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
 
 # dotplot
 gp.dotplot(enr.res2d,
