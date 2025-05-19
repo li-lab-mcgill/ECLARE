@@ -1396,8 +1396,8 @@ tfrp_predictions_dict = tree()
 cutoff = 10000  # 1300 for Mic
 
 ## sex='Female'; celltype='Mic'
-## sex='Female'; celltype='Ex'
-sex='Female'; celltype=''
+sex='Female'; celltype='Ex'
+## sex='Female'; celltype=''
 
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
@@ -1907,7 +1907,7 @@ for sex in unique_sexes:
             Z = (LR**lambd - 1) / lambd
 
             ## Recenter Z distribution
-            Z = Z - Z.mean()
+            Z = Z - np.median(Z)
             
             if (LR < 0).any():
                 print(f'LR is negative for {celltype} {sex}')
@@ -2015,6 +2015,73 @@ for sex in unique_sexes:
             '''
         break
     break
+
+#%% filter LR values with fitted null distribution (sc-compReg)
+from scipy.stats import gamma
+from scipy.optimize import minimize
+
+# 1) Suppose `lr` is your 1-D array of empirical LR statistics:
+lr = np.array(LR)
+
+# 2) Compute the empirical 5%, 10%, …, 50% quantiles:
+max_null_quantile = 0.5
+probs = np.linspace(0.05, max_null_quantile, 10)
+emp_q = np.quantile(lr, probs)
+
+# 3) Define the objective G(a, b) = sum_i [Gamma.ppf(probs[i], a, scale=b) - emp_q[i]]^2
+def G(params):
+    a, scale = params
+    # enforce positivity
+    if a <= 0 or scale <= 0:
+        return np.inf
+    theor_q = gamma.ppf(probs, a, scale=scale)
+    return np.sum((theor_q - emp_q)**2)
+
+# 4) Method-of-moments init on the lower half to get a reasonable starting point
+m1 = emp_q.mean()
+v1 = emp_q.var()
+init_a = m1**2 / v1
+init_scale = v1 / m1
+
+# 5) Minimize G(a, scale) over a>0, scale>0
+res = minimize(G,
+               x0=[init_a, init_scale],
+               bounds=[(1e-8, None), (1e-8, None)],
+               method='L-BFGS-B')
+
+
+# Plot empirical histogram and fitted gamma distribution
+plt.figure(figsize=(10, 6))
+plt.hist(lr, bins=250, density=True, alpha=0.6, label='Empirical LR distribution')
+
+# Generate points for fitted gamma distribution
+x = np.linspace(min(lr), max(lr), 1000)
+fitted_pdf = gamma.pdf(x, a=res.x[0], scale=res.x[1])
+plt.plot(x, fitted_pdf, 'r-', linewidth=2, label='Fitted gamma distribution')
+
+# Add veritcal line at last null quantile
+plt.axvline(emp_q[-1], color='black', linestyle='--', label=f'Last null quantile of empirical distribution (q={probs[-1]:.2f})')
+
+# Add veritcal line at threshold
+p_threshold = 0.05
+lr_at_p = gamma.ppf(1-p_threshold, a=res.x[0], scale=res.x[1])
+plt.axvline(lr_at_p, color='black', linestyle='--', label=f'Threshold (p={p_threshold:.2f}) @ LR={lr_at_p:.2f}')
+
+plt.xlabel('LR statistic')
+plt.ylabel('Density')
+plt.title('Comparison of Empirical and Fitted LR Distributions')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+
+## filter LR values with fitted null distribution
+lr_fitted_cdf = gamma.cdf(lr, a=res.x[0], scale=res.x[1])
+where_filtered = lr_fitted_cdf > (1-p_threshold)
+
+lr_filtered = lr[where_filtered]
+genes_names_filtered = genes_names[where_filtered]
+
+
 #%% GSEApy
 
 import gseapy as gp
@@ -2051,12 +2118,30 @@ axes = pre_res.plot(terms=term2[0])
 from gseapy import dotplot
 # to save your figure, make sure that ``ofname`` is not None
 ax = dotplot(pre_res.res2d,
-             column="FDR q-val",
+             column="NOM p-val",
              title='',
              cmap=plt.cm.viridis,
              size=6, # adjust dot size
              figsize=(4,5), cutoff=0.25, show_ring=False)
 
+#%% EnrichR
+
+enr = gp.enrichr(genes_names_filtered.to_list(),
+                    gene_sets='GO_Biological_Process_2021',
+                    outdir=None)
+
+enr.res2d.head(10)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']]
+
+# dotplot
+gp.dotplot(enr.res2d,
+           column='P-value',
+           figsize=(3,5),
+           title='',
+           cmap=plt.cm.viridis,
+           size=6, # adjust dot size
+           cutoff=0.25,
+           show_ring=False)
+plt.show()
 #%%
 import networkx as nx
 
