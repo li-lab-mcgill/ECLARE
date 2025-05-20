@@ -474,10 +474,14 @@ def get_unified_grns(grn_path, mdd_rna, mdd_atac):
 
     grn_df = pd.concat(grns)
 
+    ## only keep GRNs inferred from scGRNom method
+    grn_df_clean = grn_df[grn_df['method'] == 'scGRNom']
+
     ## clean GRNs
-    grn_df_clean = grn_df[~grn_df['Correlation'].isna() & ~grn_df['edgeWeight'].isna()] # remove rows with missing values, or else will corrupt mean
+    grn_df_clean = grn_df_clean[~grn_df_clean['edgeWeight'].isna()] # remove rows with missing values, or else will corrupt mean
     mean_grn_df = grn_df_clean.groupby(['TF','enhancer','TG'])[['edgeWeight','Correlation']].mean() # take average across all cell types
     mean_grn_df.reset_index(inplace=True)
+
 
     ## get peaks from GRNs
     peaks_df = pd.DataFrame(index=mdd_atac.var_names.str.split(':|-', expand=True)).reset_index()
@@ -575,7 +579,7 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
 
         ## compute tfrp - note that peak_expressions are sparse, leading to sparse tfrp
         tfrp = tf_expressions * peak_expressions * BI #* peak_tg_correlations * abc_scores
-        tfrp = tfrp.sum(axis=1)
+        tfrp = tfrp.sum(axis=1) # sum across TFs (not what is done in sc-compReg)
 
         ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
         try:
