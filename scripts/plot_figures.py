@@ -68,7 +68,7 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
     ## User defined parameters
 
     ## Core parameters 
-    n_SEACells = n_SEACells if n_SEACells is not None else max(adata_train.n_obs // 75, 15) # 75 cells per SEACell, for a minimum of 15 SEACells
+    n_SEACells = n_SEACells if n_SEACells is not None else max(adata_train.n_obs // 100, 15) # 75 cells per SEACell, for a minimum of 15 SEACells
     print(f'Number of SEACells: {n_SEACells}')
     n_waypoint_eigs = 15 # Number of eigenvalues to consider when initializing metacells
 
@@ -1447,7 +1447,7 @@ def cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_grou
     return mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits
 
 if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl')):
-    
+
     for celltype in unique_celltypes:
 
         celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
@@ -1634,7 +1634,7 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
 
             ## run SEACells to obtain pseudobulked counts
             mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = \
-                run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_UMAP_Harmony_Batch_Sample_Chemistry')
+                run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_UMAP_pca')
 
             X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
             X_atac = torch.from_numpy(mdd_atac_sampled_group_seacells.X.toarray())
