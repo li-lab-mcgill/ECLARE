@@ -557,7 +557,7 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
 
     mean_grn_df_grouped = mean_grn_df.groupby('TG')
 
-    def _scompreg_loglikelihood(gene, tfrp_aggregation='factorized'):
+    def _scompreg_loglikelihood(gene, tfrp_aggregation='sum'):
 
         #mean_grn_df_gene = mean_grn_df[mean_grn_df['TG'] == gene].set_index('TG')
         mean_grn_df_gene = mean_grn_df_grouped.get_group(gene)
@@ -591,7 +591,8 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
 
         if tfrp_aggregation == 'sum':
 
-            BI = BI_enhancers * BI_diffusions * BI_sign
+            #BI = (BI_enhancers * BI_diffusions * BI_sign).values[None]
+            BI = (BI_enhancers * BI_sign).values[None]
             tfrp = tf_expressions * peak_expressions * BI #* peak_tg_correlations * abc_scores
             tfrp = tfrp.sum(axis=1)
 
@@ -614,7 +615,7 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
                 n = len(tfrp)
                 sq_residuals = (tfrp - tfrp_predictions)**2
                 var = sq_residuals.sum() / n
-                log_gaussian_likelihood_ = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
+                log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
 
         elif tfrp_aggregation == 'factorized':
 

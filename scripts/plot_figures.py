@@ -1402,7 +1402,7 @@ tfrp_predictions_dict = tree()
 cutoff = 5025 # better a multiple of 75 due to formation of SEACells
 
 ## sex='Female'; celltype='Mic'
-sex='Female'; celltype='Ex'
+sex='Female'; celltype='Mic'
 ## sex='Female'; celltype=''
 
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
@@ -1445,6 +1445,7 @@ def cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_grou
     student_logits = torch.matmul(atac_latents, rna_latents.T)
 
     return mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits
+
 
 if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl')):
 
@@ -1912,6 +1913,11 @@ for sex in unique_sexes:
             tg_expressions_all = pd.concat([ tg_expressions_dict[sex][celltype]['Case'], tg_expressions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
             tfrp_predictions_all = pd.concat([ tfrp_predictions_dict[sex][celltype]['Case'], tfrp_predictions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
 
+            ## compute correlation between tfrp predictions and tfrps - could potential use to filter genes
+            t = tfrps_all.shape[1]
+            tfrp_corrs = np.corrcoef(tfrp_predictions_all.values.astype(float), tfrps_all.values.astype(float), rowvar=False)
+            tfrp_corrs = np.diag(tfrp_corrs[:t, t:])
+
             diffs_all = []
             scompreg_loglikelihoods_all = {}
 
@@ -2137,7 +2143,7 @@ res = minimize(G,
 
 # Plot empirical histogram and fitted gamma distribution
 plt.figure(figsize=(10, 6))
-plt.hist(lr, bins=250, density=True, alpha=0.6, label='Empirical LR distribution')
+plt.hist(lr, bins=100, density=True, alpha=0.6, label='Empirical LR distribution')
 
 # Generate points for fitted gamma distribution
 x = np.linspace(0, max(lr), 1000)
@@ -2176,13 +2182,13 @@ t_slopes_filtered = t_slopes[genes_names_filtered]
 
 import gseapy as gp
 
-rank = Z_down.copy()
+rank = t_slopes.copy()
 
 ranked_list = pd.DataFrame({'gene': rank.index.to_list(), 'score': rank.values})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
 
 pre_res = gp.prerank(rnk=ranked_list,
-                     gene_sets='Human_Phenotype_Ontology',
+                     gene_sets='GO_Biological_Process_2025',
                      outdir=os.path.join(os.environ['OUTPATH'], 'gseapy_results'),
                      min_size=2,
                      max_size=len(ranked_list),
@@ -2224,7 +2230,7 @@ from IPython.display import display
 lr_filtered_type = lr_down_filtered.copy()
 
 enr = gp.enrichr(lr_filtered_type.index.to_list(),
-                    gene_sets='Human_Phenotype_Ontology',
+                    gene_sets='GO_Biological_Process_2025',
                     outdir=None)
 
 display(enr.res2d.head(10)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
