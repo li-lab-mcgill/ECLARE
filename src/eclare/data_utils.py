@@ -579,12 +579,17 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
 
         ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
         try:
-            slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
+            linregress_res = linregress(tg_expression, tfrp) # if unpack directly, returns only 5 of the 6 outputs..
+            slope, intercept, r_value, p_value, std_err, intercept_stderr = (linregress_res.slope, linregress_res.intercept, linregress_res.rvalue, linregress_res.pvalue, linregress_res.stderr, linregress_res.intercept_stderr)
             tfrp_predictions = slope * tg_expression + intercept
         except:
             print(f'{gene} has no variance in tg_expression')
             tfrp_predictions = np.ones_like(tg_expression) * np.nan
             log_gaussian_likelihood = np.array([np.nan])
+            slope = np.nan
+            intercept = np.nan
+            std_err = np.nan
+            intercept_stderr = np.nan
         else:
             ## compute residuals and variance
             n = len(tfrp)
@@ -592,24 +597,33 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
             var = sq_residuals.sum() / n
             log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
         finally:
-            return log_gaussian_likelihood, tg_expression, tfrp, tfrp_predictions
+            return log_gaussian_likelihood, tg_expression, tfrp, tfrp_predictions, slope, intercept, std_err, intercept_stderr
 
     log_gaussian_likelihoods    = {}
+    slopes                      = {}
+    intercepts                  = {}
+    std_errs                    = {}
+    intercept_stderrs           = {}
     tg_expressions              = pd.DataFrame(columns=overlapping_target_genes)
     tfrps                       = pd.DataFrame(columns=overlapping_target_genes)
     tfrp_predictions            = pd.DataFrame(columns=overlapping_target_genes)
 
     for gene in tqdm(overlapping_target_genes):
-        log_gaussian_likelihood, tg_expression, tfrp, tfrp_prediction = _scompreg_loglikelihood(gene)
+        log_gaussian_likelihood, tg_expression, tfrp, tfrp_prediction, slope, intercept, std_err, intercept_stderr = _scompreg_loglikelihood(gene)
 
         log_gaussian_likelihood = log_gaussian_likelihood.item()
         log_gaussian_likelihoods[gene] = log_gaussian_likelihood
+
+        slopes[gene] = slope
+        intercepts[gene] = intercept
+        std_errs[gene] = std_err
+        intercept_stderrs[gene] = intercept_stderr
 
         tg_expressions.loc[:,gene]      = tg_expression
         tfrps.loc[:,gene]               = tfrp
         tfrp_predictions.loc[:,gene]    = tfrp_prediction
 
-    return log_gaussian_likelihoods, tg_expressions, tfrps, tfrp_predictions
+    return log_gaussian_likelihoods, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, std_errs, intercept_stderrs
 
 
     #%load_ext line_profiler
