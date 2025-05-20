@@ -1389,12 +1389,17 @@ genes_by_peaks_masks_dict = tree()
 n_dict = tree()
 
 scompreg_loglikelihoods_dict = tree()
+std_errs_dict = tree()
+slopes_dict = tree()
+intercepts_dict = tree()
+intercept_stderrs_dict = tree()
+
 tg_expressions_dict = tree()
 tfrps_dict = tree()
 tfrp_predictions_dict = tree()
 
 ## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
-cutoff = 5000
+cutoff = 750#5025 # better a multiple of 75 due to formation of SEACells
 
 ## sex='Female'; celltype='Mic'
 sex='Female'; celltype='Ex'
@@ -1655,12 +1660,17 @@ for celltype in unique_celltypes:
         #genes_by_peaks_masks_dict[sex][celltype][condition] = genes_to_peaks_binary_mask
 
         ## get tfrp
-        scompreg_loglikelihoods, tg_expressions, tfrps, tfrp_predictions = get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
+        scompreg_loglikelihoods, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, std_errs, intercept_stderrs = get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
 
+        ## save to dicts
         scompreg_loglikelihoods_dict[sex][celltype][condition if condition != '' else 'all'] = scompreg_loglikelihoods
+        std_errs_dict[sex][celltype][condition if condition != '' else 'all'] = std_errs
         tg_expressions_dict[sex][celltype][condition if condition != '' else 'all'] = tg_expressions
         tfrps_dict[sex][celltype][condition if condition != '' else 'all'] = tfrps
         tfrp_predictions_dict[sex][celltype][condition if condition != '' else 'all'] = tfrp_predictions
+        slopes_dict[sex][celltype][condition if condition != '' else 'all'] = slopes
+        intercepts_dict[sex][celltype][condition if condition != '' else 'all'] = intercepts
+        intercept_stderrs_dict[sex][celltype][condition if condition != '' else 'all'] = intercept_stderrs
 
         # tg_expressions_degs = tg_expressions.loc[:,tg_expressions.columns.isin(celltype_degs_df['gene'])]
         # tfrps_degs = tfrps.loc[:,tfrps.columns.isin(celltype_degs_df['gene'])]
@@ -1941,6 +1951,30 @@ for sex in unique_sexes:
             if (LR < 0).any():
                 print(f'LR is negative for {celltype} {sex}')
 
+            ## Compute t-statistic between regression slopes
+            slopes_case = slopes_dict[sex][celltype]['Case']
+            slopes_control = slopes_dict[sex][celltype]['Control']
+
+            std_errs_case = std_errs_dict[sex][celltype]['Case']
+            std_errs_control = std_errs_dict[sex][celltype]['Control']
+
+            t_df = pd.DataFrame({
+                'case': slopes_case,
+                'control': slopes_control,
+                'std_err_case': std_errs_case,
+                'std_err_control': std_errs_control
+            }).dropna()
+
+            t_slopes = (t_df['case'] - t_df['control']) / np.sqrt(t_df['std_err_case']**2 + t_df['std_err_control']**2)
+            t_slopes = t_slopes.dropna() # might have residual nan due to std_err being 0
+
+            ## compute correlation between LR and absolute value of slopes t-statistic
+            LR.name = 'LR'
+            t_slopes.name = 't_slopes'
+            LR_t_df = pd.merge(left=LR, right=t_slopes.abs(), left_index=True, right_index=True, how='inner')
+            LR_t_corr = LR_t_df.corr(method='spearman')['LR']['t_slopes']
+            print(f'Correlation between LR and absolute value of slopes t-statistic: {LR_t_corr:.2f}')
+
         elif score_type == 'ismb_cosine':
 
             cosine_case = genes_by_peaks_corrs_dict[sex][celltype]['Case']
@@ -2053,7 +2087,8 @@ from scipy.optimize import minimize
 lr = np.array(LR)
 
 # 2) Compute subset of empirical quantiles:
-max_null_quantile = 0.5
+max_null_quantile = 0.8
+
 probs = np.linspace(0.05, max_null_quantile, 10)
 emp_q = np.quantile(lr, probs)
 
@@ -2084,7 +2119,7 @@ plt.figure(figsize=(10, 6))
 plt.hist(lr, bins=250, density=True, alpha=0.6, label='Empirical LR distribution')
 
 # Generate points for fitted gamma distribution
-x = np.linspace(min(lr), max(lr), 1000)
+x = np.linspace(0, max(lr), 1000)
 fitted_pdf = gamma.pdf(x, a=res.x[0], scale=res.x[1])
 plt.plot(x, fitted_pdf, 'r-', linewidth=2, label='Fitted gamma distribution')
 
@@ -2094,7 +2129,7 @@ plt.axvline(emp_q[-1], color='black', linestyle='--', label=f'Last null quantile
 # Add veritcal line at threshold
 p_threshold = 0.05
 lr_at_p = gamma.ppf(1-p_threshold, a=res.x[0], scale=res.x[1])
-plt.axvline(lr_at_p, color='black', linestyle='--', label=f'Threshold (p={p_threshold:.2f}) @ LR={lr_at_p:.2f}')
+plt.axvline(lr_at_p, color='green', linestyle='--', label=f'Threshold (p={p_threshold:.2f}) @ LR={lr_at_p:.2f}')
 
 plt.xlabel('LR statistic')
 plt.ylabel('Density')
@@ -2109,13 +2144,16 @@ where_filtered = lr_fitted_cdf > (1-p_threshold)
 
 lr_filtered = lr[where_filtered]
 genes_names_filtered = genes_names[where_filtered]
+t_slopes_filtered = t_slopes[genes_names_filtered]
 
 
 #%% GSEApy
 
 import gseapy as gp
 
-ranked_list = pd.DataFrame({'gene': genes_names.to_list(), 'score': LR})
+rank = t_slopes.copy()
+
+ranked_list = pd.DataFrame({'gene': rank.index.to_list(), 'score': rank.values})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
 
 pre_res = gp.prerank(rnk=ranked_list,
