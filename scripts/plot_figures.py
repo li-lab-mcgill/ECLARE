@@ -1975,6 +1975,13 @@ for sex in unique_sexes:
             LR_t_corr = LR_t_df.corr(method='spearman')['LR']['t_slopes']
             print(f'Correlation between LR and absolute value of slopes t-statistic: {LR_t_corr:.2f}')
 
+            ## separate up and down LR and Z based on sign of t-statistic
+            LR_up = LR[t_slopes > 0]
+            LR_down = LR[t_slopes < 0]
+
+            Z_up = Z[t_slopes > 0]
+            Z_down = Z[t_slopes < 0]
+
         elif score_type == 'ismb_cosine':
 
             cosine_case = genes_by_peaks_corrs_dict[sex][celltype]['Case']
@@ -2142,8 +2149,12 @@ plt.show()
 lr_fitted_cdf = gamma.cdf(lr, a=res.x[0], scale=res.x[1])
 where_filtered = lr_fitted_cdf > (1-p_threshold)
 
-lr_filtered = lr[where_filtered]
-genes_names_filtered = genes_names[where_filtered]
+lr_filtered = LR[where_filtered]
+genes_names_filtered = lr_filtered.index.to_list()
+
+## filter LR_up and LR_down, note that splits gene set in half, could use more leniant threshold to include more genes for up and down, or even create separate null distributions for each
+lr_up_filtered = LR_up[LR_up.index.isin(genes_names_filtered)]
+lr_down_filtered = LR_down[LR_down.index.isin(genes_names_filtered)]
 t_slopes_filtered = t_slopes[genes_names_filtered]
 
 
@@ -2151,7 +2162,7 @@ t_slopes_filtered = t_slopes[genes_names_filtered]
 
 import gseapy as gp
 
-rank = t_slopes.copy()
+rank = Z_down.copy()
 
 ranked_list = pd.DataFrame({'gene': rank.index.to_list(), 'score': rank.values})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
@@ -2196,7 +2207,9 @@ ax = dotplot(pre_res.res2d,
 #%% EnrichR
 from IPython.display import display
 
-enr = gp.enrichr(genes_names_filtered.to_list(),
+lr_filtered_type = lr_down_filtered.copy()
+
+enr = gp.enrichr(lr_filtered_type.index.to_list(),
                     gene_sets='Reactome_2022',
                     outdir=None)
 
