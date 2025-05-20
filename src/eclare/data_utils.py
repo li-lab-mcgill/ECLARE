@@ -528,6 +528,13 @@ def get_unified_grns(grn_path, mdd_rna, mdd_atac):
     genes_indices = is_target_gene | is_tf
     mdd_rna = mdd_rna[:, genes_indices]
 
+    ## add unified GRN diffusion scores
+    diffusion_scores_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'Unified_GRN_diffusion.txt')
+    diffusion_scores = pd.read_csv(diffusion_scores_path, delimiter='\t')
+    unified_diffusions_scores = diffusion_scores[['TF','TG','Unified Score']] # also have cell-type specific scores
+
+    mean_grn_df = mean_grn_df.merge(unified_diffusions_scores, on=['TF', 'TG'], how='left')
+
     ## create mappers that can be used to track indices of genes and peaks in ATAC and RNA data
     data_gene_idx_mapper = dict(zip(mdd_rna.var['features'], np.arange(len(mdd_rna.var['features']))))
     data_peak_idx_mapper = dict(zip(mdd_atac.var['GRN_peak_interval'], np.arange(len(mdd_atac.var['GRN_peak_interval']))))
@@ -537,7 +544,7 @@ def get_unified_grns(grn_path, mdd_rna, mdd_atac):
     mean_grn_df['TG_idx_in_data'] = mean_grn_df['TG'].map(data_gene_idx_mapper)
     mean_grn_df['enhancer_idx_in_data'] = mean_grn_df['enhancer'].map(data_peak_idx_mapper)
     mean_grn_df.loc[:, 'enhancer_idx_in_data'] = mean_grn_df['enhancer_idx_in_data'].astype(int).values
-
+    
     return mean_grn_df, mdd_rna, mdd_atac
 
 def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs):
@@ -550,15 +557,18 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
 
     mean_grn_df_grouped = mean_grn_df.groupby('TG')
 
-    def _scompreg_loglikelihood(gene):
+    def _scompreg_loglikelihood(gene, tfrp_aggregation='factorized'):
 
         #mean_grn_df_gene = mean_grn_df[mean_grn_df['TG'] == gene].set_index('TG')
         mean_grn_df_gene = mean_grn_df_grouped.get_group(gene)
         mean_grn_df_gene = mean_grn_df_gene[mean_grn_df_gene['TF'].isin(overlapping_tfs)]
         n_linked_peaks = mean_grn_df_gene['enhancer'].nunique()
 
-        ## term that encapsulates effects of both TF-peak (B) and peak-gene (I) interactions as per sc-compReg
-        BI = mean_grn_df_gene['edgeWeight'].values[None, :]
+        ## terms that encapsulate effects of both TF-peak (B) and peak-gene (I) interactions as per sc-compReg
+        BI_diffusions = mean_grn_df_gene['Unified Score'] / mean_grn_df_gene['Unified Score'].sum() # global, for weighing TFRPs across TFs
+        BI_enhancers = mean_grn_df_gene['edgeWeight']                                               # enhancer-specific
+        BI_sign = np.sign(mean_grn_df_gene['Correlation'])                                          # sign of correlation between TF and TG
+        BI = BI_enhancers * BI_diffusions * BI_sign
 
         ## sample peak accessibilities
         peak_idxs = mean_grn_df_gene['enhancer_idx_in_data'].astype(int).values
@@ -578,30 +588,73 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
         peak_tg_correlations = peak_tg_correlations[None, :]
 
         ## compute tfrp - note that peak_expressions are sparse, leading to sparse tfrp
-        tfrp = tf_expressions * peak_expressions * BI #* peak_tg_correlations * abc_scores
-        tfrp = tfrp.sum(axis=1) # sum across TFs (not what is done in sc-compReg)
 
-        ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
-        try:
-            linregress_res = linregress(tg_expression, tfrp) # if unpack directly, returns only 5 of the 6 outputs..
-            slope, intercept, r_value, p_value, std_err, intercept_stderr = (linregress_res.slope, linregress_res.intercept, linregress_res.rvalue, linregress_res.pvalue, linregress_res.stderr, linregress_res.intercept_stderr)
-            tfrp_predictions = slope * tg_expression + intercept
-        except:
-            print(f'{gene} has no variance in tg_expression')
-            tfrp_predictions = np.ones_like(tg_expression) * np.nan
-            log_gaussian_likelihood = np.array([np.nan])
-            slope = np.nan
-            intercept = np.nan
-            std_err = np.nan
-            intercept_stderr = np.nan
-        else:
-            ## compute residuals and variance
-            n = len(tfrp)
-            sq_residuals = (tfrp - tfrp_predictions)**2
-            var = sq_residuals.sum() / n
-            log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
-        finally:
-            return log_gaussian_likelihood, tg_expression, tfrp, tfrp_predictions, slope, intercept, std_err, intercept_stderr
+        if tfrp_aggregation == 'sum':
+
+            BI = BI_enhancers * BI_diffusions * BI_sign
+            tfrp = tf_expressions * peak_expressions * BI #* peak_tg_correlations * abc_scores
+            tfrp = tfrp.sum(axis=1)
+
+            try:
+                ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
+                linregress_res = linregress(tg_expression, tfrp) # if unpack directly, returns only 5 of the 6 outputs..
+            except:
+                print(f'{gene} has no variance in tg_expression')
+                tfrp_predictions = np.ones_like(tg_expression) * np.nan
+                log_gaussian_likelihood = np.array([np.nan])
+                slope = np.nan
+                intercept = np.nan
+                std_err = np.nan
+                intercept_stderr = np.nan
+            else:
+                slope, intercept, r_value, p_value, std_err, intercept_stderr = (linregress_res.slope, linregress_res.intercept, linregress_res.rvalue, linregress_res.pvalue, linregress_res.stderr, linregress_res.intercept_stderr)
+                tfrp_predictions = slope * tg_expression + intercept
+
+                ## compute residuals and variance
+                n = len(tfrp)
+                sq_residuals = (tfrp - tfrp_predictions)**2
+                var = sq_residuals.sum() / n
+                log_gaussian_likelihood_ = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
+
+        elif tfrp_aggregation == 'factorized':
+
+            BI = BI_enhancers
+            tfrp = tf_expressions * peak_expressions * BI
+
+            log_gaussian_likelihood = 0
+
+            for tfrp_idx in range(tfrp.shape[1]):
+                tfrp_ = tfrp[:, tfrp_idx]
+                try:
+                    ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
+                    linregress_res = linregress(tg_expression, tfrp_) # if unpack directly, returns only 5 of the 6 outputs..
+                except:
+                    print(f'{gene} has no variance in tg_expression')
+                    tfrp_predictions = np.ones_like(tg_expression) * np.nan
+                    log_gaussian_likelihood = np.array([np.nan])
+                    slope = np.nan
+                    intercept = np.nan
+                    std_err = np.nan
+                    intercept_stderr = np.nan
+                else:
+                    slope, intercept, r_value, p_value, std_err, intercept_stderr = (linregress_res.slope, linregress_res.intercept, linregress_res.rvalue, linregress_res.pvalue, linregress_res.stderr, linregress_res.intercept_stderr)
+                    tfrp_predictions = slope * tg_expression + intercept
+
+                    ## compute residuals and variance
+                    n = len(tfrp)
+                    sq_residuals = (tfrp - tfrp_predictions)**2
+                    var = sq_residuals.sum() / n
+                    log_gaussian_likelihood_ = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
+                    log_gaussian_likelihood += log_gaussian_likelihood_
+
+        elif tfrp_aggregation == 'kendall':
+            for tfrp_idx in range(tfrp.shape[1]):
+                tfrp_ = tfrp[:, tfrp_idx]
+                kendall_tau, kendall_p = kendalltau(tg_expression, tfrp_)
+                log_gaussian_likelihood += kendall_tau
+
+
+        return log_gaussian_likelihood, tg_expression, tfrp, tfrp_predictions, slope, intercept, std_err, intercept_stderr
 
     log_gaussian_likelihoods    = {}
     slopes                      = {}
@@ -613,6 +666,7 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
     tfrp_predictions            = pd.DataFrame(columns=overlapping_target_genes)
 
     for gene in tqdm(overlapping_target_genes):
+
         log_gaussian_likelihood, tg_expression, tfrp, tfrp_prediction, slope, intercept, std_err, intercept_stderr = _scompreg_loglikelihood(gene)
 
         log_gaussian_likelihood = log_gaussian_likelihood.item()
