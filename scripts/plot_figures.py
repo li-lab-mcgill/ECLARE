@@ -1379,6 +1379,7 @@ from umap import UMAP
 from torchmetrics.functional import kendall_rank_corrcoef
 from tqdm import tqdm
 from scipy.stats import norm, linregress
+import gseapy as gp
 
 from eclare.setup_utils import get_genes_by_peaks
 from eclare.data_utils import get_unified_grns, get_scompreg_loglikelihood
@@ -1401,9 +1402,7 @@ tfrp_predictions_dict = tree()
 ## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
 cutoff = 5025 # better a multiple of 75 due to formation of SEACells
 
-## sex='Female'; celltype='Mic'
-sex='Female'; celltype='Mic'
-## sex='Female'; celltype=''
+sex='Female'; celltype='ExN'
 
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
@@ -1914,9 +1913,8 @@ for sex in unique_sexes:
             tfrp_predictions_all = pd.concat([ tfrp_predictions_dict[sex][celltype]['Case'], tfrp_predictions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
 
             ## compute correlation between tfrp predictions and tfrps - could potential use to filter genes
-            t = tfrps_all.shape[1]
-            tfrp_corrs = np.corrcoef(tfrp_predictions_all.values.astype(float), tfrps_all.values.astype(float), rowvar=False)
-            tfrp_corrs = np.diag(tfrp_corrs[:t, t:])
+            tfrp_corrs = tfrp_predictions_all.corrwith(tfrps_all, method='kendall')
+            tfrp_corrs = tfrp_corrs.dropna()
 
             diffs_all = []
             scompreg_loglikelihoods_all = {}
@@ -2180,9 +2178,7 @@ t_slopes_filtered = t_slopes[genes_names_filtered]
 
 #%% GSEApy
 
-import gseapy as gp
-
-rank = t_slopes.copy()
+rank = LR.copy()
 
 ranked_list = pd.DataFrame({'gene': rank.index.to_list(), 'score': rank.values})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
@@ -2227,10 +2223,10 @@ ax = dotplot(pre_res.res2d,
 #%% EnrichR
 from IPython.display import display
 
-lr_filtered_type = lr_down_filtered.copy()
+lr_filtered_type = lr_filtered.copy()
 
 enr = gp.enrichr(lr_filtered_type.index.to_list(),
-                    gene_sets='GO_Biological_Process_2025',
+                    gene_sets='DisGeNET',
                     outdir=None)
 
 display(enr.res2d.head(10)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
