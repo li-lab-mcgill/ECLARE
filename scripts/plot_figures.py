@@ -1301,8 +1301,8 @@ atac_fullpath = os.path.join(atac_datapath, ATAC_file)
 atac = anndata.read_h5ad(atac_fullpath, backed='r')
 rna  = anndata.read_h5ad(rna_fullpath, backed='r')
 
-mdd_atac = atac[::1].to_memory()
-mdd_rna = rna[::1].to_memory()
+mdd_atac = atac[::10].to_memory()
+mdd_rna = rna[::10].to_memory()
 
 mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
 
@@ -1334,6 +1334,84 @@ subjects_by_condition_n_sex_df = pd.DataFrame({
 overlapping_subjects = np.intersect1d(mdd_rna.obs[rna_subjects_key], mdd_atac.obs[atac_subjects_key])
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df[subjects_by_condition_n_sex_df['subject'].isin(overlapping_subjects)]
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condition', 'sex'])['subject'].unique()
+
+#%% scglue preprocessing
+
+import scglue
+import networkx as nx
+from arboreto.algo import grnboost2
+
+## get gene annotation and position
+scglue.data.get_gene_annotation(
+    mdd_rna, gtf="~/Downloads/gencode.v48.annotation.gtf.gz",
+    gtf_by="gene_name"
+)
+mdd_rna.var.loc[:, ["chrom", "chromStart", "chromEnd"]].head()
+mdd_rna = mdd_rna[:, mdd_rna.var['chrom'].notna()]
+
+## get peak position
+split = mdd_atac.var_names.str.split(r"[:-]")
+mdd_atac.var["chrom"] = split.map(lambda x: x[0])
+mdd_atac.var["chromStart"] = split.map(lambda x: x[1]).astype(int)
+mdd_atac.var["chromEnd"] = split.map(lambda x: x[2]).astype(int)
+mdd_atac.var.loc[:, ["chrom", "chromStart", "chromEnd"]].head()
+
+genes = scglue.genomics.Bed(mdd_rna.var.assign(name=mdd_rna.var_names))
+peaks = scglue.genomics.Bed(mdd_atac.var.assign(name=mdd_atac.var_names))
+tss = genes.strand_specific_start_site()
+promoters = tss.expand(2000, 0)
+
+## distance graph
+window_size = 1e6
+dist_graph = scglue.genomics.window_graph(
+    promoters, peaks, window_size,
+    attr_fn=lambda l, r, d: {
+        "dist": abs(d),
+        "weight": scglue.genomics.dist_power_decay(abs(d)),
+        "type": "dist"
+    }
+)
+dist_graph = nx.DiGraph(dist_graph)
+dist_graph.number_of_edges()
+
+## get guidance graph
+#guidance = scglue.genomics.rna_anchored_guidance_graph(mdd_rna, mdd_atac)
+#scglue.graph.check_graph(guidance, [mdd_rna, mdd_atac])
+
+def graph_to_df(G):
+    """
+    Convert a NetworkX DiGraph G into a pandas DataFrame
+    with columns: source, target, weight, type (and any other attrs).
+    """
+    rows = []
+    for u, v, attrs in G.edges(data=True):
+        row = {
+            "source": u,
+            "target": v,
+            **attrs
+        }
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+# e.g. for the overlap graph
+df_dist = graph_to_df(dist_graph)
+print(df_dist.head())
+
+motif_bed = scglue.genomics.read_bed("~/Downloads/JASPAR2022-hg38.bed.gz")
+motif_bed.head()
+
+tfs = pd.Index(motif_bed["name"]).intersection(rna.var_names)
+tfs.size
+
+genes = rna.var.query("highly_variable").index
+mdd_rna[:, mdd_rna.var_names.isin(np.union1d(genes, tfs))].write_loom(os.path.join(os.environ['OUTPATH'], 'mdd_rna.loom'))
+np.savetxt(os.path.join(os.environ['OUTPATH'], 'tfs.txt'), tfs, fmt="%s")
+
+!pyscenic grn {os.path.join(os.environ['OUTPATH'], 'mdd_rna.loom')} {os.path.join(os.environ['OUTPATH'], 'tfs.txt')} \
+    -o {os.path.join(os.environ['OUTPATH'], 'draft_grn.csv')} --seed 0 --num_workers 20 \
+    --cell_id_attribute cells --gene_attribute genes
+
+adjacencies = grnboost2(mdd_rna, tf_names=tfs, verbose=True)
 
 #%% project MDD nuclei into latent space
 
