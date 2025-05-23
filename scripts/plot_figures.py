@@ -1301,6 +1301,8 @@ atac_fullpath = os.path.join(atac_datapath, ATAC_file)
 atac = anndata.read_h5ad(atac_fullpath, backed='r')
 rna  = anndata.read_h5ad(rna_fullpath, backed='r')
 
+rna_full = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna.h5ad'), backed='r')
+
 mdd_atac = atac[::10].to_memory()
 mdd_rna = rna[::10].to_memory()
 
@@ -1319,31 +1321,60 @@ atac_subject_key='BrainID'
 rna_sex_key = 'Sex'
 atac_sex_key = 'sex'
 
-rna_subjects_key = 'OriginalSub'
-atac_subjects_key = 'BrainID'
-
 unique_celltypes = np.unique(np.concatenate([mdd_rna.obs[rna_celltype_key], mdd_atac.obs[atac_celltype_key]]))
 unique_conditions = np.unique(np.concatenate([mdd_rna.obs[rna_condition_key], mdd_atac.obs[atac_condition_key]]))
 unique_sexes = np.unique(np.concatenate([mdd_rna.obs[rna_sex_key].str.lower(), mdd_atac.obs[atac_sex_key].str.lower()]))
 
 subjects_by_condition_n_sex_df = pd.DataFrame({
-    'subject': np.concatenate([mdd_rna.obs[rna_subjects_key], mdd_atac.obs[atac_subjects_key]]),
+    'subject': np.concatenate([mdd_rna.obs[rna_subject_key], mdd_atac.obs[atac_subject_key]]),
     'condition': np.concatenate([mdd_rna.obs[rna_condition_key], mdd_atac.obs[atac_condition_key]]),
     'sex': np.concatenate([mdd_rna.obs[rna_sex_key].str.lower(), mdd_atac.obs[atac_sex_key].str.lower()])
 })
-overlapping_subjects = np.intersect1d(mdd_rna.obs[rna_subjects_key], mdd_atac.obs[atac_subjects_key])
+overlapping_subjects = np.intersect1d(mdd_rna.obs[rna_subject_key], mdd_atac.obs[atac_subject_key])
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df[subjects_by_condition_n_sex_df['subject'].isin(overlapping_subjects)]
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condition', 'sex'])['subject'].unique()
+
+## prepend subject label with 'case_' or 'control_'
+mdd_rna.obs[rna_subject_key] = mdd_rna.obs[rna_subject_key].astype(str)
+mdd_rna.obs[rna_subject_key][mdd_rna.obs[rna_condition_key] == 'Case'] = mdd_rna.obs[rna_subject_key][mdd_rna.obs[rna_condition_key] == 'Case'].apply(lambda x: f'case_{x}')
+mdd_rna.obs[rna_subject_key][mdd_rna.obs[rna_condition_key] == 'Control'] = mdd_rna.obs[rna_subject_key][mdd_rna.obs[rna_condition_key] == 'Control'].apply(lambda x: f'control_{x}')
+
+mdd_atac.obs[atac_subject_key] = mdd_atac.obs[atac_subject_key].astype(str)
+mdd_atac.obs[atac_subject_key][mdd_atac.obs[atac_condition_key] == 'Case'] = mdd_atac.obs[atac_subject_key][mdd_atac.obs[atac_condition_key] == 'Case'].apply(lambda x: f'case_{x}')
+mdd_atac.obs[atac_subject_key][mdd_atac.obs[atac_condition_key] == 'Control'] = mdd_atac.obs[atac_subject_key][mdd_atac.obs[atac_condition_key] == 'Control'].apply(lambda x: f'control_{x}')
+
+
+#%% differential expression analysis
+
+## shows that unique Batch and Chemistry per Sample
+confound_vars = ["Batch", "Sample", "Chemistry", "percent.mt", "nCount_RNA"]
+display(mdd_rna.obs.groupby('Sample')[confound_vars].nunique())
+
+confound_vars = ["Sample", "percent.mt", "nCount_RNA"]
+sc.pp.regress_out(mdd_rna, confound_vars)
+
+## t-test
+deg_method = 't-test'
+sc.tl.rank_genes_groups(mdd_rna, rna_condition_key, reference='Control', method=deg_method, key_added=deg_method, pts=True)
+sc.pl.rank_genes_groups(mdd_rna, n_genes=25, sharey=False, key = deg_method)
+sc.pl.rank_genes_groups_violin(mdd_rna, n_genes=10, key=deg_method)
+
+structured_array = mdd_rna.uns['t-test']['pvals_adj']
+regular_array = np.column_stack((structured_array['Case']))
+
+## dotplot
+genes = sc.get.rank_genes_groups_df(mdd_rna, group='Case', key='t-test')['names'][:20]
+sc.pl.dotplot(mdd_rna, genes, groupby=rna_subject_key)
+
 
 #%% scglue preprocessing
 
 import scglue
 import networkx as nx
-from arboreto.algo import grnboost2
 
 ## get gene annotation and position
 scglue.data.get_gene_annotation(
-    mdd_rna, gtf="~/Downloads/gencode.v48.annotation.gtf.gz",
+    mdd_rna, gtf=os.path.join(os.environ['DATAPATH'], 'gencode.v48.annotation.gtf.gz'),
     gtf_by="gene_name"
 )
 mdd_rna.var.loc[:, ["chrom", "chromStart", "chromEnd"]].head()
@@ -1356,6 +1387,7 @@ mdd_atac.var["chromStart"] = split.map(lambda x: x[1]).astype(int)
 mdd_atac.var["chromEnd"] = split.map(lambda x: x[2]).astype(int)
 mdd_atac.var.loc[:, ["chrom", "chromStart", "chromEnd"]].head()
 
+## extract gene and peak positions
 genes = scglue.genomics.Bed(mdd_rna.var.assign(name=mdd_rna.var_names))
 peaks = scglue.genomics.Bed(mdd_atac.var.assign(name=mdd_atac.var_names))
 tss = genes.strand_specific_start_site()
@@ -1397,21 +1429,31 @@ def graph_to_df(G):
 df_dist = graph_to_df(dist_graph)
 print(df_dist.head())
 
-motif_bed = scglue.genomics.read_bed("~/Downloads/JASPAR2022-hg38.bed.gz")
+## get JASPAR2022 TFs
+motif_bed = scglue.genomics.read_bed(os.path.join(os.environ['DATAPATH'], 'JASPAR2022-hg38.bed.gz'))
 motif_bed.head()
 
+## get TFs
 tfs = pd.Index(motif_bed["name"]).intersection(rna.var_names)
 tfs.size
 
+## extract highly variable genes
 genes = rna.var.query("highly_variable").index
 mdd_rna[:, mdd_rna.var_names.isin(np.union1d(genes, tfs))].write_loom(os.path.join(os.environ['OUTPATH'], 'mdd_rna.loom'))
 np.savetxt(os.path.join(os.environ['OUTPATH'], 'tfs.txt'), tfs, fmt="%s")
 
-!pyscenic grn {os.path.join(os.environ['OUTPATH'], 'mdd_rna.loom')} {os.path.join(os.environ['OUTPATH'], 'tfs.txt')} \
-    -o {os.path.join(os.environ['OUTPATH'], 'draft_grn.csv')} --seed 0 --num_workers 20 \
-    --cell_id_attribute cells --gene_attribute genes
+## get peak-TF graph
+peak_bed = scglue.genomics.Bed(atac.var.loc[peaks])
+peak2tf = scglue.genomics.window_graph(peak_bed, motif_bed, 0, right_sorted=True)
+peak2tf = peak2tf.edge_subgraph(e for e in peak2tf.edges if e[1] in tfs)
 
-adjacencies = grnboost2(mdd_rna, tf_names=tfs, verbose=True)
+## get gene-TF graph
+gene2tf_rank_glue = scglue.genomics.cis_regulatory_ranking(
+    gene2peak, peak2tf, genes, peaks, tfs,
+    region_lens=atac.var.loc[peaks, "chromEnd"] - atac.var.loc[peaks, "chromStart"],
+    random_state=0
+)
+gene2tf_rank_glue.iloc[:5, :5]
 
 #%% project MDD nuclei into latent space
 
@@ -1485,6 +1527,11 @@ sex='Female'; celltype='ExN'
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
 #maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
+
+deg_dict = maitra_female_degs_df.groupby('cluster_id.female')['gene'].unique().to_dict()
+deg_overlap_df = sc.tl.marker_gene_overlap(mdd_rna, deg_dict, key=deg_method, adj_pval_threshold=0.05).astype(int)
+deg_overlap_df = pd.concat([deg_overlap_df, deg_overlap_df.sum(axis=0).to_frame().T.rename(index={0: 'TOTAL'})], axis=0)
+display(deg_overlap_df)
 
 do_corrs_or_cosines = 'correlations'
 
