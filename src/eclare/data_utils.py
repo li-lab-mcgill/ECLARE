@@ -462,7 +462,7 @@ def get_gene_peak_links(cre_gene_links_3d, cre_gene_links_crispr, cre_gene_links
     cre_gene_links_crispr[(cre_gene_links_crispr[0]=="EH38E2911701") & (cre_gene_links_crispr[1]=="ENSG00000108179")]
 
 
-def get_unified_grns(grn_path, mdd_rna, mdd_atac):
+def get_unified_grns(grn_path, mdd_rna, mdd_atac, df_dist=None, deg_genes=None):
 
     grn_files = glob(os.path.join(grn_path,'*GRN.txt'))
 
@@ -519,6 +519,8 @@ def get_unified_grns(grn_path, mdd_rna, mdd_atac):
     ## get genes from GRNs
     genes = mdd_rna.var_names
     is_target_gene = genes.isin(mean_grn_df['TG'])
+    if deg_genes is not None:
+        is_target_gene = is_target_gene & genes.isin(deg_genes)
     is_tf = genes.isin(mean_grn_df['TF'])
     is_both = is_target_gene & is_tf
 
@@ -544,6 +546,10 @@ def get_unified_grns(grn_path, mdd_rna, mdd_atac):
     mean_grn_df['TG_idx_in_data'] = mean_grn_df['TG'].map(data_gene_idx_mapper)
     mean_grn_df['enhancer_idx_in_data'] = mean_grn_df['enhancer'].map(data_peak_idx_mapper)
     mean_grn_df.loc[:, 'enhancer_idx_in_data'] = mean_grn_df['enhancer_idx_in_data'].astype(int).values
+
+    ## add distance scores
+    if df_dist is not None:
+        mean_grn_df = mean_grn_df.merge(df_dist, left_on=['enhancer', 'TG'], right_on=['target', 'source'], how='left')
     
     return mean_grn_df, mdd_rna, mdd_atac
 
