@@ -1325,14 +1325,6 @@ unique_celltypes = np.unique(np.concatenate([mdd_rna.obs[rna_celltype_key], mdd_
 unique_conditions = np.unique(np.concatenate([mdd_rna.obs[rna_condition_key], mdd_atac.obs[atac_condition_key]]))
 unique_sexes = np.unique(np.concatenate([mdd_rna.obs[rna_sex_key].str.lower(), mdd_atac.obs[atac_sex_key].str.lower()]))
 
-subjects_by_condition_n_sex_df = pd.DataFrame({
-    'subject': np.concatenate([mdd_rna.obs[rna_subject_key], mdd_atac.obs[atac_subject_key]]),
-    'condition': np.concatenate([mdd_rna.obs[rna_condition_key], mdd_atac.obs[atac_condition_key]]),
-    'sex': np.concatenate([mdd_rna.obs[rna_sex_key].str.lower(), mdd_atac.obs[atac_sex_key].str.lower()])
-})
-overlapping_subjects = np.intersect1d(mdd_rna.obs[rna_subject_key], mdd_atac.obs[atac_subject_key])
-subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df[subjects_by_condition_n_sex_df['subject'].isin(overlapping_subjects)]
-subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condition', 'sex'])['subject'].unique()
 
 ## prepend subject label with 'case_' or 'control_'
 mdd_rna.obs[rna_subject_key] = mdd_rna.obs[rna_subject_key].astype(str)
@@ -1343,6 +1335,14 @@ mdd_atac.obs[atac_subject_key] = mdd_atac.obs[atac_subject_key].astype(str)
 mdd_atac.obs[atac_subject_key][mdd_atac.obs[atac_condition_key] == 'Case'] = mdd_atac.obs[atac_subject_key][mdd_atac.obs[atac_condition_key] == 'Case'].apply(lambda x: f'case_{x}')
 mdd_atac.obs[atac_subject_key][mdd_atac.obs[atac_condition_key] == 'Control'] = mdd_atac.obs[atac_subject_key][mdd_atac.obs[atac_condition_key] == 'Control'].apply(lambda x: f'control_{x}')
 
+subjects_by_condition_n_sex_df = pd.DataFrame({
+    'subject': np.concatenate([mdd_rna.obs[rna_subject_key], mdd_atac.obs[atac_subject_key]]),
+    'condition': np.concatenate([mdd_rna.obs[rna_condition_key], mdd_atac.obs[atac_condition_key]]),
+    'sex': np.concatenate([mdd_rna.obs[rna_sex_key].str.lower(), mdd_atac.obs[atac_sex_key].str.lower()])
+})
+overlapping_subjects = np.intersect1d(mdd_rna.obs[rna_subject_key], mdd_atac.obs[atac_subject_key])
+subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df[subjects_by_condition_n_sex_df['subject'].isin(overlapping_subjects)]
+subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condition', 'sex'])['subject'].unique()
 
 #%% differential expression analysis
 
@@ -1350,21 +1350,25 @@ mdd_atac.obs[atac_subject_key][mdd_atac.obs[atac_condition_key] == 'Control'] = 
 confound_vars = ["Batch", "Sample", "Chemistry", "percent.mt", "nCount_RNA"]
 display(mdd_rna.obs.groupby('Sample')[confound_vars].nunique())
 
-confound_vars = ["Sample", "percent.mt", "nCount_RNA"]
-sc.pp.regress_out(mdd_rna, confound_vars)
+#confound_vars = ["percent.mt", "nCount_RNA"]
+#sc.pp.regress_out(mdd_rna, confound_vars) # takes about 1 hour to run
 
-## t-test
-deg_method = 't-test'
-sc.tl.rank_genes_groups(mdd_rna, rna_condition_key, reference='Control', method=deg_method, key_added=deg_method, pts=True)
-sc.pl.rank_genes_groups(mdd_rna, n_genes=25, sharey=False, key = deg_method)
-sc.pl.rank_genes_groups_violin(mdd_rna, n_genes=10, key=deg_method)
+## DEG analysis (female only)
+deg_method = 'wilcoxon'
 
-structured_array = mdd_rna.uns['t-test']['pvals_adj']
-regular_array = np.column_stack((structured_array['Case']))
+mdd_rna_female = mdd_rna[mdd_rna.obs[rna_sex_key] == 'Female']
 
-## dotplot
-genes = sc.get.rank_genes_groups_df(mdd_rna, group='Case', key='t-test')['names'][:20]
-sc.pl.dotplot(mdd_rna, genes, groupby=rna_subject_key)
+sc.tl.rank_genes_groups(mdd_rna_female, rna_condition_key, reference='Control', method=deg_method, key_added=deg_method, pts=True)
+sc.pl.rank_genes_groups(mdd_rna_female, n_genes=25, sharey=False, key = deg_method)
+sc.pl.rank_genes_groups_violin(mdd_rna_female, n_genes=10, key=deg_method)
+
+## get DEG genes
+deg_df = sc.get.rank_genes_groups_df(mdd_rna_female, group='Case', key=deg_method)
+genes = deg_df['names'][:20]
+
+## dotplot per subject
+sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_subject_key)
+sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_condition_key)
 
 
 #%% scglue preprocessing
@@ -1378,7 +1382,7 @@ scglue.data.get_gene_annotation(
     gtf_by="gene_name"
 )
 mdd_rna.var.loc[:, ["chrom", "chromStart", "chromEnd"]].head()
-mdd_rna = mdd_rna[:, mdd_rna.var['chrom'].notna()]
+#mdd_rna_chrom = mdd_rna[:, mdd_rna.var['chrom'].notna()] # will result in number of genes mismatching with student model
 
 ## get peak position
 split = mdd_atac.var_names.str.split(r"[:-]")
@@ -1388,7 +1392,7 @@ mdd_atac.var["chromEnd"] = split.map(lambda x: x[2]).astype(int)
 mdd_atac.var.loc[:, ["chrom", "chromStart", "chromEnd"]].head()
 
 ## extract gene and peak positions
-genes = scglue.genomics.Bed(mdd_rna.var.assign(name=mdd_rna.var_names))
+genes = scglue.genomics.Bed(mdd_rna[:, mdd_rna.var['chrom'].notna()].var.assign(name=mdd_rna[:, mdd_rna.var['chrom'].notna()].var_names))
 peaks = scglue.genomics.Bed(mdd_atac.var.assign(name=mdd_atac.var_names))
 tss = genes.strand_specific_start_site()
 promoters = tss.expand(2000, 0)
@@ -1443,8 +1447,8 @@ mdd_rna[:, mdd_rna.var_names.isin(np.union1d(genes, tfs))].write_loom(os.path.jo
 np.savetxt(os.path.join(os.environ['OUTPATH'], 'tfs.txt'), tfs, fmt="%s")
 
 ## get peak-TF graph
-peak_bed = scglue.genomics.Bed(atac.var.loc[peaks])
-peak2tf = scglue.genomics.window_graph(peak_bed, motif_bed, 0, right_sorted=True)
+#peak_bed = scglue.genomics.Bed(atac.var.loc[peaks])
+peak2tf = scglue.genomics.window_graph(peaks, motif_bed, 0, right_sorted=True)
 peak2tf = peak2tf.edge_subgraph(e for e in peak2tf.edges if e[1] in tfs)
 
 ## get gene-TF graph
@@ -1522,14 +1526,14 @@ tfrp_predictions_dict = tree()
 ## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
 cutoff = 5025 # better a multiple of 75 due to formation of SEACells
 
-sex='Female'; celltype='ExN'
+sex='Female'; celltype=''
 
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
 #maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
 
 deg_dict = maitra_female_degs_df.groupby('cluster_id.female')['gene'].unique().to_dict()
-deg_overlap_df = sc.tl.marker_gene_overlap(mdd_rna, deg_dict, key=deg_method, adj_pval_threshold=0.05).astype(int)
+deg_overlap_df = sc.tl.marker_gene_overlap(mdd_rna_female, deg_dict, key=deg_method, adj_pval_threshold=0.05).astype(int)
 deg_overlap_df = pd.concat([deg_overlap_df, deg_overlap_df.sum(axis=0).to_frame().T.rename(index={0: 'TOTAL'})], axis=0)
 display(deg_overlap_df)
 
@@ -1588,7 +1592,7 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
         
         ## select peaks indices using bedtools intersect
         #peaks_indices_dar = mdd_peaks_bed.intersect(celltype_peaks_bed, c=True).to_dataframe()['name'].astype(bool)
-        #genes_indices_deg = mdd_rna.var_names.isin(celltype_degs_df['gene'])
+        genes_indices_deg = mdd_rna.var_names.isin(celltype_degs_df['gene'])
 
         #peaks_indices = peaks_indices_hvg.values | peaks_indices_dar.values
         #genes_indices = genes_indices_hvg.values | genes_indices_deg
@@ -1613,14 +1617,14 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
                     'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype),
                     'is_condition': mdd_rna.obs[rna_condition_key].str.startswith(condition),
                     'is_sex': mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
-                    'is_subject': mdd_rna.obs[rna_subjects_key] == subject # do not use startswith to avoid multiple subjects
+                    'is_subject': mdd_rna.obs[rna_subject_key] == subject # do not use startswith to avoid multiple subjects
                 }).prod(axis=1).astype(bool).values.nonzero()[0]
 
                 atac_indices = pd.DataFrame({
                     'is_celltype': mdd_atac.obs[atac_celltype_key].str.startswith(celltype),
                     'is_condition': mdd_atac.obs[atac_condition_key].str.startswith(condition),
                     'is_sex': mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower()),
-                    'is_subject': mdd_atac.obs[atac_subjects_key] == subject # do not use startswith to avoid multiple subjects
+                    'is_subject': mdd_atac.obs[atac_subject_key] == subject # do not use startswith to avoid multiple subjects
                 }).prod(axis=1).astype(bool).values.nonzero()[0]
 
                 all_rna_indices.append(pd.DataFrame(np.vstack([rna_indices, [subject]*len(rna_indices), [celltype]*len(rna_indices), [condition]*len(rna_indices), [sex]*len(rna_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
@@ -1693,16 +1697,12 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
             mdd_rna_aligned = anndata.concat(mdd_rna_aligned, axis=0)
             mdd_atac_aligned = anndata.concat(mdd_atac_aligned, axis=0)
 
-            assert (mdd_rna_aligned.obs[rna_subjects_key].values.to_numpy() == mdd_atac_aligned.obs[atac_subjects_key].values.to_numpy()).all()
+            assert np.equal(mdd_rna_aligned.obs[rna_subject_key].values, mdd_atac_aligned.obs[atac_subject_key].values).all()
             assert (mdd_rna_aligned.obs_names.nunique() == mdd_rna_aligned.n_obs) & (mdd_atac_aligned.obs_names.nunique() == mdd_atac_aligned.n_obs)
 
             mdd_rna_aligned.var = mdd_rna.var
             mdd_atac_aligned.var = mdd_atac.var
 
-            
-            ## select genes and peaks before SEACells
-            #mdd_rna_sampled_group = mdd_rna_sampled_group[:,genes_indices]
-            #mdd_atac_sampled_group = mdd_atac_sampled_group[:,peaks_indices]
 
             '''
             ## get genes by peaks mask and save to dict
@@ -1742,7 +1742,8 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
 
             ## get mean GRN from brainSCOPE
             grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
-            mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = get_unified_grns(grn_path, mdd_rna_aligned, mdd_atac_aligned)
+            deg_genes = deg_df[deg_df['pvals'] < 0.05]['names'].to_list()
+            mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = get_unified_grns(grn_path, mdd_rna_aligned, mdd_atac_aligned, deg_genes=deg_genes)
 
             overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
             overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
@@ -1752,7 +1753,7 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
                 print(f'Removing {len(mdd_rna_sampled_group) - cutoff} cells')
 
                 sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
-                _, sampled_indices = next(sss.split(mdd_rna_sampled_group.obs_names, mdd_rna_sampled_group.obs[rna_subjects_key]))
+                _, sampled_indices = next(sss.split(mdd_rna_sampled_group.obs_names, mdd_rna_sampled_group.obs[rna_subject_key]))
 
                 mdd_rna_sampled_group = mdd_rna_sampled_group[sampled_indices]
                 mdd_atac_sampled_group = mdd_atac_sampled_group[sampled_indices]
@@ -2237,7 +2238,7 @@ from scipy.optimize import minimize
 lr = np.array(LR)
 
 # 2) Compute subset of empirical quantiles:
-max_null_quantile = 0.8
+max_null_quantile = 0.5
 
 probs = np.linspace(0.05, max_null_quantile, 10)
 emp_q = np.quantile(lr, probs)
@@ -2266,7 +2267,7 @@ res = minimize(G,
 
 # Plot empirical histogram and fitted gamma distribution
 plt.figure(figsize=(10, 6))
-plt.hist(lr, bins=100, density=True, alpha=0.6, label='Empirical LR distribution')
+plt.hist(lr, bins=None, density=True, alpha=0.6, label='Empirical LR distribution')
 
 # Generate points for fitted gamma distribution
 x = np.linspace(0, max(lr), 1000)
@@ -2322,6 +2323,7 @@ gene sets of interest:
 - DisGeNET
 
 - Reactome_2022
+- KEGG_2021_Human
 
 - ENCODE_and_ChEA_Consensus_TFs_from_ChIP-X
 - ENCODE_TF_ChIP-seq_2014/2015
@@ -2351,7 +2353,7 @@ from IPython.display import display
 lr_filtered_type = lr_filtered.copy()
 
 enr = gp.enrichr(lr_filtered_type.index.to_list(),
-                    gene_sets='DisGeNET',
+                    gene_sets='GO_Biological_Process_2025',
                     outdir=None)
 
 display(enr.res2d.head(10)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
