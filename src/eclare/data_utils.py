@@ -541,7 +541,7 @@ def get_unified_grns(grn_path, mdd_rna, mdd_atac, df_dist=None, deg_genes=None):
     data_gene_idx_mapper = dict(zip(mdd_rna.var['features'], np.arange(len(mdd_rna.var['features']))))
     data_peak_idx_mapper = dict(zip(mdd_atac.var['GRN_peak_interval'], np.arange(len(mdd_atac.var['GRN_peak_interval']))))
 
-    ## apply mappers
+    ## apply mappers to track indices
     mean_grn_df['TF_idx_in_data'] = mean_grn_df['TF'].map(data_gene_idx_mapper)
     mean_grn_df['TG_idx_in_data'] = mean_grn_df['TG'].map(data_gene_idx_mapper)
     mean_grn_df['enhancer_idx_in_data'] = mean_grn_df['enhancer'].map(data_peak_idx_mapper)
@@ -549,6 +549,7 @@ def get_unified_grns(grn_path, mdd_rna, mdd_atac, df_dist=None, deg_genes=None):
 
     ## add distance scores
     if df_dist is not None:
+        df_dist['target'] = df_dist['target'].map(peaks_names_mapper)
         mean_grn_df = mean_grn_df.merge(df_dist, left_on=['enhancer', 'TG'], right_on=['target', 'source'], how='left')
     
     return mean_grn_df, mdd_rna, mdd_atac
