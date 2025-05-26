@@ -34,6 +34,7 @@ from collections import defaultdict
 from string import ascii_uppercase
 import pybedtools
 from types import SimpleNamespace
+from tqdm import tqdm
 
 from mlflow.tracking import MlflowClient
 import mlflow.pytorch
@@ -1344,6 +1345,12 @@ overlapping_subjects = np.intersect1d(mdd_rna.obs[rna_subject_key], mdd_atac.obs
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df[subjects_by_condition_n_sex_df['subject'].isin(overlapping_subjects)]
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condition', 'sex'])['subject'].unique()
 
+#%% Get mean GRN from brainSCOPE
+
+grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
+mean_grn_df = get_unified_grns(grn_path)
+
+
 #%% differential expression analysis
 
 ## shows that unique Batch and Chemistry per Sample
@@ -1375,6 +1382,9 @@ sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_condition_key)
 
 import scglue
 import networkx as nx
+from pyjaspar import jaspardb
+import pyranges as pr
+from Bio.motifs.jaspar import calculate_pseudocounts
 
 ## get gene annotation and position
 scglue.data.get_gene_annotation(
@@ -1429,37 +1439,51 @@ def graph_to_df(G):
         rows.append(row)
     return pd.DataFrame(rows)
 
-# e.g. for the overlap graph
+# e.g. for the distance graph
 df_dist = graph_to_df(dist_graph)
 print(df_dist.head())
 
-'''
-## get JASPAR2022 TFs
-motif_bed = scglue.genomics.read_bed(os.path.join(os.environ['DATAPATH'], 'JASPAR2022-hg38.bed.gz'))
-motif_bed.head()
+## get JASPAR2018 TFs db
+jaspar_db_2020 = jaspardb(release='JASPAR2020')
+jaspar_db_2024 = jaspardb(release='JASPAR2024')
 
-## get TFs
-tfs = pd.Index(motif_bed["name"]).intersection(rna.var_names)
-tfs.size
+tfs = list(mean_grn_df['TF'].unique())
+#motifs = {tf:jaspar_db.fetch_motifs(tf_name=tf, tax_group='vertebrates') for tf in tfs} # ~25 seconds
+#motifs = jaspar_db_2018.fetch_motifs(tf_name=tfs, tax_group='vertebrates')
 
-## extract highly variable genes
-genes = rna.var.query("highly_variable").index
-mdd_rna[:, mdd_rna.var_names.isin(np.union1d(genes, tfs))].write_loom(os.path.join(os.environ['OUTPATH'], 'mdd_rna.loom'))
-np.savetxt(os.path.join(os.environ['OUTPATH'], 'tfs.txt'), tfs, fmt="%s")
+mean_grn_df['motif_score'] = 0
+tf_enhancer_grns = list(mean_grn_df.groupby('TF')['enhancer'].unique().items())
 
-## get peak-TF graph
-#peak_bed = scglue.genomics.Bed(atac.var.loc[peaks])
-peak2tf = scglue.genomics.window_graph(peaks, motif_bed, 0, right_sorted=True)
-peak2tf = peak2tf.edge_subgraph(e for e in peak2tf.edges if e[1] in tfs)
+for tf, enhancers in tqdm(tf_enhancer_grns, total=len(tf_enhancer_grns)):
 
-## get gene-TF graph
-gene2tf_rank_glue = scglue.genomics.cis_regulatory_ranking(
-    gene2peak, peak2tf, genes, peaks, tfs,
-    region_lens=atac.var.loc[peaks, "chromEnd"] - atac.var.loc[peaks, "chromStart"],
-    random_state=0
-)
-gene2tf_rank_glue.iloc[:5, :5]
-'''
+    try:
+        motifs = jaspar_db_2020.fetch_motifs(tf_name=tf, tax_group='vertebrates')
+        motif = motifs[0]
+    except:
+        motifs = jaspar_db_2024.fetch_motifs_by_name(tf)
+        motif = motifs[0]
+
+    motif.pseudocounts = calculate_pseudocounts(motif)  # also have motif.pseudo_counts, not sure what the difference is...
+
+    enhancers_df = pd.DataFrame(enhancers)[0].str.split(':|-', expand=True).rename(columns={0: 'Chromosome', 1: 'Start', 2: 'End'})
+    gr = pr.from_dict(enhancers_df.to_dict()) # can extend with pr.extend(k)
+    seqs = pr.get_sequence(gr, os.path.join(os.environ['DATAPATH'], 'hg38.fa')) # ~53 seconds
+
+    motif_scores = {enhancer: motif.pssm.calculate(seq.upper()).max() for enhancer, seq in zip(enhancers, seqs)} # ~44 seconds
+    mean_grn_df.loc[mean_grn_df['TF'] == tf, 'motif_score'] = mean_grn_df.loc[mean_grn_df['TF'] == tf, 'enhancer'].map(motif_scores)
+
+## normalize motif score by target gene TG
+#motif_score_norm = mean_grn_df.groupby('TG')['motif_score'].apply(lambda x: (x - x.min()) / (x.max() - x.min())) # guaranteed to have one zero-score per TG
+temperature = mean_grn_df['motif_score'].var()
+softmax_temp_func = lambda x, temperature: np.exp(x / temperature)# / np.exp(x / temperature).sum()
+motif_score_norm = mean_grn_df.groupby('TG')['motif_score'].apply(lambda x: softmax_temp_func(x, temperature))
+motif_score_norm = motif_score_norm.fillna(1)  # NaN motif scores because only one motif score for some TGs
+
+motif_score_norm = motif_score_norm.reset_index(level=0, drop=False).rename(columns={'motif_score': 'motif_score_norm'})
+assert (motif_score_norm.index.sort_values() == np.arange(len(motif_score_norm))).all()
+
+mean_grn_df = mean_grn_df.merge(motif_score_norm, left_index=True, right_index=True, how='left', suffixes=('', '_motifs'))
+
 
 #%% project MDD nuclei into latent space
 
@@ -1503,12 +1527,11 @@ _, fig, rna_atac_df_umap = plot_umap_embeddings(eclare_rna_latents, eclare_atac_
 from sklearn.model_selection import StratifiedShuffleSplit
 from umap import UMAP
 from torchmetrics.functional import kendall_rank_corrcoef
-from tqdm import tqdm
 from scipy.stats import norm, linregress
 import gseapy as gp
 
 from eclare.setup_utils import get_genes_by_peaks
-from eclare.data_utils import get_unified_grns, get_scompreg_loglikelihood
+from eclare.data_utils import get_unified_grns, filter_mean_grn, get_scompreg_loglikelihood
 
 def tree(): return defaultdict(tree)
 genes_by_peaks_corrs_dict = tree()
@@ -1745,7 +1768,7 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
             ## get mean GRN from brainSCOPE
             grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
             deg_genes = deg_df[deg_df['pvals'] < 0.05]['names'].to_list()
-            mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = get_unified_grns(grn_path, mdd_rna_aligned, mdd_atac_aligned, df_dist=df_dist)
+            mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned, df_dist=df_dist)
 
             overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
             overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
@@ -2305,6 +2328,8 @@ t_slopes_filtered = t_slopes[genes_names_filtered]
 
 
 #%% GSEApy
+
+brain_gmt = gp.parser.read_gmt(os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_wGO_HumanOrthologs.gmt.txt'))
 
 rank = LR.copy()
 
