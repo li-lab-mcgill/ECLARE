@@ -462,7 +462,7 @@ def get_gene_peak_links(cre_gene_links_3d, cre_gene_links_crispr, cre_gene_links
     cre_gene_links_crispr[(cre_gene_links_crispr[0]=="EH38E2911701") & (cre_gene_links_crispr[1]=="ENSG00000108179")]
 
 
-def get_unified_grns(grn_path, mdd_rna, mdd_atac, df_dist=None, deg_genes=None):
+def get_unified_grns(grn_path):
 
     grn_files = glob(os.path.join(grn_path,'*GRN.txt'))
 
@@ -482,6 +482,9 @@ def get_unified_grns(grn_path, mdd_rna, mdd_atac, df_dist=None, deg_genes=None):
     mean_grn_df = grn_df_clean.groupby(['TF','enhancer','TG'])[['edgeWeight','Correlation']].mean() # take average across all cell types
     mean_grn_df.reset_index(inplace=True)
 
+    return mean_grn_df
+
+def filter_mean_grn(mean_grn_df, mdd_rna, mdd_atac, df_dist=None, deg_genes=None):
 
     ## get peaks from GRNs
     peaks_df = pd.DataFrame(index=mdd_atac.var_names.str.split(':|-', expand=True)).reset_index()
@@ -590,7 +593,7 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
         tg_expression = X_rna[:, tg_idx]
 
         ## compute peak-tg correlations
-        peak_tg_expressions = np.concatenate([peak_expressions, tg_expression[:,None]], axis=1)
+        peak_tg_expressions = np.concatenate([peak_expressions.argsort(0), tg_expression.argsort(0)[:,None]], axis=1)
         peak_tg_correlations = np.corrcoef(peak_tg_expressions.T)[:-1, -1]
         peak_tg_correlations = peak_tg_correlations[None, :]
 
