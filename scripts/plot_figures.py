@@ -1395,15 +1395,14 @@ mdd_rna.var.loc[:, ["chrom", "chromStart", "chromEnd"]].head()
 #mdd_rna_chrom = mdd_rna[:, mdd_rna.var['chrom'].notna()] # will result in number of genes mismatching with student model
 
 ## get peak position
-split = mdd_atac.var_names.str.split(r"[:-]")
-mdd_atac.var["chrom"] = split.map(lambda x: x[0])
-mdd_atac.var["chromStart"] = split.map(lambda x: x[1]).astype(int)
-mdd_atac.var["chromEnd"] = split.map(lambda x: x[2]).astype(int)
-mdd_atac.var.loc[:, ["chrom", "chromStart", "chromEnd"]].head()
+split = mean_grn_df['enhancer'].str.split(r"[:-]")
+mean_grn_df["chrom"] = split.map(lambda x: x[0])
+mean_grn_df["chromStart"] = split.map(lambda x: x[1]).astype(int)
+mean_grn_df["chromEnd"] = split.map(lambda x: x[2]).astype(int)
 
 ## extract gene and peak positions
-genes = scglue.genomics.Bed(mdd_rna[:, mdd_rna.var['chrom'].notna()].var.assign(name=mdd_rna[:, mdd_rna.var['chrom'].notna()].var_names))
-peaks = scglue.genomics.Bed(mdd_atac.var.assign(name=mdd_atac.var_names))
+genes = scglue.genomics.Bed(mdd_rna[:, mdd_rna.var['chrom'].notna()].var.assign(name=mdd_rna[:, mdd_rna.var['chrom'].notna()].var_names)) # for some reason, genes from grn not strand specific...
+peaks = scglue.genomics.Bed(mean_grn_df.assign(name=mean_grn_df['enhancer']))
 tss = genes.strand_specific_start_site()
 promoters = tss.expand(2000, 0)
 
@@ -1419,10 +1418,6 @@ dist_graph = scglue.genomics.window_graph(
 )
 dist_graph = nx.DiGraph(dist_graph)
 dist_graph.number_of_edges()
-
-## get guidance graph
-#guidance = scglue.genomics.rna_anchored_guidance_graph(mdd_rna, mdd_atac)
-#scglue.graph.check_graph(guidance, [mdd_rna, mdd_atac])
 
 def graph_to_df(G):
     """
@@ -1442,6 +1437,9 @@ def graph_to_df(G):
 # e.g. for the distance graph
 df_dist = graph_to_df(dist_graph)
 print(df_dist.head())
+
+## merge distance graph with mean_grn_df
+mean_grn_df = mean_grn_df.merge(df_dist, left_on=['TG', 'enhancer'], right_on=['source', 'target'], how='left')
 
 ## get JASPAR2018 TFs db
 jaspar_db_2020 = jaspardb(release='JASPAR2020')
@@ -1768,7 +1766,7 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
             ## get mean GRN from brainSCOPE
             grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
             deg_genes = deg_df[deg_df['pvals'] < 0.05]['names'].to_list()
-            mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned, df_dist=df_dist)
+            mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned)
 
             overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
             overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values

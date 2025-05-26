@@ -484,7 +484,7 @@ def get_unified_grns(grn_path):
 
     return mean_grn_df
 
-def filter_mean_grn(mean_grn_df, mdd_rna, mdd_atac, df_dist=None, deg_genes=None):
+def filter_mean_grn(mean_grn_df, mdd_rna, mdd_atac, deg_genes=None):
 
     ## get peaks from GRNs
     peaks_df = pd.DataFrame(index=mdd_atac.var_names.str.split(':|-', expand=True)).reset_index()
@@ -549,11 +549,6 @@ def filter_mean_grn(mean_grn_df, mdd_rna, mdd_atac, df_dist=None, deg_genes=None
     mean_grn_df['TG_idx_in_data'] = mean_grn_df['TG'].map(data_gene_idx_mapper)
     mean_grn_df['enhancer_idx_in_data'] = mean_grn_df['enhancer'].map(data_peak_idx_mapper)
     mean_grn_df.loc[:, 'enhancer_idx_in_data'] = mean_grn_df['enhancer_idx_in_data'].astype(int).values
-
-    ## add distance scores
-    if df_dist is not None:
-        df_dist['target'] = df_dist['target'].map(peaks_names_mapper)
-        mean_grn_df = mean_grn_df.merge(df_dist, left_on=['enhancer', 'TG'], right_on=['target', 'source'], how='left')
     
     return mean_grn_df, mdd_rna, mdd_atac
 
