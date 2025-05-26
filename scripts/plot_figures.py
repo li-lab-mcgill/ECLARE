@@ -1433,6 +1433,7 @@ def graph_to_df(G):
 df_dist = graph_to_df(dist_graph)
 print(df_dist.head())
 
+'''
 ## get JASPAR2022 TFs
 motif_bed = scglue.genomics.read_bed(os.path.join(os.environ['DATAPATH'], 'JASPAR2022-hg38.bed.gz'))
 motif_bed.head()
@@ -1458,6 +1459,7 @@ gene2tf_rank_glue = scglue.genomics.cis_regulatory_ranking(
     random_state=0
 )
 gene2tf_rank_glue.iloc[:5, :5]
+'''
 
 #%% project MDD nuclei into latent space
 
@@ -1743,7 +1745,7 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
             ## get mean GRN from brainSCOPE
             grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
             deg_genes = deg_df[deg_df['pvals'] < 0.05]['names'].to_list()
-            mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = get_unified_grns(grn_path, mdd_rna_aligned, mdd_atac_aligned, deg_genes=deg_genes)
+            mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = get_unified_grns(grn_path, mdd_rna_aligned, mdd_atac_aligned, df_dist=df_dist)
 
             overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
             overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
