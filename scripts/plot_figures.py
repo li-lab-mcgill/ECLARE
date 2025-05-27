@@ -1304,8 +1304,8 @@ rna  = anndata.read_h5ad(rna_fullpath, backed='r')
 
 rna_full = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna.h5ad'), backed='r')
 
-mdd_atac = atac[::10].to_memory()
-mdd_rna = rna[::10].to_memory()
+mdd_atac = atac[::1].to_memory()
+mdd_rna = rna[::1].to_memory()
 
 mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
 
@@ -1345,11 +1345,6 @@ overlapping_subjects = np.intersect1d(mdd_rna.obs[rna_subject_key], mdd_atac.obs
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df[subjects_by_condition_n_sex_df['subject'].isin(overlapping_subjects)]
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condition', 'sex'])['subject'].unique()
 
-#%% Get mean GRN from brainSCOPE
-
-grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
-mean_grn_df = get_unified_grns(grn_path)
-
 
 #%% differential expression analysis
 
@@ -1378,13 +1373,17 @@ sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_subject_key)
 sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_condition_key)
 
 
-#%% scglue preprocessing
+#%% Get mean GRN from brainSCOPE & scglue preprocessing
 
+from eclare.data_utils import get_unified_grns, filter_mean_grn, get_scompreg_loglikelihood
 import scglue
 import networkx as nx
 from pyjaspar import jaspardb
 import pyranges as pr
 from Bio.motifs.jaspar import calculate_pseudocounts
+
+grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
+mean_grn_df = get_unified_grns(grn_path)
 
 ## get gene annotation and position
 scglue.data.get_gene_annotation(
@@ -1458,8 +1457,12 @@ for tf, enhancers in tqdm(tf_enhancer_grns, total=len(tf_enhancer_grns)):
         motifs = jaspar_db_2020.fetch_motifs(tf_name=tf, tax_group='vertebrates')
         motif = motifs[0]
     except:
-        motifs = jaspar_db_2024.fetch_motifs_by_name(tf)
-        motif = motifs[0]
+        try:
+            motifs = jaspar_db_2024.fetch_motifs_by_name(tf)
+            motif = motifs[0]
+        except:
+            print(f"Could not find motif for TF {tf} in either JASPAR2020 or JASPAR2024")
+            continue
 
     motif.pseudocounts = calculate_pseudocounts(motif)  # also have motif.pseudo_counts, not sure what the difference is...
 
@@ -1469,6 +1472,11 @@ for tf, enhancers in tqdm(tf_enhancer_grns, total=len(tf_enhancer_grns)):
 
     motif_scores = {enhancer: motif.pssm.calculate(seq.upper()).max() for enhancer, seq in zip(enhancers, seqs)} # ~44 seconds
     mean_grn_df.loc[mean_grn_df['TF'] == tf, 'motif_score'] = mean_grn_df.loc[mean_grn_df['TF'] == tf, 'enhancer'].map(motif_scores)
+
+## remove TFs with no motif score
+print(f"Removing {mean_grn_df[mean_grn_df['motif_score'] == 0]['TF'].nunique()} TFs out of {mean_grn_df['TF'].nunique()} with no motif score")
+mean_grn_df = mean_grn_df[mean_grn_df['motif_score'] > 0]
+mean_grn_df.reset_index(drop=True, inplace=True)  # need to reset indices to enable alignment with normed values
 
 ## normalize motif score by target gene TG
 #motif_score_norm = mean_grn_df.groupby('TG')['motif_score'].apply(lambda x: (x - x.min()) / (x.max() - x.min())) # guaranteed to have one zero-score per TG
@@ -1480,6 +1488,7 @@ motif_score_norm = motif_score_norm.fillna(1)  # NaN motif scores because only o
 motif_score_norm = motif_score_norm.reset_index(level=0, drop=False).rename(columns={'motif_score': 'motif_score_norm'})
 assert (motif_score_norm.index.sort_values() == np.arange(len(motif_score_norm))).all()
 
+## merge motif scores with mean_grn_df
 mean_grn_df = mean_grn_df.merge(motif_score_norm, left_index=True, right_index=True, how='left', suffixes=('', '_motifs'))
 
 
@@ -1528,8 +1537,6 @@ from torchmetrics.functional import kendall_rank_corrcoef
 from scipy.stats import norm, linregress
 import gseapy as gp
 
-from eclare.setup_utils import get_genes_by_peaks
-from eclare.data_utils import get_unified_grns, filter_mean_grn, get_scompreg_loglikelihood
 
 def tree(): return defaultdict(tree)
 genes_by_peaks_corrs_dict = tree()
@@ -1549,7 +1556,7 @@ tfrp_predictions_dict = tree()
 ## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
 cutoff = 5025 # better a multiple of 75 due to formation of SEACells
 
-sex='Female'; celltype=''
+sex='Female'; celltype='Mic'
 
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
@@ -1764,7 +1771,6 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
             plt.show()
 
             ## get mean GRN from brainSCOPE
-            grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
             deg_genes = deg_df[deg_df['pvals'] < 0.05]['names'].to_list()
             mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned)
 
@@ -1810,7 +1816,8 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
             #genes_by_peaks_masks_dict[sex][celltype][condition] = genes_to_peaks_binary_mask
 
             ## get tfrp
-            scompreg_loglikelihoods, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, std_errs, intercept_stderrs = get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
+            scompreg_loglikelihoods, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, std_errs, intercept_stderrs = \
+                get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
 
             ## save to dicts
             scompreg_loglikelihoods_dict[sex][celltype][condition if condition != '' else 'all'] = scompreg_loglikelihoods
@@ -1895,6 +1902,7 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
 
         break
 else:
+    import pickle
     with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
         all_dicts = pickle.load(f)
     genes_by_peaks_corrs_dict, tfrps_dict, tfrp_predictions_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict = all_dicts
@@ -1903,7 +1911,7 @@ else:
 
 '''
 import pickle
-all_dicts = (genes_by_peaks_corrs_dict, tfrps_dict, tfrp_predictions_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict)
+all_dicts = (genes_by_peaks_corrs_dict, tfrps_dict, tfrp_predictions_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, mean_grn_df)
 with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'wb') as f:
     pickle.dump(all_dicts, f)
 '''
@@ -2290,7 +2298,7 @@ res = minimize(G,
 
 # Plot empirical histogram and fitted gamma distribution
 plt.figure(figsize=(10, 6))
-plt.hist(lr, bins=None, density=True, alpha=0.6, label='Empirical LR distribution')
+plt.hist(lr, bins=100, density=True, alpha=0.6, label='Empirical LR distribution')
 
 # Generate points for fitted gamma distribution
 x = np.linspace(0, max(lr), 1000)
@@ -2301,7 +2309,7 @@ plt.plot(x, fitted_pdf, 'r-', linewidth=2, label='Fitted gamma distribution')
 plt.axvline(emp_q[-1], color='black', linestyle='--', label=f'Last null quantile of empirical distribution (q={probs[-1]:.2f})')
 
 # Add veritcal line at threshold
-p_threshold = 0.05
+p_threshold = 0.1
 lr_at_p = gamma.ppf(1-p_threshold, a=res.x[0], scale=res.x[1])
 plt.axvline(lr_at_p, color='green', linestyle='--', label=f'Threshold (p={p_threshold:.2f}) @ LR={lr_at_p:.2f}')
 
@@ -2325,17 +2333,54 @@ lr_down_filtered = LR_down[LR_down.index.isin(genes_names_filtered)]
 t_slopes_filtered = t_slopes[genes_names_filtered]
 
 
+#%% Get BrainGMT and filter for cortical genes
+
+brain_gmt = gp.parser.read_gmt(os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_HumanOrthologs.gmt'))
+brain_gmt_names = pd.Series(list(brain_gmt.keys()))
+brain_gmt_prefix_unique = np.unique([name.split('_')[0] for name in brain_gmt_names])
+
+brain_gmt_wGO = gp.parser.read_gmt(os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_wGO_HumanOrthologs.gmt'))
+brain_gmt_wGO_names = pd.Series(list(brain_gmt_wGO.keys()))
+brain_gmt_wGO_prefix_unique = np.unique([name.split('_')[0] for name in brain_gmt_wGO_names])
+
+non_cortical_blacklist = [
+    'DropViz',
+    'HippoSeq',
+    'Coexpression_Hippocampus',
+    'Birt_Hagenauer_2020',
+    'Gray_2014',
+    'Bagot_2016',
+    'Bagot_2017',
+    'Pena_2019',
+    'GeneWeaver',
+    'GenWeaver', # probably same as GeneWeaver
+    'Gemma'
+]
+
+#gset_by_blacklist_df = pd.DataFrame([brain_gmt_names.str.contains(ncbl) for ncbl in non_cortical_blacklist], index=non_cortical_blacklist, columns=brain_gmt_names)
+gset_by_blacklist_df = pd.DataFrame([brain_gmt_names.str.contains(ncbl) for ncbl in non_cortical_blacklist])
+gset_by_blacklist_df.index = non_cortical_blacklist
+gset_by_blacklist_df.columns = brain_gmt_names
+
+keep_cortical_gmt = gset_by_blacklist_df.loc[:,~gset_by_blacklist_df.any(axis=0).values].columns.tolist()
+brain_gmt_cortical = {k:v for k,v in brain_gmt.items() if k in keep_cortical_gmt}
+
+gset_by_blacklist_df_wGO = pd.DataFrame([brain_gmt_wGO_names.str.contains(ncbl) for ncbl in non_cortical_blacklist])
+gset_by_blacklist_df_wGO.index = non_cortical_blacklist
+gset_by_blacklist_df_wGO.columns = brain_gmt_wGO_names
+
+keep_cortical_gmt_wGO = gset_by_blacklist_df_wGO.loc[:,~gset_by_blacklist_df_wGO.any(axis=0).values].columns.tolist()
+brain_gmt_cortical_wGO = {k:v for k,v in brain_gmt_wGO.items() if k in keep_cortical_gmt_wGO}
+
 #%% GSEApy
 
-brain_gmt = gp.parser.read_gmt(os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_wGO_HumanOrthologs.gmt.txt'))
-
-rank = LR.copy()
+rank = Z.copy()
 
 ranked_list = pd.DataFrame({'gene': rank.index.to_list(), 'score': rank.values})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
 
 pre_res = gp.prerank(rnk=ranked_list,
-                     gene_sets='GO_Biological_Process_2025',
+                     gene_sets=brain_gmt_cortical_wGO,
                      outdir=os.path.join(os.environ['OUTPATH'], 'gseapy_results'),
                      min_size=2,
                      max_size=len(ranked_list),
@@ -2356,7 +2401,7 @@ gene sets of interest:
 - TRRUST_Transcription_Factors_2019
 '''
 
-pre_res.res2d.head(10)
+pre_res.res2d.sort_values('FWER p-val', ascending=True).head(20)
 
 #%% plot enrichment map
 term2 = pre_res.res2d.Term
@@ -2378,21 +2423,33 @@ from IPython.display import display
 lr_filtered_type = lr_filtered.copy()
 
 enr = gp.enrichr(lr_filtered_type.index.to_list(),
-                    gene_sets='GO_Biological_Process_2025',
+                    gene_sets=brain_gmt_cortical,
                     outdir=None)
 
-display(enr.res2d.head(10)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
+display(enr.res2d.sort_values('Adjusted P-value', ascending=True).head(20)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
 
 # dotplot
 gp.dotplot(enr.res2d,
-           column='P-value',
-           figsize=(3,5),
+           column='Adjusted P-value',
+           figsize=(3,7),
            title='',
            cmap=plt.cm.viridis,
            size=6, # adjust dot size
            cutoff=0.25,
+           top_term=20,
            show_ring=False)
 plt.show()
+
+#ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes_df = enr.res2d[enr.res2d['Term'] == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
+#ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes = ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes_df['Genes'].values[0].split(';') # gene set based on temporal cortex
+#deg_df_mdd_dn = deg_df.set_index('names').loc[ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes]
+
+#ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes_df = enr.res2d[enr.res2d['Term'] == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_UP']
+#ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes = ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes_df['Genes'].values[0].split(';') # gene set based on temporal cortex
+#deg_df_mdd_up = deg_df.set_index('names').loc[ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes]
+
+#ASTON_MAJOR_DEPRESSIVE_DISORDER_df = pd.concat([ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes_df, ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes_df])
+
 #%%
 import networkx as nx
 

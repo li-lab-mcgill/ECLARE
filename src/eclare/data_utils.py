@@ -475,7 +475,7 @@ def get_unified_grns(grn_path):
     grn_df = pd.concat(grns)
 
     ## only keep GRNs inferred from scGRNom method
-    grn_df_clean = grn_df[grn_df['method'] == 'scGRNom']
+    grn_df_clean = grn_df[grn_df['method'].isin(['scGRNom', 'ATAC'])] # GRNs for which TF is matched to JASPAR
 
     ## clean GRNs
     grn_df_clean = grn_df_clean[~grn_df_clean['edgeWeight'].isna()] # remove rows with missing values, or else will corrupt mean
@@ -519,6 +519,9 @@ def filter_mean_grn(mean_grn_df, mdd_rna, mdd_atac, deg_genes=None):
     ## keep only GRNs that have a peak in the ATAC data
     mean_grn_df = mean_grn_df[mean_grn_df['enhancer'].isin(mdd_atac.var['GRN_peak_interval'])]
 
+    ## remove GRNs for which TG or TF is not in the data
+    mean_grn_df = mean_grn_df[(mean_grn_df['TG'].isin(mdd_rna.var_names)) & (mean_grn_df['TF'].isin(mdd_rna.var_names))]
+
     ## get genes from GRNs
     genes = mdd_rna.var_names
     is_target_gene = genes.isin(mean_grn_df['TG'])
@@ -534,11 +537,10 @@ def filter_mean_grn(mean_grn_df, mdd_rna, mdd_atac, deg_genes=None):
     mdd_rna = mdd_rna[:, genes_indices]
 
     ## add unified GRN diffusion scores
-    diffusion_scores_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'Unified_GRN_diffusion.txt')
-    diffusion_scores = pd.read_csv(diffusion_scores_path, delimiter='\t')
-    unified_diffusions_scores = diffusion_scores[['TF','TG','Unified Score']] # also have cell-type specific scores
-
-    mean_grn_df = mean_grn_df.merge(unified_diffusions_scores, on=['TF', 'TG'], how='left')
+    #diffusion_scores_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'Unified_GRN_diffusion.txt')
+    #diffusion_scores = pd.read_csv(diffusion_scores_path, delimiter='\t')
+    #unified_diffusions_scores = diffusion_scores[['TF','TG','Unified Score']] # also have cell-type specific scores
+    #mean_grn_df = mean_grn_df.merge(unified_diffusions_scores, on=['TF', 'TG'], how='left')
 
     ## create mappers that can be used to track indices of genes and peaks in ATAC and RNA data
     data_gene_idx_mapper = dict(zip(mdd_rna.var['features'], np.arange(len(mdd_rna.var['features']))))
@@ -569,11 +571,13 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
         mean_grn_df_gene = mean_grn_df_gene[mean_grn_df_gene['TF'].isin(overlapping_tfs)]
         n_linked_peaks = mean_grn_df_gene['enhancer'].nunique()
 
+        '''
         ## terms that encapsulate effects of both TF-peak (B) and peak-gene (I) interactions as per sc-compReg
         BI_diffusions = mean_grn_df_gene['Unified Score'] / mean_grn_df_gene['Unified Score'].sum() # global, for weighing TFRPs across TFs
         BI_enhancers = mean_grn_df_gene['edgeWeight']                                               # enhancer-specific
         BI_sign = np.sign(mean_grn_df_gene['Correlation'])                                          # sign of correlation between TF and TG
         BI = BI_enhancers * BI_diffusions * BI_sign
+        '''
 
         ## sample peak accessibilities
         peak_idxs = mean_grn_df_gene['enhancer_idx_in_data'].astype(int).values
@@ -592,14 +596,28 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
         peak_tg_correlations = np.corrcoef(peak_tg_expressions.T)[:-1, -1]
         peak_tg_correlations = peak_tg_correlations[None, :]
 
+        dist_weight = mean_grn_df_gene['weight'].values[None, :]
+        B = mean_grn_df_gene['motif_score_norm'].values[None, :]
+        I = peak_tg_correlations * dist_weight
+        BI = B * I
+        BI = BI / BI.sum(axis=1, keepdims=True)
+
+        #BI_sign = np.sign(mean_grn_df_gene['Correlation']).values[None, :]                                          # sign of correlation between TF and TG
+        #BI = BI * BI_sign
+
+        tfrp = tf_expressions * peak_expressions * BI
+        tfrp = tfrp.sum(axis=1)
+
+
         ## compute tfrp - note that peak_expressions are sparse, leading to sparse tfrp
 
         if tfrp_aggregation == 'sum':
 
             #BI = (BI_enhancers * BI_diffusions * BI_sign).values[None]
-            BI = (BI_enhancers * BI_sign).values[None]
-            tfrp = tf_expressions * peak_expressions * BI #* peak_tg_correlations * abc_scores
-            tfrp = tfrp.sum(axis=1)
+
+            #BI = (BI_enhancers * BI_sign).values[None]
+            #tfrp = tf_expressions * peak_expressions * BI #* peak_tg_correlations * abc_scores
+            #tfrp = tfrp.sum(axis=1)
 
             try:
                 ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
