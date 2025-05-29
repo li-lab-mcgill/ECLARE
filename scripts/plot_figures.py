@@ -1556,7 +1556,7 @@ tfrp_predictions_dict = tree()
 ## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
 cutoff = 5025 # better a multiple of 75 due to formation of SEACells
 
-sex='Female'; celltype='Mic'
+sex='Female'; celltype='Oli'
 
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
@@ -1565,7 +1565,17 @@ doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'comb
 deg_dict = maitra_female_degs_df.groupby('cluster_id.female')['gene'].unique().to_dict()
 deg_overlap_df = sc.tl.marker_gene_overlap(mdd_rna_female, deg_dict, key=deg_method, adj_pval_threshold=0.05).astype(int)
 deg_overlap_df = pd.concat([deg_overlap_df, deg_overlap_df.sum(axis=0).to_frame().T.rename(index={0: 'TOTAL'})], axis=0)
-display(deg_overlap_df)
+
+for celltype in deg_overlap_df.index:
+    try:
+        unique_celltype = [unique_celltype for unique_celltype in unique_celltypes if unique_celltype in celltype][0]
+        deg_overlap_df.loc[celltype, 'unique_celltype'] = unique_celltype
+    except:
+        print(f"Could not find unique celltype for {celltype}")
+        continue
+
+deg_overlap_grouped_df = deg_overlap_df.groupby('unique_celltype').sum()
+display(deg_overlap_grouped_df.sort_values(by='Case', ascending=False).T)
 
 do_corrs_or_cosines = 'correlations'
 
@@ -1701,20 +1711,6 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
                 plan = res.plan
                 value = res.value_linear
 
-                '''
-                ## trim latents to smallest size
-                min_size = min(rna_latents.shape[0], atac_latents.shape[0])
-                rna_latents = rna_latents[:min_size]
-                atac_latents = atac_latents[:min_size]
-                mdd_rna_sampled_group = mdd_rna_sampled_group[:min_size]
-                mdd_atac_sampled_group = mdd_atac_sampled_group[:min_size]
-
-                ## compute optimal transport plan for alignment
-                ot_res = ot_solve(1 - student_logits)
-                plan = ot_res.plan
-                value = ot_res.value_linear
-                '''
-
                 ## re-order ATAC latents to match plan (can rerun OT analysis to ensure diagonal matching structure)
                 atac_latents = atac_latents[plan.argmax(axis=0)]
                 mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
@@ -1732,22 +1728,6 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
 
             mdd_rna_aligned.var = mdd_rna.var
             mdd_atac_aligned.var = mdd_atac.var
-
-
-            '''
-            ## get genes by peaks mask and save to dict
-            genes_to_peaks_binary_mask, genes_peaks_dict = get_genes_by_peaks(mdd_rna_sampled_group, mdd_atac_sampled_group, None, window_size = 1e6, feature_selection_method = None)
-
-            peaks_sort_idxs = np.argsort(genes_peaks_dict['peaks'].tolist())
-            genes_peaks_dict['peaks'] = genes_peaks_dict['peaks'][peaks_sort_idxs]
-            genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[:, peaks_sort_idxs]
-
-            mdd_rna_sampled_group   = mdd_rna_sampled_group[:, mdd_rna_sampled_group.var_names.isin(genes_peaks_dict['genes'])]
-            mdd_atac_sampled_group  = mdd_atac_sampled_group[:, mdd_atac_sampled_group.var_names.isin(genes_peaks_dict['peaks'])]
-
-            assert (mdd_rna_sampled_group.var_names == genes_peaks_dict['genes']).all()
-            assert (mdd_atac_sampled_group.var_names == genes_peaks_dict['peaks']).all()
-            '''
 
             ## plot UMAP of aligned RNA latents and ATAC latents
             rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_aligned, mdd_atac_aligned, return_tensor=True)
@@ -1905,7 +1885,7 @@ else:
     import pickle
     with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
         all_dicts = pickle.load(f)
-    genes_by_peaks_corrs_dict, tfrps_dict, tfrp_predictions_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict = all_dicts
+    genes_by_peaks_corrs_dict, tfrps_dict, tfrp_predictions_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, mean_grn_df = all_dicts
 
 
 
@@ -2380,7 +2360,7 @@ ranked_list = pd.DataFrame({'gene': rank.index.to_list(), 'score': rank.values})
 ranked_list = ranked_list.sort_values(by='score', ascending=False)
 
 pre_res = gp.prerank(rnk=ranked_list,
-                     gene_sets=brain_gmt_cortical_wGO,
+                     gene_sets=brain_gmt_cortical,
                      outdir=os.path.join(os.environ['OUTPATH'], 'gseapy_results'),
                      min_size=2,
                      max_size=len(ranked_list),
@@ -2405,7 +2385,7 @@ pre_res.res2d.sort_values('FWER p-val', ascending=True).head(20)
 
 #%% plot enrichment map
 term2 = pre_res.res2d.Term
-axes = pre_res.plot(terms=term2[0])
+axes = pre_res.plot(terms=term2[5])
 
 #%% dotplot
 from gseapy import dotplot
@@ -2415,7 +2395,8 @@ ax = dotplot(pre_res.res2d,
              title='',
              cmap=plt.cm.viridis,
              size=6, # adjust dot size
-             figsize=(4,5), cutoff=0.25, show_ring=False)
+             top_term=20,
+             figsize=(4,7), cutoff=0.25, show_ring=False)
 
 #%% EnrichR
 from IPython.display import display
@@ -2423,7 +2404,7 @@ from IPython.display import display
 lr_filtered_type = lr_filtered.copy()
 
 enr = gp.enrichr(lr_filtered_type.index.to_list(),
-                    gene_sets=brain_gmt_cortical,
+                    gene_sets=brain_gmt_cortical_wGO,
                     outdir=None)
 
 display(enr.res2d.sort_values('Adjusted P-value', ascending=True).head(20)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
@@ -2434,21 +2415,27 @@ gp.dotplot(enr.res2d,
            figsize=(3,7),
            title='',
            cmap=plt.cm.viridis,
-           size=6, # adjust dot size
+           size=12, # adjust dot size
            cutoff=0.25,
            top_term=20,
            show_ring=False)
 plt.show()
 
-#ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes_df = enr.res2d[enr.res2d['Term'] == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
-#ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes = ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes_df['Genes'].values[0].split(';') # gene set based on temporal cortex
-#deg_df_mdd_dn = deg_df.set_index('names').loc[ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes]
+#%%
 
-#ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes_df = enr.res2d[enr.res2d['Term'] == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_UP']
-#ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes = ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes_df['Genes'].values[0].split(';') # gene set based on temporal cortex
-#deg_df_mdd_up = deg_df.set_index('names').loc[ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes]
+mdd_rna_female_celltype = mdd_rna_female[mdd_rna_female.obs[rna_cell_group] == celltype]
+sc.tl.rank_genes_groups(mdd_rna_female_celltype, groupby=rna_condition_key, reference='Control', method='wilcoxon')
+deg_celltype_df = sc.get.rank_genes_groups_df(mdd_rna_female_celltype, group='Case', key=deg_method)
 
-#ASTON_MAJOR_DEPRESSIVE_DISORDER_df = pd.concat([ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes_df, ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes_df])
+ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes_df = enr.res2d[enr.res2d['Term'] == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
+ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes = ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes_df['Genes'].values[0].split(';') # gene set based on temporal cortex
+deg_celltype_df_mdd_dn = deg_celltype_df.set_index('names').loc[ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes]
+
+ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes_df = enr.res2d[enr.res2d['Term'] == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_UP']
+ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes = ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes_df['Genes'].values[0].split(';') # gene set based on temporal cortex
+deg_celltype_df_mdd_up = deg_celltype_df.set_index('names').loc[ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes]
+
+ASTON_MAJOR_DEPRESSIVE_DISORDER_df = pd.concat([deg_celltype_df_mdd_dn, deg_celltype_df_mdd_up])
 
 #%%
 import networkx as nx
