@@ -80,7 +80,7 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
                     n_waypoint_eigs=n_waypoint_eigs,
                     convergence_epsilon = 1e-5,
                     max_franke_wolfe_iters=100,
-                    use_gpu=True)
+                    use_gpu=True if torch.cuda.is_available() else False)
 
     model.construct_kernel_matrix()
     M = model.kernel_matrix
@@ -1304,8 +1304,8 @@ rna  = anndata.read_h5ad(rna_fullpath, backed='r')
 
 rna_full = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna.h5ad'), backed='r')
 
-mdd_atac = atac[::1].to_memory()
-mdd_rna = rna[::1].to_memory()
+mdd_atac = atac[::10].to_memory()
+mdd_rna = rna[::10].to_memory()
 
 mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
 
@@ -1400,10 +1400,15 @@ mean_grn_df["chromStart"] = split.map(lambda x: x[1]).astype(int)
 mean_grn_df["chromEnd"] = split.map(lambda x: x[2]).astype(int)
 
 ## extract gene and peak positions
-genes = scglue.genomics.Bed(mdd_rna[:, mdd_rna.var['chrom'].notna()].var.assign(name=mdd_rna[:, mdd_rna.var['chrom'].notna()].var_names)) # for some reason, genes from grn not strand specific...
-peaks = scglue.genomics.Bed(mean_grn_df.assign(name=mean_grn_df['enhancer']))
+gene_ad = anndata.AnnData(var=pd.DataFrame(index=mean_grn_df['TG'].unique()))
+scglue.data.get_gene_annotation(gene_ad, gtf=os.path.join(os.environ['DATAPATH'], 'gencode.v48.annotation.gtf.gz'), gtf_by='gene_name')
+gene_ad = gene_ad[:,gene_ad.var['name'].notna()]
+
+genes = scglue.genomics.Bed(gene_ad.var)
 tss = genes.strand_specific_start_site()
 promoters = tss.expand(2000, 0)
+
+peaks = scglue.genomics.Bed(mean_grn_df.assign(name=mean_grn_df['enhancer'])).drop_duplicates()
 
 ## distance graph
 window_size = 1e6
@@ -1556,8 +1561,6 @@ tfrp_predictions_dict = tree()
 ## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
 cutoff = 5025 # better a multiple of 75 due to formation of SEACells
 
-sex='Female'; celltype='Oli'
-
 maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
 doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
 #maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
@@ -1578,6 +1581,9 @@ deg_overlap_grouped_df = deg_overlap_df.groupby('unique_celltype').sum()
 display(deg_overlap_grouped_df.sort_values(by='Case', ascending=False).T)
 
 do_corrs_or_cosines = 'correlations'
+
+## define sex and celltype
+sex='Female'; celltype='Ex'
 
 ## get HVG features
 '''
@@ -2249,7 +2255,7 @@ from scipy.optimize import minimize
 lr = np.array(LR)
 
 # 2) Compute subset of empirical quantiles:
-max_null_quantile = 0.5
+max_null_quantile = 0.75
 
 probs = np.linspace(0.05, max_null_quantile, 10)
 emp_q = np.quantile(lr, probs)
@@ -2289,7 +2295,7 @@ plt.plot(x, fitted_pdf, 'r-', linewidth=2, label='Fitted gamma distribution')
 plt.axvline(emp_q[-1], color='black', linestyle='--', label=f'Last null quantile of empirical distribution (q={probs[-1]:.2f})')
 
 # Add veritcal line at threshold
-p_threshold = 0.1
+p_threshold = 0.05
 lr_at_p = gamma.ppf(1-p_threshold, a=res.x[0], scale=res.x[1])
 plt.axvline(lr_at_p, color='green', linestyle='--', label=f'Threshold (p={p_threshold:.2f}) @ LR={lr_at_p:.2f}')
 
@@ -2311,6 +2317,125 @@ genes_names_filtered = lr_filtered.index.to_list()
 lr_up_filtered = LR_up[LR_up.index.isin(genes_names_filtered)]
 lr_down_filtered = LR_down[LR_down.index.isin(genes_names_filtered)]
 t_slopes_filtered = t_slopes[genes_names_filtered]
+
+#%% Merge lr_filtered into mean_grn_df
+
+mean_grn_df_filtered = mean_grn_df.merge(lr_filtered, left_on='TG', right_index=True, how='right')
+#mean_grn_df_filtered['Correlation'].fillna(mean_grn_df_filtered['Correlation'].mean(), inplace=True)
+mean_grn_df_filtered['lrCorr'] = mean_grn_df_filtered[['Correlation','LR']].product(axis=1, skipna=True).abs()
+
+## create graph from mean_grn_df_filtered with lrCorr as edge weight
+mean_grn_filtered_graph = nx.from_pandas_edgelist(
+    mean_grn_df_filtered,
+    source='TG',
+    target='enhancer',
+    edge_attr='lrCorr',
+    create_using=nx.DiGraph())
+
+peaks = scglue.genomics.Bed(mean_grn_df_filtered.assign(name=mean_grn_df_filtered['enhancer']))
+
+gene_ad = anndata.AnnData(var=pd.DataFrame(index=mean_grn_df_filtered['TG'].to_list()))
+scglue.data.get_gene_annotation(gene_ad, gtf=os.path.join(os.environ['DATAPATH'], 'gencode.v48.annotation.gtf.gz'), gtf_by='gene_name')
+genes = scglue.genomics.Bed(gene_ad.var)
+
+#genes = scglue.genomics.Bed(mdd_rna[:, mdd_rna.var['chrom'].notna()].var.assign(name=mdd_rna[:, mdd_rna.var['chrom'].notna()].var_names))
+#genes = genes[genes['name'].isin(mean_grn_df_filtered['TG'])]
+tss = genes.strand_specific_start_site()
+
+peaks.write_bed(os.path.join(os.environ['OUTPATH'], 'peaks.bed'))
+scglue.genomics.write_links(
+    mean_grn_filtered_graph,
+    tss,
+    peaks,
+    os.path.join(os.environ['OUTPATH'], 'gene2peak_lrCorr.links'),
+    keep_attrs=["lrCorr"]
+    )
+
+tg_dist_counts_sorted = mean_grn_df_filtered.groupby('TG')[['dist']].mean().merge(mean_grn_df_filtered['TG'].value_counts(), left_index=True, right_on='TG').sort_values('dist').head(20)
+display(tg_dist_counts_sorted)
+
+gene = 'SCD'
+tg_grn = mean_grn_df_filtered[mean_grn_df_filtered['TG']==gene].sort_values('dist')[['enhancer','dist','lrCorr']].groupby('enhancer').mean()
+tg_grn_bounds = np.stack(tg_grn.index.str.split(':|-')).flatten()
+tg_grn_bounds = [int(bound) for bound in tg_grn_bounds if bound.isdigit()]
+display(tg_grn)
+print('min: {} max: {}'.format(min(tg_grn_bounds), max(tg_grn_bounds)))
+print(genes.loc[gene][['chrom','chromStart','chromEnd','name']])
+
+#!pyGenomeTracks --tracks tracks.ini --region chr7:128027070-128043058 -o tracks.png
+
+keep_tg = lr_filtered.sort_values()[-1:]
+keep_grn = mean_grn_df_filtered[mean_grn_df_filtered['TG'].isin(keep_tg.index)]
+keep_peaks = keep_grn['enhancer'].unique()
+keep_tf = keep_grn['TF'].unique()
+keep_all = np.concatenate([keep_tg.index, keep_peaks, keep_tf])
+
+mapping = {v: f'{v.split(":")[0]}-{vi}' for vi, v in enumerate(keep_peaks)}
+keep_peaks = [mapping[peak] for peak in keep_peaks]
+
+
+for tf, enhancer, motif_score_norm in mean_grn_df_filtered[['TF','enhancer','motif_score_norm']].drop_duplicates().itertuples(index=False):
+    # Process each unique TF-enhancer pair
+    #enhancer_name = mapping[enhancer]
+    mean_grn_filtered_graph.add_edge(tf, enhancer, weight=motif_score_norm)
+
+# collect only edges where source or target is in `keep`
+edges_to_keep = [
+    (u, v)
+    for u, v in mean_grn_filtered_graph.edges()
+    if (u in keep_all) and (v in keep_all)
+]
+
+subgraph = mean_grn_filtered_graph.edge_subgraph(edges_to_keep)
+subgraph_renamed = nx.relabel_nodes(subgraph, mapping, copy=True)
+
+from networkx.drawing.nx_agraph import graphviz_layout
+pos = graphviz_layout(
+    subgraph_renamed,
+    prog="dot"
+    # LR makes it left→right; you can omit for top→bottom
+)
+
+import matplotlib.pyplot as plt
+
+# Set figure size (in inches)
+plt.figure(figsize=(8, 12))  # wider and taller than default
+
+G = subgraph_renamed
+
+# 1. assign each node to a layer
+for n in G:
+    if n in keep_tf:
+        G.nodes[n]['layer'] = 0
+    elif n in keep_peaks:
+        G.nodes[n]['layer'] = 1
+    else:
+        G.nodes[n]['layer'] = 2
+
+# 2. compute the multipartite layout
+pos = nx.multipartite_layout(G, subset_key='layer')
+
+# rest of your drawing code
+nx.draw_networkx_nodes(G, pos,
+    nodelist=keep_tf,    node_color='skyblue',   node_size=1000)
+nx.draw_networkx_nodes(G, pos,
+    nodelist=keep_peaks, node_color='lightgreen', node_size=1000)
+nx.draw_networkx_nodes(G, pos,
+    nodelist=set(G) - set(keep_tf) - set(keep_peaks),
+    node_color='salmon', node_size=1000)
+
+nx.draw_networkx_labels(G, pos, font_size=8)
+nx.draw_networkx_edges(
+    G, pos,
+    arrowstyle='-|>',
+    arrowsize=8,
+    connectionstyle='arc3,rad=0.1'
+)
+
+plt.axis('off')
+plt.tight_layout()
+plt.show()
+
 
 
 #%% Get BrainGMT and filter for cortical genes
