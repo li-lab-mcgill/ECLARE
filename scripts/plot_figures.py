@@ -1341,8 +1341,8 @@ rna  = anndata.read_h5ad(rna_fullpath, backed='r')
 
 rna_full = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna.h5ad'), backed='r')
 
-mdd_atac = atac[::1].to_memory()
-mdd_rna = rna[::1].to_memory()
+mdd_atac = atac[::10].to_memory()
+mdd_rna = rna[::10].to_memory()
 
 mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
 
@@ -1413,6 +1413,8 @@ genes = deg_df['names'][:20]
 ## dotplot per subject
 sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_subject_key)
 sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_condition_key)
+sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_celltype_key)
+sc.pl.dotplot(mdd_rna_female[mdd_rna_female.obs[rna_celltype_key]=='Mic'], genes, groupby=rna_condition_key)
 
 
 #%% Get mean GRN from brainSCOPE & scglue preprocessing
@@ -1571,12 +1573,12 @@ _, fig, rna_atac_df_umap = plot_umap_embeddings(eclare_rna_latents, eclare_atac_
 
 #%% get peak-gene correlations
 
+def tree(): return defaultdict(tree)
+
 with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
     all_dicts = pickle.load(f)
 mean_grn_df = all_dicts[-1]
 
-
-def tree(): return defaultdict(tree)
 genes_by_peaks_corrs_dict = tree()
 genes_by_peaks_masks_dict = tree()
 n_dict = tree()
@@ -1613,10 +1615,10 @@ for celltype in deg_overlap_df.index:
 deg_overlap_grouped_df = deg_overlap_df.groupby('unique_celltype').sum()
 display(deg_overlap_grouped_df.sort_values(by='Case', ascending=False).T)
 
-do_corrs_or_cosines = 'sc-compReg'
-
 ## define sex and celltype
-sex='Female'; celltype='Mic'
+sex='Female'
+celltype=''
+do_corrs_or_cosines = ''
 
 ## get HVG features
 '''
@@ -1832,69 +1834,68 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
             # x_tfs = tf_expressions.flatten()
             # y_tfs = tfrps.loc[:,mdd_rna_sampled_group.var['is_tf']].values.flatten()
 
-            
+            if do_corrs_or_cosines is not None:
 
-            ## transpose
-            X_rna = X_rna.T
-            X_atac = X_atac.T
+                ## transpose
+                X_rna = X_rna.T
+                X_atac = X_atac.T
 
-            if do_corrs_or_cosines == 'correlations':
-                ## concatenate
-                X_rna_atac = torch.cat([X_rna, X_atac], dim=0)
+                if do_corrs_or_cosines == 'correlations':
+                    ## concatenate
+                    X_rna_atac = torch.cat([X_rna, X_atac], dim=0)
 
-                corr = torch.corrcoef(X_rna_atac) #torch.corrcoef(X_rna_atac.cuda(9) if cuda_available else X_rna_atac)
-                corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
+                    corr = torch.corrcoef(X_rna_atac) #torch.corrcoef(X_rna_atac.cuda(9) if cuda_available else X_rna_atac)
+                    corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
 
-                if corr.isnan().any():
-                    print(f'NaN values in correlation matrix')
-                    corr[corr.isnan()] = 0
+                    if corr.isnan().any():
+                        print(f'NaN values in correlation matrix')
+                        corr[corr.isnan()] = 0
 
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
+                    genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+                    n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
 
-            elif do_corrs_or_cosines == 'spearman':
+                elif do_corrs_or_cosines == 'spearman':
 
-                X_rna_argsort = torch.argsort(X_rna, dim=1) 
-                X_atac_argsort = torch.argsort(X_atac, dim=1)
+                    X_rna_argsort = torch.argsort(X_rna, dim=1) 
+                    X_atac_argsort = torch.argsort(X_atac, dim=1)
 
-                X_rna_atac = torch.cat([X_rna_argsort, X_atac_argsort], dim=0)
-                corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
-                corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
+                    X_rna_atac = torch.cat([X_rna_argsort, X_atac_argsort], dim=0)
+                    corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
+                    corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
 
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
+                    genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+                    n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
+                        
+                elif do_corrs_or_cosines == 'kendall':
+
+                    corr = torch.zeros(X_rna.shape[0], X_atac.shape[0])
+                    p_values = torch.zeros(X_rna.shape[0], X_atac.shape[0])
                     
-            elif do_corrs_or_cosines == 'kendall':
+                    for g, gene in tqdm(enumerate(mdd_rna_sampled_group.var_names), total=len(mdd_rna_sampled_group.var_names), desc="Computing Kendall correlations"):
+                        x_rna = X_rna[g,:]
+                        X_rna_g = x_rna.repeat(len(X_atac), 1)
+                        corrs_g, p_values_g = kendall_rank_corrcoef(X_rna_g.T.cuda(), X_atac.T.cuda(), variant='b', t_test=True, alternative='less')
+                        corr[g,:] = corrs_g.detach().cpu()
+                        p_values[g,:] = p_values_g.detach().cpu()
 
-                corr = torch.zeros(X_rna.shape[0], X_atac.shape[0])
-                p_values = torch.zeros(X_rna.shape[0], X_atac.shape[0])
-                
-                for g, gene in tqdm(enumerate(mdd_rna_sampled_group.var_names), total=len(mdd_rna_sampled_group.var_names), desc="Computing Kendall correlations"):
-                    x_rna = X_rna[g,:]
-                    X_rna_g = x_rna.repeat(len(X_atac), 1)
-                    corrs_g, p_values_g = kendall_rank_corrcoef(X_rna_g.T.cuda(), X_atac.T.cuda(), variant='b', t_test=True, alternative='less')
-                    corr[g,:] = corrs_g.detach().cpu()
-                    p_values[g,:] = p_values_g.detach().cpu()
+                    p_values[p_values==0] = 1e-5
+                    p_values[p_values==1] = 1-1e-5
 
-                p_values[p_values==0] = 1e-5
-                p_values[p_values==1] = 1-1e-5
+                    z_scores = norm.ppf(p_values)
 
-                z_scores = norm.ppf(p_values)
+                    genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+                    n_dict[sex][celltype][condition] = X_rna.shape[1]
 
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                n_dict[sex][celltype][condition] = X_rna.shape[1]
+                elif do_corrs_or_cosines == 'cosines':
 
-            elif do_corrs_or_cosines == 'cosines':
+                    ## normalize gene expression and chromatin accessibility
+                    X_rna = torch.nn.functional.normalize(X_rna, p=2, dim=1)
+                    X_atac = torch.nn.functional.normalize(X_atac, p=2, dim=1)
 
-                ## normalize gene expression and chromatin accessibility
-                X_rna = torch.nn.functional.normalize(X_rna, p=2, dim=1)
-                X_atac = torch.nn.functional.normalize(X_atac, p=2, dim=1)
+                    ## correlate gene expression with chromatin accessibility
+                    cosine = torch.matmul(X_atac, X_rna.T)
+                    genes_by_peaks_corrs_dict[sex][celltype][condition] = cosine
 
-                ## correlate gene expression with chromatin accessibility
-                cosine = torch.matmul(X_atac, X_rna.T)
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = cosine
-
-        break
 else:
     import pickle
     with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
@@ -2057,7 +2058,7 @@ from scipy.optimize import minimize
 lr = np.array(LR)
 
 # 2) Compute subset of empirical quantiles:
-max_null_quantile = 0.75
+max_null_quantile = 0.5
 
 probs = np.linspace(0.05, max_null_quantile, 10)
 emp_q = np.quantile(lr, probs)
@@ -2156,89 +2157,15 @@ scglue.genomics.write_links(
 tg_dist_counts_sorted = mean_grn_df_filtered.groupby('TG')[['dist']].mean().merge(mean_grn_df_filtered['TG'].value_counts(), left_index=True, right_on='TG').sort_values('dist').head(20)
 display(tg_dist_counts_sorted)
 
-gene = 'SCD'
+gene = 'ACTR3'
 tg_grn = mean_grn_df_filtered[mean_grn_df_filtered['TG']==gene].sort_values('dist')[['enhancer','dist','lrCorr']].groupby('enhancer').mean()
 tg_grn_bounds = np.stack(tg_grn.index.str.split(':|-')).flatten()
-tg_grn_bounds = [int(bound) for bound in tg_grn_bounds if bound.isdigit()]
+tg_grn_bounds = [int(bound) for bound in tg_grn_bounds if bound.isdigit()] + [genes.loc[gene, 'chromStart'].drop_duplicates().values[0]] + [genes.loc[gene, 'chromEnd'].drop_duplicates().values[0]]
 display(tg_grn)
-print('min: {} max: {}'.format(min(tg_grn_bounds), max(tg_grn_bounds)))
-print(genes.loc[gene][['chrom','chromStart','chromEnd','name']])
+print(f'{genes.loc[gene, "chrom"].drop_duplicates().values[0]}:{min(tg_grn_bounds)}-{max(tg_grn_bounds)}')
+print(genes.loc[gene,['chrom','chromStart','chromEnd','name']].drop_duplicates())
 
-#!pyGenomeTracks --tracks tracks.ini --region chr7:128027070-128043058 -o tracks.png
-
-keep_tg = lr_filtered.sort_values()[-1:]
-keep_grn = mean_grn_df_filtered[mean_grn_df_filtered['TG'].isin(keep_tg.index)]
-keep_peaks = keep_grn['enhancer'].unique()
-keep_tf = keep_grn['TF'].unique()
-keep_all = np.concatenate([keep_tg.index, keep_peaks, keep_tf])
-
-mapping = {v: f'{v.split(":")[0]}-{vi}' for vi, v in enumerate(keep_peaks)}
-keep_peaks = [mapping[peak] for peak in keep_peaks]
-
-
-for tf, enhancer, motif_score_norm in mean_grn_df_filtered[['TF','enhancer','motif_score_norm']].drop_duplicates().itertuples(index=False):
-    # Process each unique TF-enhancer pair
-    #enhancer_name = mapping[enhancer]
-    mean_grn_filtered_graph.add_edge(tf, enhancer, weight=motif_score_norm)
-
-# collect only edges where source or target is in `keep`
-edges_to_keep = [
-    (u, v)
-    for u, v in mean_grn_filtered_graph.edges()
-    if (u in keep_all) and (v in keep_all)
-]
-
-subgraph = mean_grn_filtered_graph.edge_subgraph(edges_to_keep)
-subgraph_renamed = nx.relabel_nodes(subgraph, mapping, copy=True)
-
-from networkx.drawing.nx_agraph import graphviz_layout
-pos = graphviz_layout(
-    subgraph_renamed,
-    prog="dot"
-    # LR makes it left→right; you can omit for top→bottom
-)
-
-import matplotlib.pyplot as plt
-
-# Set figure size (in inches)
-plt.figure(figsize=(8, 12))  # wider and taller than default
-
-G = subgraph_renamed
-
-# 1. assign each node to a layer
-for n in G:
-    if n in keep_tf:
-        G.nodes[n]['layer'] = 0
-    elif n in keep_peaks:
-        G.nodes[n]['layer'] = 1
-    else:
-        G.nodes[n]['layer'] = 2
-
-# 2. compute the multipartite layout
-pos = nx.multipartite_layout(G, subset_key='layer')
-
-# rest of your drawing code
-nx.draw_networkx_nodes(G, pos,
-    nodelist=keep_tf,    node_color='skyblue',   node_size=1000)
-nx.draw_networkx_nodes(G, pos,
-    nodelist=keep_peaks, node_color='lightgreen', node_size=1000)
-nx.draw_networkx_nodes(G, pos,
-    nodelist=set(G) - set(keep_tf) - set(keep_peaks),
-    node_color='salmon', node_size=1000)
-
-nx.draw_networkx_labels(G, pos, font_size=8)
-nx.draw_networkx_edges(
-    G, pos,
-    arrowstyle='-|>',
-    arrowsize=8,
-    connectionstyle='arc3,rad=0.1'
-)
-
-plt.axis('off')
-plt.tight_layout()
-plt.show()
-
-
+#!pyGenomeTracks --tracks tracks.ini --region chr2:157304654-157336585 -o tracks.png
 
 #%% Get BrainGMT and filter for cortical genes
 
@@ -2348,9 +2275,9 @@ gp.dotplot(enr.res2d,
            show_ring=False)
 plt.show()
 
-#%%
+#%% isolated analysis for ASTON MDD pathways
 
-mdd_rna_female_celltype = mdd_rna_female[mdd_rna_female.obs[rna_cell_group] == celltype]
+mdd_rna_female_celltype = mdd_rna_female[mdd_rna_female.obs[rna_celltype_key] == celltype]
 sc.tl.rank_genes_groups(mdd_rna_female_celltype, groupby=rna_condition_key, reference='Control', method='wilcoxon')
 deg_celltype_df = sc.get.rank_genes_groups_df(mdd_rna_female_celltype, group='Case', key=deg_method)
 
@@ -2364,7 +2291,446 @@ deg_celltype_df_mdd_up = deg_celltype_df.set_index('names').loc[ASTON_MAJOR_DEPR
 
 ASTON_MAJOR_DEPRESSIVE_DISORDER_df = pd.concat([deg_celltype_df_mdd_dn, deg_celltype_df_mdd_up])
 
-#%%
+#%% TF-enhancer-TG-pathway visualization with networkx and dash-cytoscape
+
+pathway_name = 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN'
+pathway = enr.res2d[enr.res2d['Term'] == pathway_name]
+
+keep_tg = pathway.Genes.str.split(';').values[0]
+keep_grn = mean_grn_df_filtered[mean_grn_df_filtered['TG'].isin(keep_tg)]
+keep_peaks = keep_grn['enhancer'].unique()
+keep_tf = keep_grn['TF'].unique()
+keep_all = np.concatenate([[pathway_name], keep_tg, keep_peaks, keep_tf])
+
+mapping = {v: f'{v.split(":")[0]}-{vi}' for vi, v in enumerate(keep_peaks)}
+keep_peaks = [mapping[peak] for peak in keep_peaks]
+
+for tg in keep_tg:
+    mean_grn_filtered_graph.add_edge(tg, pathway_name, interaction='in_pathway', weight=pathway['Combined Score'].values[0])
+
+for tf, enhancer, motif_score_norm in mean_grn_df_filtered[['TF','enhancer','motif_score_norm']].drop_duplicates().itertuples(index=False):
+    mean_grn_filtered_graph.add_edge(tf, enhancer, interaction='binds', weight=motif_score_norm)
+
+# collect only edges where source or target is in `keep`
+edges_to_keep = [
+    (u, v)
+    for u, v in mean_grn_filtered_graph.edges()
+    if (u in keep_all) and (v in keep_all)
+]
+
+subgraph = mean_grn_filtered_graph.edge_subgraph(edges_to_keep)
+subgraph_renamed = nx.relabel_nodes(subgraph, mapping, copy=True)
+
+degree_dict = dict(subgraph_renamed.to_undirected().degree())
+
+import dash
+from dash import html
+import dash_cytoscape as cyto
+from dash.dependencies import Input, Output
+
+cyto.load_extra_layouts()
+
+# ─── (1) Convert NX → Cytoscape elements (no positions) ───
+def nx_to_cytoscape_elements(G, keep_tf, keep_peaks):
+    elements = []
+    for node, _ in G.nodes(data=True):
+        if node in keep_tf:
+            ntype = "tf"
+            layer = 0
+        elif node in keep_peaks:
+            ntype = "enhancer"
+            layer = 1
+        elif node in keep_tg:
+            ntype = "tg"
+            layer = 2
+        elif node == pathway_name:
+            ntype = "pathway"
+            layer = 3
+        elements.append({
+            "data": {
+                "id": str(node),
+                "label": str(node),
+                "type": ntype,
+                "layer": layer,
+            }
+        })
+    for u, v, edge_data in G.edges(data=True):
+        interaction = edge_data.get("interaction", "")
+        elements.append({
+            "data": {
+                "source": str(u),
+                "target": str(v),
+                "interaction": interaction
+            }
+        })
+    return elements
+
+elements = nx_to_cytoscape_elements(
+    G=subgraph_renamed,
+    keep_tf=set(keep_tf),
+    keep_peaks=set(keep_peaks)
+)
+
+import math
+
+# Set R_max = how big an outer circle you want (in pixels)
+R_max = 500.0
+
+# Precompute a mapping from node -> (x,y) position
+positions = {}
+
+node_layers = [element['data'].get('layer', np.nan) for element in elements]
+node_layers_unique = np.unique(node_layers)[:-1]
+layers_radii = {layer: R_max * ((max(node_layers_unique) - layer) / max(node_layers_unique)) for layer in node_layers_unique}
+
+for layer, radius in layers_radii.items():
+    nodes_in_layer = [element['data'].get('id', None) for element in elements if element['data'].get('layer', None) == layer]
+    N = len(nodes_in_layer)
+    for i, node in enumerate(nodes_in_layer):
+        θ = 2 * math.pi * (i / float(N))
+        x = radius * math.cos(θ)
+        y = radius * math.sin(θ)
+        positions[node] = {"x": x, "y": y}
+
+positions_df = pd.DataFrame(positions).T.dropna()
+sns.scatterplot(data=positions_df, x='x', y='y')
+
+for element in elements:
+    if 'id' in element['data']:
+        element['data']['position'] = positions[element['data']['id']]
+
+import json
+subgraph_renamed_cy = nx.cytoscape_data(subgraph_renamed)
+with open(os.path.join(os.environ['OUTPATH'], 'subgraph_renamed_cy.json'), 'w') as f:
+    json.dump(subgraph_renamed_cy, f)
+
+
+# ─── (2) Stylesheet ───
+stylesheet = [
+    {
+        "selector": 'node[type = "tf"]',
+        "style": {
+            "shape": "diamond",
+            "background-color": "#1f77b4",
+            "label": "data(label)",
+            "width": 50,
+            "height": 50,
+            "font-size": 8,
+            "color": "#ffffff"
+        }
+    },
+    {
+        "selector": 'node[type = "enhancer"]',
+        "style": {
+            "shape": "triangle",
+            "background-color": "#2ca02c",
+            "label": "data(label)",
+            "width": 40,
+            "height": 40,
+            "font-size": 8,
+            "color": "#ffffff"
+        }
+    },
+    {
+        "selector": 'node[type = "tg"]',
+        "style": {
+            "shape": "ellipse",
+            "background-color": "#d62728",
+            "label": "data(label)",
+            "width": 45,
+            "height": 45,
+            "font-size": 8,
+            "color": "#ffffff"
+        }
+    },
+    {
+        "selector": 'node[type = "pathway"]',
+        "style": {
+            "shape": "rectangle",
+            "background-color": "#9467bd",
+            "label": "data(label)",
+            "width": 45,
+            "height": 45,
+            "font-size": 8,
+            "color": "#ffffff"
+        }
+    },
+    {
+        "selector": 'edge[interaction = "binds"]',
+        "style": {
+            "line-color": "#9467bd",
+            "target-arrow-color": "#9467bd",
+            "target-arrow-shape": "triangle",
+            "curve-style": "bezier",
+            "width": 2
+        }
+    },
+    {
+        "selector": 'edge[interaction = "activates"]',
+        "style": {
+            "line-color": "#d62728",
+            "target-arrow-color": "#d62728",
+            "target-arrow-shape": "triangle",
+            "curve-style": "bezier",
+            "width": 2
+        }
+    },
+    {
+        "selector": "node:hover",
+        "style": {
+            "border-color": "#000000",
+            "border-width": 3
+        }
+    }
+]
+
+
+# ─── (3) Choose a dagre layout for left→right flow ───
+layout = {
+    "name": "cose-bilkent",
+    "randomize": False,
+}
+
+# ─── (4) Build the Dash app ───
+
+app = dash.Dash(__name__)
+app.layout = html.Div([
+    cyto.Cytoscape(
+        id="grn-network",
+        elements=elements,
+        layout=layout,
+        stylesheet=stylesheet,
+        style={"width": "100%", "height": "700px"},
+    ),
+    html.Div(
+        id="node-data-display",
+        style={
+            "marginTop": "20px",
+            "padding": "10px",
+            "border": "1px solid #ccc"
+        },
+        children="Click on a node to see its type"
+    )
+])
+
+# ─── (5) Callback to show node info on click ───
+@app.callback(
+    Output("node-data-display", "children"),
+    Input("grn-network", "tapNodeData")
+)
+def display_node_info(node_data):
+    if not node_data:
+        return "Click on a node to see its type"
+    return f"Node ID: {node_data['id']}  •  Type: {node_data['type']}"
+
+if __name__ == "__main__":
+    app.run(debug=True)
+
+
+ # %% TF-gene-T
+import dash
+from dash import html
+import dash_cytoscape as cyto
+from dash.dependencies import Input, Output
+
+# ─── (1) Convert NX → Cytoscape elements (no positions) ───
+def nx_to_cytoscape_elements(G, keep_tf, keep_peaks):
+    elements = []
+    for node, data in G.nodes(data=True):
+        if node in keep_tf:
+            ntype = "tf"
+        elif node in keep_peaks:
+            ntype = "enhancer"
+        else:
+            ntype = "tg"
+        elements.append({
+            "data": {
+                "id": str(node),
+                "label": str(node),
+                "type": ntype
+            }
+        })
+    for u, v, edge_data in G.edges(data=True):
+        interaction = edge_data.get("interaction", "")
+        elements.append({
+            "data": {
+                "source": str(u),
+                "target": str(v),
+                "interaction": interaction
+            }
+        })
+    return elements
+
+elements = nx_to_cytoscape_elements(
+    G=subgraph_renamed,
+    keep_tf=set(keep_tf),
+    keep_peaks=set(keep_peaks)
+)
+
+# ─── (2) Stylesheet ───
+stylesheet = [
+    {
+        "selector": 'node[type = "tf"]',
+        "style": {
+            "shape": "diamond",
+            "background-color": "#1f77b4",
+            "label": "data(label)",
+            "width": 50,
+            "height": 50,
+            "font-size": 8,
+            "color": "#ffffff"
+        }
+    },
+    {
+        "selector": 'node[type = "enhancer"]',
+        "style": {
+            "shape": "triangle",
+            "background-color": "#2ca02c",
+            "label": "data(label)",
+            "width": 40,
+            "height": 40,
+            "font-size": 8,
+            "color": "#ffffff"
+        }
+    },
+    {
+        "selector": 'node[type = "tg"]',
+        "style": {
+            "shape": "ellipse",
+            "background-color": "#d62728",
+            "label": "data(label)",
+            "width": 45,
+            "height": 45,
+            "font-size": 8,
+            "color": "#ffffff"
+        }
+    },
+    {
+        "selector": 'edge[interaction = "binds"]',
+        "style": {
+            "line-color": "#9467bd",
+            "target-arrow-color": "#9467bd",
+            "target-arrow-shape": "triangle",
+            "curve-style": "bezier",
+            "width": 2
+        }
+    },
+    {
+        "selector": 'edge[interaction = "activates"]',
+        "style": {
+            "line-color": "#d62728",
+            "target-arrow-color": "#d62728",
+            "target-arrow-shape": "triangle",
+            "curve-style": "bezier",
+            "width": 2
+        }
+    },
+    {
+        "selector": "node:hover",
+        "style": {
+            "border-color": "#000000",
+            "border-width": 3
+        }
+    }
+]
+
+# ─── (3) Choose a dagre layout for left→right flow ───
+layout = {
+    "name": "dagre",
+    "rankDir": "LR",
+    "nodeSep": 50,
+    "rankSep": 100,
+    "edgeSep": 10
+}
+
+# ─── (4) Build the Dash app ───
+app = dash.Dash(__name__)
+
+app.layout = html.Div([
+    cyto.Cytoscape(
+        id="grn-network",
+        elements=elements,
+        layout=layout,
+        stylesheet=stylesheet,
+        style={"width": "100%", "height": "700px"}
+    ),
+    html.Div(
+        id="node-data-display",
+        style={
+            "marginTop": "20px",
+            "padding": "10px",
+            "border": "1px solid #ccc"
+        },
+        children="Click on a node to see its type"
+    )
+])
+
+# ─── (5) Callback to show node info on click ───
+@app.callback(
+    Output("node-data-display", "children"),
+    Input("grn-network", "tapNodeData")
+)
+def display_node_info(node_data):
+    if not node_data:
+        return "Click on a node to see its type"
+    return f"Node ID: {node_data['id']}  •  Type: {node_data['type']}"
+
+if __name__ == "__main__":
+    app.run(debug=True)
+
+'''
+from networkx.drawing.nx_agraph import graphviz_layout
+pos = graphviz_layout(
+    subgraph_renamed,
+    prog="dot"
+    # LR makes it left→right; you can omit for top→bottom
+)
+
+# Set figure size (in inches)
+plt.figure(figsize=(8, 8))  # wider and taller than default
+
+G = subgraph_renamed
+
+# 1. assign each node to a layer
+for n in G:
+    if n in keep_tf:
+        G.nodes[n]['layer'] = 0
+    elif n in keep_peaks:
+        G.nodes[n]['layer'] = 1
+    else:
+        G.nodes[n]['layer'] = 2
+
+# 2. compute the multipartite layout
+pos = nx.multipartite_layout(G, subset_key='layer')
+
+# rest of your drawing code
+nx.draw_networkx_nodes(G, pos,
+    nodelist=keep_tf,    node_color='skyblue',   node_size=1000)
+nx.draw_networkx_nodes(G, pos,
+    nodelist=keep_peaks, node_color='lightgreen', node_size=1000)
+nx.draw_networkx_nodes(G, pos,
+    nodelist=set(G) - set(keep_tf) - set(keep_peaks),
+    node_color='salmon', node_size=1000)
+
+nx.draw_networkx_labels(G, pos, font_size=8)
+nx.draw_networkx_edges(
+    G, pos,
+    arrowstyle='-|>',
+    arrowsize=8,
+    connectionstyle='arc3,rad=0.1'
+)
+
+plt.axis('off')
+plt.tight_layout()
+plt.show()
+'''
+
+
+#%% TF-enhancer-TG-pathway visualization
+
+
+
+#%% visualize overlap between pathways
 import networkx as nx
 
 nodes, edges = gp.enrichment_map(pre_res.res2d,
