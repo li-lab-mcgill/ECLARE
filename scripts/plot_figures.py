@@ -29,12 +29,14 @@ import seaborn as sns
 import numpy as np
 import math
 import torch
-from ot import solve as ot_solve
 from collections import defaultdict
 from string import ascii_uppercase
 import pybedtools
 from types import SimpleNamespace
 from tqdm import tqdm
+from glob import glob
+from datetime import datetime
+import pickle
 
 from mlflow.tracking import MlflowClient
 import mlflow.pytorch
@@ -43,11 +45,46 @@ from mlflow.models import Model
 from eclare.models import load_CLIP_model, CLIP
 from eclare.setup_utils import mdd_setup
 from eclare.post_hoc_utils import get_latents, sample_proportional_celltypes_and_condition, plot_umap_embeddings, create_celltype_palette
+from eclare.data_utils import get_unified_grns, filter_mean_grn, get_scompreg_loglikelihood
 
-from datetime import datetime
-from glob import glob
+from ot import solve as ot_solve
 import SEACells
 import scanpy as sc
+import scglue
+import networkx as nx
+from pyjaspar import jaspardb
+import pyranges as pr
+import gseapy as gp
+from Bio.motifs.jaspar import calculate_pseudocounts
+from sklearn.model_selection import StratifiedShuffleSplit
+from umap import UMAP
+from torchmetrics.functional import kendall_rank_corrcoef
+from scipy.stats import norm, linregress
+
+def cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd'):
+
+    if type == 'emd':
+        res = ot_solve(1 - student_logits)
+        plan = res.plan
+        value = res.value_linear
+
+    elif type == 'partial':
+        a, b = torch.ones((len(student_logits.shape[0]),)) / len(student_logits.shape[0]), torch.ones((len(student_logits.shape[1]),)) / len(student_logits.shape[1])
+        mass = 1 - (a[0] * cells_gap).item()
+        plan = ot.partial.partial_wasserstein(a, b, 1-student_logits, m=mass)
+
+    if student_logits.shape[0] > student_logits.shape[1]:
+        keep_atac_cells = plan.max(1).values.argsort()[cells_gap:].sort().values.detach().cpu().numpy()
+        atac_latents = atac_latents[keep_atac_cells]
+        mdd_atac_sampled_group = mdd_atac_sampled_group[keep_atac_cells]
+    else:
+        keep_rna_cells = plan.max(0).values.argsort()[cells_gap:].sort().values.detach().cpu().numpy()
+        rna_latents = rna_latents[keep_rna_cells]
+        mdd_rna_sampled_group = mdd_rna_sampled_group[keep_rna_cells]
+
+    student_logits = torch.matmul(atac_latents, rna_latents.T)
+
+    return mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits
 
 def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key='X_umap', n_SEACells=None):
 
@@ -1304,8 +1341,8 @@ rna  = anndata.read_h5ad(rna_fullpath, backed='r')
 
 rna_full = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna.h5ad'), backed='r')
 
-mdd_atac = atac[::10].to_memory()
-mdd_rna = rna[::10].to_memory()
+mdd_atac = atac[::1].to_memory()
+mdd_rna = rna[::1].to_memory()
 
 mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
 
@@ -1362,7 +1399,12 @@ mdd_rna_female = mdd_rna[mdd_rna.obs[rna_sex_key] == 'Female']
 
 sc.tl.rank_genes_groups(mdd_rna_female, rna_condition_key, reference='Control', method=deg_method, key_added=deg_method, pts=True)
 sc.pl.rank_genes_groups(mdd_rna_female, n_genes=25, sharey=False, key = deg_method)
-sc.pl.rank_genes_groups_violin(mdd_rna_female, n_genes=10, key=deg_method)
+
+fig, ax = plt.subplots(3,1, figsize=[10,9])
+sc.pl.rank_genes_groups_violin(mdd_rna_female, n_genes=10, key=deg_method, strip=False, show=False, ax=ax[0]); ax[0].set_title('all')
+sc.pl.rank_genes_groups_violin(mdd_rna_female[mdd_rna_female.obs[rna_celltype_key]=='Mic'], n_genes=10, key=deg_method, strip=False, show=False, ax=ax[1]); ax[1].set_title('microglia')
+sc.pl.rank_genes_groups_violin(mdd_rna_female[mdd_rna_female.obs[rna_celltype_key]=='InN'], n_genes=10, key=deg_method, strip=False, show=False, ax=ax[2]); ax[2].set_title('inhibitory neurons')
+fig.tight_layout(); fig.show()
 
 ## get DEG genes
 deg_df = sc.get.rank_genes_groups_df(mdd_rna_female, group='Case', key=deg_method)
@@ -1374,13 +1416,6 @@ sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_condition_key)
 
 
 #%% Get mean GRN from brainSCOPE & scglue preprocessing
-
-from eclare.data_utils import get_unified_grns, filter_mean_grn, get_scompreg_loglikelihood
-import scglue
-import networkx as nx
-from pyjaspar import jaspardb
-import pyranges as pr
-from Bio.motifs.jaspar import calculate_pseudocounts
 
 grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
 mean_grn_df = get_unified_grns(grn_path)
@@ -1536,11 +1571,9 @@ _, fig, rna_atac_df_umap = plot_umap_embeddings(eclare_rna_latents, eclare_atac_
 
 #%% get peak-gene correlations
 
-from sklearn.model_selection import StratifiedShuffleSplit
-from umap import UMAP
-from torchmetrics.functional import kendall_rank_corrcoef
-from scipy.stats import norm, linregress
-import gseapy as gp
+with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
+    all_dicts = pickle.load(f)
+mean_grn_df = all_dicts[-1]
 
 
 def tree(): return defaultdict(tree)
@@ -1580,10 +1613,10 @@ for celltype in deg_overlap_df.index:
 deg_overlap_grouped_df = deg_overlap_df.groupby('unique_celltype').sum()
 display(deg_overlap_grouped_df.sort_values(by='Case', ascending=False).T)
 
-do_corrs_or_cosines = 'correlations'
+do_corrs_or_cosines = 'sc-compReg'
 
 ## define sex and celltype
-sex='Female'; celltype='Ex'
+sex='Female'; celltype='Mic'
 
 ## get HVG features
 '''
@@ -1594,31 +1627,6 @@ sc.pp.highly_variable_genes(mdd_atac, n_top_genes=10000)
 genes_indices_hvg = mdd_rna.var['highly_variable'].astype(bool)
 peaks_indices_hvg = mdd_atac.var['highly_variable'].astype(bool)
 '''
-
-def cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd'):
-
-    if type == 'emd':
-        res = ot_solve(1 - student_logits)
-        plan = res.plan
-        value = res.value_linear
-
-    elif type == 'partial':
-        a, b = torch.ones((len(student_logits.shape[0]),)) / len(student_logits.shape[0]), torch.ones((len(student_logits.shape[1]),)) / len(student_logits.shape[1])
-        mass = 1 - (a[0] * cells_gap).item()
-        plan = ot.partial.partial_wasserstein(a, b, 1-student_logits, m=mass)
-
-    if student_logits.shape[0] > student_logits.shape[1]:
-        keep_atac_cells = plan.max(1).values.argsort()[cells_gap:].sort().values.detach().cpu().numpy()
-        atac_latents = atac_latents[keep_atac_cells]
-        mdd_atac_sampled_group = mdd_atac_sampled_group[keep_atac_cells]
-    else:
-        keep_rna_cells = plan.max(0).values.argsort()[cells_gap:].sort().values.detach().cpu().numpy()
-        rna_latents = rna_latents[keep_rna_cells]
-        mdd_rna_sampled_group = mdd_rna_sampled_group[keep_rna_cells]
-
-    student_logits = torch.matmul(atac_latents, rna_latents.T)
-
-    return mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits
 
 
 if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl')):
@@ -1904,348 +1912,142 @@ with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'wb') as 
 
 #%% get MDD-association gene scores
 
-gene_candidates_dict = tree()
-gene_candidates_dict['Female']['Mic'] = ['ROBO2', 'SLIT3', 'ADAMSTL1', 'THSD4', 'SPP1', 'SOCS3', 'GAS6', 'MERTK']
-gene_candidates_dict['Female']['InN'] = gene_candidates_dict['Female']['Mic']
+## pre-computed log likelihoods
+scompreg_loglikelihoods_case_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['Case']
+scompreg_loglikelihoods_control_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['Control']
+scompreg_loglikelihoods_all_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['all']
+
+scompreg_loglikelihoods_precomputed_df = pd.DataFrame({
+    'case': scompreg_loglikelihoods_case_precomputed,
+    'control': scompreg_loglikelihoods_control_precomputed,
+    'all': scompreg_loglikelihoods_all_precomputed
+})
+genes_names = scompreg_loglikelihoods_precomputed_df.index
+
+LR_precomputed = -2 * (scompreg_loglikelihoods_precomputed_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
+
+## re-computed log likelihoods and confirm that same as pre-computed
+for condition in ['Case', 'Control']:
+
+    tfrps               = tfrps_dict[sex][celltype][condition]
+    tg_expressions      = tg_expressions_dict[sex][celltype][condition]
+
+    for gene in tqdm(genes_names):
+
+        log_gaussian_likelihood_pre = scompreg_loglikelihoods_dict[sex][celltype][condition][gene]
+        if np.isnan(log_gaussian_likelihood_pre):
+            continue
+
+        tfrp                = tfrps.loc[:,gene].values.astype(float)
+        tg_expression       = tg_expressions.loc[:,gene].values.astype(float)
+
+        ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
+        slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
+        tfrp_prediction = slope * tg_expression + intercept
+
+        ## compute residuals and variance
+        n = len(tfrp)
+        sq_residuals = (tfrp - tfrp_prediction)**2
+        var = sq_residuals.sum() / n
+        log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
+
+        diff = np.abs(log_gaussian_likelihood - log_gaussian_likelihood_pre)
+        assert diff < 1e-6
+
+## re-compute log likelihoods for pooled conditions
+tfrps_all = pd.concat([ tfrps_dict[sex][celltype]['Case'], tfrps_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
+tg_expressions_all = pd.concat([ tg_expressions_dict[sex][celltype]['Case'], tg_expressions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
+tfrp_predictions_all = pd.concat([ tfrp_predictions_dict[sex][celltype]['Case'], tfrp_predictions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
+
+## compute correlation between tfrp predictions and tfrps - could potential use to filter genes
+tfrp_corrs = tfrp_predictions_all.corrwith(tfrps_all, method='kendall')
+tfrp_corrs = tfrp_corrs.dropna()
+
+diffs_all = []
+scompreg_loglikelihoods_all = {}
+
+for gene in tqdm(genes_names):
+
+    tfrp = tfrps_all.loc[:,gene].values.astype(float)
+    tg_expression = tg_expressions_all.loc[:,gene].values.astype(float)
+
+    try:
+        slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
+        tfrp_predictions = slope * tg_expression + intercept
+    except:
+        print(f'{gene} has no variance in tg_expression')
+        tfrp_predictions = np.ones_like(tg_expression) * np.nan
+        log_gaussian_likelihood = np.array([np.nan])
+    else:
+        n = len(tfrp)
+        sq_residuals = (tfrp - tfrp_predictions)**2
+        var = sq_residuals.sum() / n
+        log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
+    finally:
+        scompreg_loglikelihoods_all[gene] = log_gaussian_likelihood
+
+    #diff = np.abs(log_gaussian_likelihood - scompreg_loglikelihoods_dict[sex][celltype]['all'][gene])
+    #diffs_all.append(diff)
+
+## collect all log likelihoods
+scompreg_loglikelihoods_df = pd.DataFrame({
+    'case': scompreg_loglikelihoods_case_precomputed,
+    'control': scompreg_loglikelihoods_control_precomputed,
+    'all': scompreg_loglikelihoods_all
+}).dropna() # drop rows with nan
+
+## extract gene names from dataframe since some genes were dropped due to nan
+genes_names = scompreg_loglikelihoods_df.index
+
+## compute log likelihood ratio LR
+LR = -2 * (scompreg_loglikelihoods_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
+
+## apply Wilson-Hilferty cube-root transformation
+dof = 3
+Z = (9*dof/2)**(1/2) * ( (LR/dof)**(1/3) - (1 - 2/(9*dof)) )
+
+## Hawkins & Wixley 1986
+lambd = 0.2887  # optimal value for dof=3
+Z = (LR**lambd - 1) / lambd
+
+## Recenter Z distribution
+Z = Z - np.median(Z)
+
+if (LR < 0).any():
+    print(f'LR is negative for {celltype} {sex}')
 
-hits_idxs_dict = tree()
-from scipy.stats import norm
+## Compute t-statistic between regression slopes
+slopes_case = slopes_dict[sex][celltype]['Case']
+slopes_control = slopes_dict[sex][celltype]['Control']
 
-score_type = 'sc-compReg'
+std_errs_case = std_errs_dict[sex][celltype]['Case']
+std_errs_control = std_errs_dict[sex][celltype]['Control']
 
-for sex in unique_sexes:
-    for celltype in unique_celltypes:
+t_df = pd.DataFrame({
+    'case': slopes_case,
+    'control': slopes_control,
+    'std_err_case': std_errs_case,
+    'std_err_control': std_errs_control
+}).dropna()
 
-        #celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id'].str.startswith(celltype)]
-        celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
+t_slopes = (t_df['case'] - t_df['control']) / np.sqrt(t_df['std_err_case']**2 + t_df['std_err_control']**2)
+t_slopes = t_slopes.dropna() # might have residual nan due to std_err being 0
 
-        #genes_names = mdd_rna.var_names[mdd_rna.var_names.isin(celltype_degs_df['gene'])]
-        genes_names = genes_peaks_dict['genes']
+## compute correlation between LR and absolute value of slopes t-statistic
+LR.name = 'LR'
+t_slopes.name = 't_slopes'
+LR_t_df = pd.merge(left=LR, right=t_slopes.abs(), left_index=True, right_index=True, how='inner')
+LR_t_corr = LR_t_df.corr(method='spearman')['LR']['t_slopes']
+print(f'Correlation between LR and absolute value of slopes t-statistic: {LR_t_corr:.2f}')
 
-        corr_case = genes_by_peaks_corrs_dict[sex][celltype]['Case']
-        corr_control = genes_by_peaks_corrs_dict[sex][celltype]['Control']
+## separate up and down LR and Z based on sign of t-statistic
+LR_up = LR[t_slopes > 0]
+LR_down = LR[t_slopes < 0]
 
-        corr_case = corr_case.numpy()
-        corr_control = corr_control.numpy()
+Z_up = Z[t_slopes > 0]
+Z_down = Z[t_slopes < 0]
 
-        genes_by_peaks_masks_case = genes_by_peaks_masks_dict[sex][celltype]['Case']
-        genes_by_peaks_masks_control = genes_by_peaks_masks_dict[sex][celltype]['Control']
 
-        corr_case[genes_by_peaks_masks_case==0] = 0
-        corr_control[genes_by_peaks_masks_control==0] = 0
-        
-        if score_type == 'corrdiff':
-
-            corrdiff = corr_case - corr_control
-            corrdiff_genes = (corrdiff**2).sum(axis=1)
-            chi2 = corrdiff_genes / np.sqrt(len(corrdiff_genes))
-
-        elif score_type == 'logfc':
-
-            logcorr_case = np.log1p(corr_case)
-            logcorr_control = np.log1p(corr_control)
-
-            logfc = logcorr_case - logcorr_control
-            logfc_genes = (logfc**2).sum(axis=1)
-            chi2 = logfc_genes / np.sqrt(len(logfc_genes))
-
-        elif score_type == 'fisher':
-
-            fisher_case = np.arctanh(corr_case)
-            fisher_control = np.arctanh(corr_control)
-
-            fisher_sums_case = np.sum(fisher_case, axis=1)
-            fisher_sums_control = np.sum(fisher_control, axis=1)
-
-            K_case = genes_by_peaks_masks_case.sum(1)
-            K_control = genes_by_peaks_masks_control.sum(1)
-            
-            n_case = n_dict[sex][celltype]['Case']
-            n_control = n_dict[sex][celltype]['Control']
-
-            fisher_sums_var_case = K_case / (n_case - 3)
-            fisher_sums_var_control = K_control / (n_control - 3)
-
-            Z = (fisher_sums_case - fisher_sums_control) / np.sqrt(fisher_sums_var_case + fisher_sums_var_control)
-            chi2 = Z**2
-
-            p_value = 2 * (1 - norm.cdf(abs(Z)))
-            p_value_threshold = 0.05 / K_case
-            hits_idxs = np.where(p_value < p_value_threshold)[0]
-
-            hits_idxs_dict[sex][celltype] = hits_idxs
-
-        elif score_type == 'kendall':
-
-            corr_case = np.arctanh(corr_case)
-            corr_control = np.arctanh(corr_control)
-
-            ## get weights from distance mask
-            weights_case = genes_by_peaks_masks_case.copy()
-            weights_control = genes_by_peaks_masks_control.copy()
-            assert (weights_case==weights_control).all()
-
-            #weights_case /= weights_case.sum(0)[None,:]
-            #weights_control /= weights_control.sum(0)[None,:]
-
-            weights_case[np.isnan(weights_case)] = 0
-            weights_control[np.isnan(weights_control)] = 0
-
-            ## corrs linearly correlated with z-scores
-            kendall_sums_case = corr_case.copy()
-            kendall_sums_control = corr_control.copy()
-
-            K_case = (weights_case**2).sum(1)
-            K_control = (weights_control**2).sum(1)
-
-            diffs = kendall_sums_case - kendall_sums_control
-            diffs_weights = diffs * weights_case
-            Z = np.array([max(diffs_weights[i], key=lambda x: x**2) for i in range(len(diffs_weights))])
-            #Z = (np.power( diffs * weights_case, 2)).sum(1) / np.sqrt(K_case + K_control)
-            Z[np.isnan(Z)] = 0
-
-            chi2 = Z**2
-
-        elif score_type == 'sc-compReg':
-
-            ## pre-computed log likelihoods
-            scompreg_loglikelihoods_case_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['Case']
-            scompreg_loglikelihoods_control_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['Control']
-            scompreg_loglikelihoods_all_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['all']
-
-            scompreg_loglikelihoods_precomputed_df = pd.DataFrame({
-                'case': scompreg_loglikelihoods_case_precomputed,
-                'control': scompreg_loglikelihoods_control_precomputed,
-                'all': scompreg_loglikelihoods_all_precomputed
-            })
-            genes_names = scompreg_loglikelihoods_precomputed_df.index
-
-            LR_precomputed = -2 * (scompreg_loglikelihoods_precomputed_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
-
-            ## re-computed log likelihoods and confirm that same as pre-computed
-            for condition in ['Case', 'Control']:
-
-                tfrps               = tfrps_dict[sex][celltype][condition]
-                tg_expressions      = tg_expressions_dict[sex][celltype][condition]
-
-                for gene in tqdm(genes_names):
-
-                    log_gaussian_likelihood_pre = scompreg_loglikelihoods_dict[sex][celltype][condition][gene]
-                    if np.isnan(log_gaussian_likelihood_pre):
-                        continue
-
-                    tfrp                = tfrps.loc[:,gene].values.astype(float)
-                    tg_expression       = tg_expressions.loc[:,gene].values.astype(float)
-
-                    ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
-                    slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
-                    tfrp_prediction = slope * tg_expression + intercept
-
-                    ## compute residuals and variance
-                    n = len(tfrp)
-                    sq_residuals = (tfrp - tfrp_prediction)**2
-                    var = sq_residuals.sum() / n
-                    log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
-
-                    diff = np.abs(log_gaussian_likelihood - log_gaussian_likelihood_pre)
-                    assert diff < 1e-6
-
-            ## re-compute log likelihoods for pooled conditions
-            tfrps_all = pd.concat([ tfrps_dict[sex][celltype]['Case'], tfrps_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
-            tg_expressions_all = pd.concat([ tg_expressions_dict[sex][celltype]['Case'], tg_expressions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
-            tfrp_predictions_all = pd.concat([ tfrp_predictions_dict[sex][celltype]['Case'], tfrp_predictions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
-
-            ## compute correlation between tfrp predictions and tfrps - could potential use to filter genes
-            tfrp_corrs = tfrp_predictions_all.corrwith(tfrps_all, method='kendall')
-            tfrp_corrs = tfrp_corrs.dropna()
-
-            diffs_all = []
-            scompreg_loglikelihoods_all = {}
-
-            for gene in tqdm(genes_names):
-
-                tfrp = tfrps_all.loc[:,gene].values.astype(float)
-                tg_expression = tg_expressions_all.loc[:,gene].values.astype(float)
-
-                try:
-                    slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
-                    tfrp_predictions = slope * tg_expression + intercept
-                except:
-                    print(f'{gene} has no variance in tg_expression')
-                    tfrp_predictions = np.ones_like(tg_expression) * np.nan
-                    log_gaussian_likelihood = np.array([np.nan])
-                else:
-                    n = len(tfrp)
-                    sq_residuals = (tfrp - tfrp_predictions)**2
-                    var = sq_residuals.sum() / n
-                    log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
-                finally:
-                    scompreg_loglikelihoods_all[gene] = log_gaussian_likelihood
-
-                #diff = np.abs(log_gaussian_likelihood - scompreg_loglikelihoods_dict[sex][celltype]['all'][gene])
-                #diffs_all.append(diff)
-
-            ## collect all log likelihoods
-            scompreg_loglikelihoods_df = pd.DataFrame({
-                'case': scompreg_loglikelihoods_case_precomputed,
-                'control': scompreg_loglikelihoods_control_precomputed,
-                'all': scompreg_loglikelihoods_all
-            }).dropna() # drop rows with nan
-
-            ## extract gene names from dataframe since some genes were dropped due to nan
-            genes_names = scompreg_loglikelihoods_df.index
-
-            ## compute log likelihood ratio LR
-            LR = -2 * (scompreg_loglikelihoods_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
-
-            ## apply Wilson-Hilferty cube-root transformation
-            dof = 3
-            Z = (9*dof/2)**(1/2) * ( (LR/dof)**(1/3) - (1 - 2/(9*dof)) )
-
-            ## Hawkins & Wixley 1986
-            lambd = 0.2887  # optimal value for dof=3
-            Z = (LR**lambd - 1) / lambd
-
-            ## Recenter Z distribution
-            Z = Z - np.median(Z)
-            
-            if (LR < 0).any():
-                print(f'LR is negative for {celltype} {sex}')
-
-            ## Compute t-statistic between regression slopes
-            slopes_case = slopes_dict[sex][celltype]['Case']
-            slopes_control = slopes_dict[sex][celltype]['Control']
-
-            std_errs_case = std_errs_dict[sex][celltype]['Case']
-            std_errs_control = std_errs_dict[sex][celltype]['Control']
-
-            t_df = pd.DataFrame({
-                'case': slopes_case,
-                'control': slopes_control,
-                'std_err_case': std_errs_case,
-                'std_err_control': std_errs_control
-            }).dropna()
-
-            t_slopes = (t_df['case'] - t_df['control']) / np.sqrt(t_df['std_err_case']**2 + t_df['std_err_control']**2)
-            t_slopes = t_slopes.dropna() # might have residual nan due to std_err being 0
-
-            ## compute correlation between LR and absolute value of slopes t-statistic
-            LR.name = 'LR'
-            t_slopes.name = 't_slopes'
-            LR_t_df = pd.merge(left=LR, right=t_slopes.abs(), left_index=True, right_index=True, how='inner')
-            LR_t_corr = LR_t_df.corr(method='spearman')['LR']['t_slopes']
-            print(f'Correlation between LR and absolute value of slopes t-statistic: {LR_t_corr:.2f}')
-
-            ## separate up and down LR and Z based on sign of t-statistic
-            LR_up = LR[t_slopes > 0]
-            LR_down = LR[t_slopes < 0]
-
-            Z_up = Z[t_slopes > 0]
-            Z_down = Z[t_slopes < 0]
-
-        elif score_type == 'ismb_cosine':
-
-            cosine_case = genes_by_peaks_corrs_dict[sex][celltype]['Case']
-            cosine_control = genes_by_peaks_corrs_dict[sex][celltype]['Control']
-
-            cosine_valid_comparison = (cosine_case!=0) * (cosine_control!=0)
-            cosine_case = cosine_case[cosine_valid_comparison]
-            cosine_control = cosine_control[cosine_valid_comparison]
-
-            log1p_fold_change = torch.log1p(cosine_case) - torch.log1p(cosine_control)
-
-            where_valid = np.where(cosine_valid_comparison)
-            genes_where_valid_idxs = where_valid[1]
-            logfc_sum_per_gene = np.bincount(genes_where_valid_idxs, weights=log1p_fold_change.abs())
-            logfc_mean_per_gene = logfc_sum_per_gene / np.bincount(genes_where_valid_idxs)
-
-            logfc_sum_per_gene_ranked_idxs = np.argsort(logfc_sum_per_gene)[::-1]
-            logfc_sum_per_gene_ranked_gene_names = mdd_rna.var_names[genes_indices][logfc_sum_per_gene_ranked_idxs]
-            logfc_sum_per_gene_matches = np.concatenate([logfc_sum_per_gene[genes_names == gene] for gene in gene_candidates_dict['Female']['Mic'] if logfc_sum_per_gene[genes_names == gene].size > 0])
-            #logfc_sum_per_gene_matches = np.concatenate([logfc_sum_per_gene[mdd_rna.var_names == gene] for gene in gene_candidates_dict['Female']['Mic'] if logfc_sum_per_gene[mdd_rna.var_names == gene].size > 0])
-
-            from scipy import stats
-            percentiles = [stats.percentileofscore(logfc_sum_per_gene, gene) for gene in logfc_sum_per_gene_matches]
-
-            # Filter genes with percentiles > 95
-            top_percentiles = [
-                (percentile, logfc_sum, gene)
-                for percentile, logfc_sum, gene in zip(percentiles, logfc_sum_per_gene_matches, gene_candidates_dict['Female']['Mic'])
-                if percentile > 95
-            ]
-
-            lower_percentiles = [
-                (percentile, logfc_sum, gene)
-                for percentile, logfc_sum, gene in zip(percentiles, logfc_sum_per_gene_matches, gene_candidates_dict['Female']['Mic'])
-                if percentile < 95
-            ]
-
-            # increase font size
-            plt.rcParams.update({'font.size': 12})
-
-            # Create a histogram
-            fig5 = plt.figure(figsize=(10, 5))
-            #plt.hist(logfc_sum_per_gene, bins=30, alpha=0.7, color='blue', edgecolor='black')
-            sns.histplot(logfc_sum_per_gene, stat='proportion')
-
-            # Annotate the histogram with top-percentile genes
-            for percentile, logfc_sum, gene in top_percentiles:
-                plt.axvline(logfc_sum, color='black', linestyle='--', label=f'{gene}: {percentile:.0f}th percentile')
-                plt.annotate(f'{gene}\n{percentile:.0f}%',  # Gene name with percentile below
-                            xy=(logfc_sum, plt.gca().get_ylim()[1] * 0.7),
-                            xytext=(logfc_sum + 5, plt.gca().get_ylim()[1] * 0.8),
-                            arrowprops=dict(facecolor='black', arrowstyle='->'),
-                            fontsize=12, color='black')
-
-            # Annotate the histogram with lower-percentile genes
-            for percentile, logfc_sum, gene in lower_percentiles:
-                offsetx = 25 if percentile == np.min([lp[0] for lp in lower_percentiles]) else 0
-                offsety = 0.025 if percentile == np.min([lp[0] for lp in lower_percentiles]) else 0
-                plt.axvline(logfc_sum, color='black', linestyle='--', label=f'{gene}: {percentile:.0f}th percentile')
-                plt.annotate(f'{gene}\n{percentile:.0f}%',  # Gene name with percentile below
-                            #xy=(logfc_sum, (plt.gca().get_ylim()[1] * percentile / 100) * 0.8 - offsety) ,
-                            #xytext=(logfc_sum + 2 + offsetx, (plt.gca().get_ylim()[1] * percentile / 100) - offsety) ,
-                            xy=(logfc_sum, plt.gca().get_ylim()[1] * 0.7),
-                            xytext=(logfc_sum + 5, plt.gca().get_ylim()[1] * 0.8),
-                            arrowprops=dict(facecolor='black', arrowstyle='->'),
-                            fontsize=12, color='black')
-
-            # Add labels and title
-            plt.xlabel("$\phi_g$", fontsize=12)
-            plt.ylabel("Frequency", fontsize=12)
-            plt.show()
-
-            fig5.savefig(os.path.join(figpath, f'fig5_cosine_histogram.png'), bbox_inches='tight', dpi=300)
-
-            '''
-            cosine_case_hit = (cosine_case==1) * (cosine_control!=1) * cosine_valid_comparison
-            cosine_control_hit = (cosine_control==1) * (cosine_case!=1) * cosine_valid_comparison
-
-            cosine_case_hit_by_gene = cosine_case_hit.sum(dim=0)
-            cosine_control_hit_by_gene = cosine_control_hit.sum(dim=0)
-
-            cosine_case_hit_ranked_idxs = cosine_case_hit_by_gene.argsort().flip(0)
-            cosine_case_hit_ranked_gene_names = mdd_rna.var_names[cosine_case_hit_ranked_idxs]
-
-            cosine_case_hit_idxs = torch.where(cosine_case_hit)
-            hits_idxs_dict[sex][celltype] = cosine_case_hit_idxs
-            
-
-            logfc_mean_per_gene_ranked_idxs = np.argsort(logfc_mean_per_gene)[::-1]
-            logfc_mean_per_gene_ranked_gene_names = mdd_rna.var_names[logfc_mean_per_gene_ranked_idxs]
-
-            log1p_fold_change = torch.log1p(cosine_case) - torch.log1p(cosine_control)
-            #log1p_fold_change = log1p_fold_change[cosine_valid_comparison]
-
-            nonzero_log1p_fold_change = log1p_fold_change[log1p_fold_change != 0]
-
-            num_comparisons = len(unique_celltypes)
-            corrected_percentile = 1 - (0.05 / num_comparisons)
-
-            log1p_fold_change_95th_percentile = torch.quantile(nonzero_log1p_fold_change, corrected_percentile)
-            '''
-        break
-    break
 
 #%% filter LR values with fitted null distribution (sc-compReg)
 from scipy.stats import gamma
@@ -2727,3 +2529,214 @@ def c_sweep(X, Y, c_range=[0.1, 0.5, 2, 10]):
 
     ax.legend()
     plt.show()
+
+#%%
+
+#gene_candidates_dict = tree()
+#gene_candidates_dict['Female']['Mic'] = ['ROBO2', 'SLIT3', 'ADAMSTL1', 'THSD4', 'SPP1', 'SOCS3', 'GAS6', 'MERTK']
+#gene_candidates_dict['Female']['InN'] = gene_candidates_dict['Female']['Mic']
+#hits_idxs_dict = tree()
+#from scipy.stats import norm
+
+score_type = 'sc-compReg'
+
+for sex in unique_sexes:
+    for celltype in unique_celltypes:
+
+        #celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id'].str.startswith(celltype)]
+        celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
+
+        #genes_names = mdd_rna.var_names[mdd_rna.var_names.isin(celltype_degs_df['gene'])]
+        genes_names = genes_peaks_dict['genes']
+
+        corr_case = genes_by_peaks_corrs_dict[sex][celltype]['Case']
+        corr_control = genes_by_peaks_corrs_dict[sex][celltype]['Control']
+
+        corr_case = corr_case.numpy()
+        corr_control = corr_control.numpy()
+
+        genes_by_peaks_masks_case = genes_by_peaks_masks_dict[sex][celltype]['Case']
+        genes_by_peaks_masks_control = genes_by_peaks_masks_dict[sex][celltype]['Control']
+
+        corr_case[genes_by_peaks_masks_case==0] = 0
+        corr_control[genes_by_peaks_masks_control==0] = 0
+        
+        if score_type == 'corrdiff':
+
+            corrdiff = corr_case - corr_control
+            corrdiff_genes = (corrdiff**2).sum(axis=1)
+            chi2 = corrdiff_genes / np.sqrt(len(corrdiff_genes))
+
+        elif score_type == 'logfc':
+
+            logcorr_case = np.log1p(corr_case)
+            logcorr_control = np.log1p(corr_control)
+
+            logfc = logcorr_case - logcorr_control
+            logfc_genes = (logfc**2).sum(axis=1)
+            chi2 = logfc_genes / np.sqrt(len(logfc_genes))
+
+        elif score_type == 'fisher':
+
+            fisher_case = np.arctanh(corr_case)
+            fisher_control = np.arctanh(corr_control)
+
+            fisher_sums_case = np.sum(fisher_case, axis=1)
+            fisher_sums_control = np.sum(fisher_control, axis=1)
+
+            K_case = genes_by_peaks_masks_case.sum(1)
+            K_control = genes_by_peaks_masks_control.sum(1)
+            
+            n_case = n_dict[sex][celltype]['Case']
+            n_control = n_dict[sex][celltype]['Control']
+
+            fisher_sums_var_case = K_case / (n_case - 3)
+            fisher_sums_var_control = K_control / (n_control - 3)
+
+            Z = (fisher_sums_case - fisher_sums_control) / np.sqrt(fisher_sums_var_case + fisher_sums_var_control)
+            chi2 = Z**2
+
+            p_value = 2 * (1 - norm.cdf(abs(Z)))
+            p_value_threshold = 0.05 / K_case
+            hits_idxs = np.where(p_value < p_value_threshold)[0]
+
+            hits_idxs_dict[sex][celltype] = hits_idxs
+
+        elif score_type == 'kendall':
+
+            corr_case = np.arctanh(corr_case)
+            corr_control = np.arctanh(corr_control)
+
+            ## get weights from distance mask
+            weights_case = genes_by_peaks_masks_case.copy()
+            weights_control = genes_by_peaks_masks_control.copy()
+            assert (weights_case==weights_control).all()
+
+            #weights_case /= weights_case.sum(0)[None,:]
+            #weights_control /= weights_control.sum(0)[None,:]
+
+            weights_case[np.isnan(weights_case)] = 0
+            weights_control[np.isnan(weights_control)] = 0
+
+            ## corrs linearly correlated with z-scores
+            kendall_sums_case = corr_case.copy()
+            kendall_sums_control = corr_control.copy()
+
+            K_case = (weights_case**2).sum(1)
+            K_control = (weights_control**2).sum(1)
+
+            diffs = kendall_sums_case - kendall_sums_control
+            diffs_weights = diffs * weights_case
+            Z = np.array([max(diffs_weights[i], key=lambda x: x**2) for i in range(len(diffs_weights))])
+            #Z = (np.power( diffs * weights_case, 2)).sum(1) / np.sqrt(K_case + K_control)
+            Z[np.isnan(Z)] = 0
+
+            chi2 = Z**2
+
+        elif score_type == 'sc-compReg':
+
+
+
+        elif score_type == 'ismb_cosine':
+
+            cosine_case = genes_by_peaks_corrs_dict[sex][celltype]['Case']
+            cosine_control = genes_by_peaks_corrs_dict[sex][celltype]['Control']
+
+            cosine_valid_comparison = (cosine_case!=0) * (cosine_control!=0)
+            cosine_case = cosine_case[cosine_valid_comparison]
+            cosine_control = cosine_control[cosine_valid_comparison]
+
+            log1p_fold_change = torch.log1p(cosine_case) - torch.log1p(cosine_control)
+
+            where_valid = np.where(cosine_valid_comparison)
+            genes_where_valid_idxs = where_valid[1]
+            logfc_sum_per_gene = np.bincount(genes_where_valid_idxs, weights=log1p_fold_change.abs())
+            logfc_mean_per_gene = logfc_sum_per_gene / np.bincount(genes_where_valid_idxs)
+
+            logfc_sum_per_gene_ranked_idxs = np.argsort(logfc_sum_per_gene)[::-1]
+            logfc_sum_per_gene_ranked_gene_names = mdd_rna.var_names[genes_indices][logfc_sum_per_gene_ranked_idxs]
+            logfc_sum_per_gene_matches = np.concatenate([logfc_sum_per_gene[genes_names == gene] for gene in gene_candidates_dict['Female']['Mic'] if logfc_sum_per_gene[genes_names == gene].size > 0])
+            #logfc_sum_per_gene_matches = np.concatenate([logfc_sum_per_gene[mdd_rna.var_names == gene] for gene in gene_candidates_dict['Female']['Mic'] if logfc_sum_per_gene[mdd_rna.var_names == gene].size > 0])
+
+            from scipy import stats
+            percentiles = [stats.percentileofscore(logfc_sum_per_gene, gene) for gene in logfc_sum_per_gene_matches]
+
+            # Filter genes with percentiles > 95
+            top_percentiles = [
+                (percentile, logfc_sum, gene)
+                for percentile, logfc_sum, gene in zip(percentiles, logfc_sum_per_gene_matches, gene_candidates_dict['Female']['Mic'])
+                if percentile > 95
+            ]
+
+            lower_percentiles = [
+                (percentile, logfc_sum, gene)
+                for percentile, logfc_sum, gene in zip(percentiles, logfc_sum_per_gene_matches, gene_candidates_dict['Female']['Mic'])
+                if percentile < 95
+            ]
+
+            # increase font size
+            plt.rcParams.update({'font.size': 12})
+
+            # Create a histogram
+            fig5 = plt.figure(figsize=(10, 5))
+            #plt.hist(logfc_sum_per_gene, bins=30, alpha=0.7, color='blue', edgecolor='black')
+            sns.histplot(logfc_sum_per_gene, stat='proportion')
+
+            # Annotate the histogram with top-percentile genes
+            for percentile, logfc_sum, gene in top_percentiles:
+                plt.axvline(logfc_sum, color='black', linestyle='--', label=f'{gene}: {percentile:.0f}th percentile')
+                plt.annotate(f'{gene}\n{percentile:.0f}%',  # Gene name with percentile below
+                            xy=(logfc_sum, plt.gca().get_ylim()[1] * 0.7),
+                            xytext=(logfc_sum + 5, plt.gca().get_ylim()[1] * 0.8),
+                            arrowprops=dict(facecolor='black', arrowstyle='->'),
+                            fontsize=12, color='black')
+
+            # Annotate the histogram with lower-percentile genes
+            for percentile, logfc_sum, gene in lower_percentiles:
+                offsetx = 25 if percentile == np.min([lp[0] for lp in lower_percentiles]) else 0
+                offsety = 0.025 if percentile == np.min([lp[0] for lp in lower_percentiles]) else 0
+                plt.axvline(logfc_sum, color='black', linestyle='--', label=f'{gene}: {percentile:.0f}th percentile')
+                plt.annotate(f'{gene}\n{percentile:.0f}%',  # Gene name with percentile below
+                            #xy=(logfc_sum, (plt.gca().get_ylim()[1] * percentile / 100) * 0.8 - offsety) ,
+                            #xytext=(logfc_sum + 2 + offsetx, (plt.gca().get_ylim()[1] * percentile / 100) - offsety) ,
+                            xy=(logfc_sum, plt.gca().get_ylim()[1] * 0.7),
+                            xytext=(logfc_sum + 5, plt.gca().get_ylim()[1] * 0.8),
+                            arrowprops=dict(facecolor='black', arrowstyle='->'),
+                            fontsize=12, color='black')
+
+            # Add labels and title
+            plt.xlabel("$\phi_g$", fontsize=12)
+            plt.ylabel("Frequency", fontsize=12)
+            plt.show()
+
+            fig5.savefig(os.path.join(figpath, f'fig5_cosine_histogram.png'), bbox_inches='tight', dpi=300)
+
+            '''
+            cosine_case_hit = (cosine_case==1) * (cosine_control!=1) * cosine_valid_comparison
+            cosine_control_hit = (cosine_control==1) * (cosine_case!=1) * cosine_valid_comparison
+
+            cosine_case_hit_by_gene = cosine_case_hit.sum(dim=0)
+            cosine_control_hit_by_gene = cosine_control_hit.sum(dim=0)
+
+            cosine_case_hit_ranked_idxs = cosine_case_hit_by_gene.argsort().flip(0)
+            cosine_case_hit_ranked_gene_names = mdd_rna.var_names[cosine_case_hit_ranked_idxs]
+
+            cosine_case_hit_idxs = torch.where(cosine_case_hit)
+            hits_idxs_dict[sex][celltype] = cosine_case_hit_idxs
+            
+
+            logfc_mean_per_gene_ranked_idxs = np.argsort(logfc_mean_per_gene)[::-1]
+            logfc_mean_per_gene_ranked_gene_names = mdd_rna.var_names[logfc_mean_per_gene_ranked_idxs]
+
+            log1p_fold_change = torch.log1p(cosine_case) - torch.log1p(cosine_control)
+            #log1p_fold_change = log1p_fold_change[cosine_valid_comparison]
+
+            nonzero_log1p_fold_change = log1p_fold_change[log1p_fold_change != 0]
+
+            num_comparisons = len(unique_celltypes)
+            corrected_percentile = 1 - (0.05 / num_comparisons)
+
+            log1p_fold_change_95th_percentile = torch.quantile(nonzero_log1p_fold_change, corrected_percentile)
+            '''
+        break
+    break
