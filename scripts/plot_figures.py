@@ -2359,6 +2359,7 @@ display(top_pathway_edges)
 
 pathway_names = ['ASTON_MAJOR_DEPRESSIVE_DISORDER_DN', 'GOBP_CENTRAL_NERVOUS_SYSTEM_DEVELOPMENT']
 pathways = enr.res2d[enr.res2d['Term'].isin(pathway_names)]
+pathways_edge = top_pathway_edges.loc[top_pathway_edges[['src_name','targ_name']].apply(lambda x: np.isin(x, pathway_names).all(), axis=1)]
 
 keep_tg = pathways.set_index('Term').Genes.str.split(';')
 keep_tg_stacked = np.hstack(keep_tg.values)
@@ -2378,6 +2379,7 @@ for tf, enhancer, motif_score_norm in mean_grn_df_filtered[['TF','enhancer','mot
     mean_grn_filtered_graph.add_edge(tf, enhancer, interaction='binds', weight=motif_score_norm)
 '''
 G = nx.DiGraph()
+G.add_edge(pathways_edge['src_name'].values[0], pathways_edge['targ_name'].values[0], interaction='pathway_overlap', weight=pathways_edge['jaccard_coef'].values[0])
 
 for pathway_name, keep_tg_pathway in keep_tg.items():
 
@@ -2484,7 +2486,7 @@ def holoviews_bundling(edges, pos_xy_df):
 
     shaded * highlight
 
-    incident_edges_hv = bundled.select(index=["SYNJ2"], selection_mode="edges").opts(edge_color="black", node_color='type', node_cmap='Set1', node_alpha=0.6)
+    incident_edges_hv = bundled.select(index=["SYNJ2"], selection_mode="edges").opts(edge_color="orange", node_color='type', node_cmap='Set1', node_alpha=0.9)
     incident_node_hv = hv.Nodes(bundled.nodes).select(index=["SYNJ2"]).opts(color='type', cmap='Set1', size=15)
     shaded_full = (datashade(bundled, normalization='linear', width=800, height=800) * bundled.nodes).opts(opts.Nodes(size=1, alpha=1., width=1000,legend_position='right'))
     (shaded_full * incident_edges_hv)
