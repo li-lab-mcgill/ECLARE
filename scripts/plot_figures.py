@@ -2924,16 +2924,29 @@ plt.show()
 #%% visualize overlap between pathways
 import networkx as nx
 
-nodes, edges = gp.enrichment_map(pre_res.res2d,
-                                 column='NOM p-val', # have NOM p-val, FDR q-val, FWER p-val
-                                 cutoff=0.05,
-                                 top_term=20)
+nodes, edges = gp.enrichment_map(enr.res2d, top_term=100)
 
 # build graph
 G = nx.from_pandas_edgelist(edges,
                             source='src_idx',
                             target='targ_idx',
                             edge_attr=['jaccard_coef', 'overlap_coef', 'overlap_genes'])
+
+# Subset graph to contain specific pathway
+pathway_name = 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN'
+#pathway_name = 'GOBP_POSITIVE_REGULATION_OF_MOLECULAR_FUNCTION'
+pathway_idx = nodes[nodes['Term'] == pathway_name].index[0]
+
+# Get edges where target gene is in the pathway
+edges_to_keep = [
+    (u, v)
+    for u, v in G.edges()
+    if pathway_idx in set([v, u])
+]
+
+# Create subgraph with only edges to pathway genes
+G = G.edge_subgraph(edges_to_keep).copy()
+
 
 # Add missing node if there is any
 for node in nodes.index:
@@ -2943,14 +2956,14 @@ for node in nodes.index:
 fig, ax = plt.subplots(figsize=(24, 18))
 
 # init node cooridnates
-pos=nx.layout.shell_layout(G)
+pos=nx.layout.circular_layout(G)
 #node_size = nx.get_node_attributes()
 # draw node
 nx.draw_networkx_nodes(G,
                        pos=pos,
-                       cmap=plt.cm.RdYlBu,
-                       node_color=list(nodes.NES),
-                       node_size=list(nodes.Hits_ratio *1000))
+                       cmap=plt.cm.RdYlBu)
+                       #node_color=list(nodes.NES),
+                       #node_size=list(nodes.Hits_ratio *1000))
 # draw node label
 nx.draw_networkx_labels(G,
                         pos=pos,
@@ -2966,6 +2979,9 @@ nx.draw_networkx_edges(G,
 #plt.ylim(-0.8,0.6)
 plt.axis('off')
 plt.show()
+
+top_pathway_edges = edges[(edges['targ_idx'] == pathway_idx) | (edges['src_idx'] == pathway_idx)].sort_values('jaccard_coef', ascending=False).head(10)
+display(top_pathway_edges)
 
 
 #%% flashtalk
