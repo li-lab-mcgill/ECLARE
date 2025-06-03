@@ -2305,11 +2305,113 @@ keep_all = np.concatenate([[pathway_name], keep_tg, keep_peaks, keep_tf])
 mapping = {v: f'{v.split(":")[0]}-{vi}' for vi, v in enumerate(keep_peaks)}
 keep_peaks = [mapping[peak] for peak in keep_peaks]
 
+'''
 for tg in keep_tg:
     mean_grn_filtered_graph.add_edge(tg, pathway_name, interaction='in_pathway', weight=pathway['Combined Score'].values[0])
 
 for tf, enhancer, motif_score_norm in mean_grn_df_filtered[['TF','enhancer','motif_score_norm']].drop_duplicates().itertuples(index=False):
     mean_grn_filtered_graph.add_edge(tf, enhancer, interaction='binds', weight=motif_score_norm)
+'''
+G = nx.DiGraph()
+for tf, enhancer, tg in mean_grn_df_filtered[['TF','enhancer','TG']].drop_duplicates().itertuples(index=False):
+    if tg in keep_tg:
+
+        G.add_edge(tf, enhancer, interaction='binds', weight=1)
+        G.add_edge(enhancer, tg, interaction='activates', weight=1)
+        G.add_edge(tg, pathway_name, interaction='in_pathway', weight=1)
+
+        G.add_node(tf, type='tf', layer=0)
+        G.add_node(enhancer, type='enhancer', layer=1)
+        G.add_node(tg, type='tg', layer=2)
+        G.add_node(pathway_name, type='pathway', layer=3)
+
+nodes_df = pd.DataFrame.from_dict(dict(G.nodes(data=True)), orient='index')
+nlist = nodes_df.groupby('type').apply(lambda x: x.index.to_list())
+nlist = nlist.reindex(['pathway', 'tg', 'enhancer', 'tf'])
+nlist_values = list(nlist.values)
+
+pos = nx.shell_layout(G, nlist_values, scale=5000)
+pos = nx.arf_layout(G, pos, max_iter=1000, a=5)
+pos_xy = {k: {'x': xy[0], 'y': xy[1]} for k, xy in pos.items()}
+
+plt.figure(figsize=(8, 8))
+nx.draw(G, pos, with_labels=False, node_size=20, alpha=0.5, node_color="blue")
+
+cyto_data = nx.cytoscape_data(G)
+elements = cyto_data['elements']
+
+def datashader_bundling(edges, pos_xy_df):
+    import math
+    import numpy as np
+    import pandas as pd
+
+    import datashader as ds
+    import datashader.transfer_functions as tf_ds
+    from datashader.layout import random_layout, circular_layout, forceatlas2_layout
+    from datashader.bundling import connect_edges, hammer_bundle
+
+    from itertools import chain
+
+    #nodes = pd.DataFrame.from_dict(dict(G.nodes), orient='index').reset_index()
+    #nodes = nodes.drop(columns=['type', 'layer'])
+
+    edges = pd.DataFrame.from_dict(dict(G.edges), orient='index').reset_index()
+    edges.columns = ['source', 'target', 'interaction', 'weight']
+    edges = edges.drop(columns=['interaction','weight'])
+
+    pos_xy_df = pd.DataFrame.from_dict(pos_xy, orient='index')
+    pos_xy_df['type'] = pd.Categorical(nodes_df['type'])
+
+    cvsopts = dict(plot_height=400, plot_width=400)
+
+    def nodesplot(nodes, name=None, canvas=None, cat=None):
+        canvas = ds.Canvas(**cvsopts) if canvas is None else canvas
+        aggregator=None if cat is None else ds.count_cat(cat)
+        agg=canvas.points(nodes,'x','y',aggregator)
+        return tf_ds.spread(tf_ds.shade(agg, cmap=["#FF3333"]), px=3, name=name)
+
+    def edgesplot(edges, name=None, canvas=None):
+        canvas = ds.Canvas(**cvsopts) if canvas is None else canvas
+        return tf_ds.shade(canvas.line(edges, 'x','y', agg=ds.count()), name=name)
+
+    def graphplot(nodes, edges, name="", canvas=None, cat=None):
+        if canvas is None:
+            xr = nodes.x.min(), nodes.x.max()
+            yr = nodes.y.min(), nodes.y.max()
+            canvas = ds.Canvas(x_range=xr, y_range=yr, **cvsopts)
+
+        np = nodesplot(nodes, name + " nodes", canvas, cat)
+        ep = edgesplot(edges, name + " edges", canvas)
+        return tf_ds.stack(ep, np, how="over", name=name)
+
+    grid =  [graphplot(pos_xy_df,
+                    hammer_bundle(*(pos_xy_df,edges), iterations=5, decay=decay, initial_bandwidth=bw),
+                                    "d={:0.2f}, bw={:0.2f}".format(decay, bw), cat='type')
+        for decay in [0.1, 0.25, 0.5, 0.9] for bw    in [0.1, 0.2, 0.5, 1]]
+
+    tf_ds.Images(*grid).cols(4)
+
+def holoviews_bundling(edges, pos_xy_df):
+    
+    import holoviews.operation.datashader as hd
+    import holoviews as hv
+    from holoviews import opts
+    from holoviews.operation.datashader import datashade, bundle_graph
+
+    hv.extension("bokeh")
+
+    kwargs = dict(width=800, height=800, xaxis=None, yaxis=None)
+    opts.defaults(opts.Nodes(**kwargs), opts.Graph(**kwargs))
+
+    grn_graph = hv.Graph.from_networkx(G, pos)
+    grn_graph.opts(node_size=10, node_color='type', cmap='Set1')
+
+    bundled = bundle_graph(grn_graph, iterations=5, decay=0.25, initial_bandwidth=0.2) # (d=0.9, bw=0.2) for shell+arf, (d=0.25, bw=0.1) for shell only
+    bundled
+
+    (datashade(bundled, normalization='linear', width=800, height=800) * bundled.nodes).opts(
+        opts.Nodes(color='circle', size=10, width=1000, cmap='Set1', legend_position='right'))
+
 
 # collect only edges where source or target is in `keep`
 edges_to_keep = [
@@ -2511,8 +2613,8 @@ stylesheet = [
 
 # ─── (3) Choose a dagre layout for left→right flow ───
 layout = {
-    "name": "cose-bilkent",
-    "randomize": True,
+    "name": "preset",
+    "positions": pos_xy
 }
 
 # ─── (4) Build the Dash app ───
@@ -2703,6 +2805,71 @@ if __name__ == "__main__":
     app.run(debug=True)
 
 '''
+for node, _ in subgraph_renamed.nodes(data=True):
+    if node in keep_tf:
+        ntype = "tf"
+        layer = 0
+    elif node in keep_peaks:
+        ntype = "enhancer"
+        layer = 1
+    elif node in keep_tg:
+        ntype = "tg"
+        layer = 2
+    elif node == pathway_name:
+        ntype = "pathway"
+        layer = 3
+
+    subgraph_renamed.add_node(node, type=ntype, layer=layer)
+
+nodes_df = pd.DataFrame.from_dict(dict(subgraph_renamed.nodes(data=True)), orient='index')
+nlist = nodes_df.groupby('type').apply(lambda x: x.index.to_list())
+nlist = nlist.reindex(['pathway', 'tg', 'enhancer', 'tf'])
+nlist_values = list(nlist.values)
+
+cytoscape_dict = {
+    "data": [],
+    "directed": False,
+    "multigraph": False
+    }
+
+cytoscape_ready = {
+    "elements": {
+        "nodes": nodes,
+        "edges": edges
+    }
+}
+
+all_types = []
+for node in cytoscape_ready['elements']['nodes']:
+    if 'layer' in node['data']:
+        node['data']['value'] = node['data'].pop('layer')
+    if 'label' in node['data']:
+        node['data']['name'] = node['data'].pop('label')
+    if 'type' in node['data']:
+        all_types.append(node['data']['type'])
+
+types_factorized, types = pd.factorize(all_types)
+types_factorized_grouped = [list(np.where(types_factorized == i)[0]) for i in range(len(types))]
+
+cytoscape_dict.update(cytoscape_ready)
+G = nx.cytoscape_graph(cytoscape_dict)
+
+pos = nx.shell_layout(subgraph_renamed, nlist_values)
+#pos = nx.nx_agraph.graphviz_layout(subgraph_renamed, prog="twopi", args="")
+
+pos = nx.spectral_layout(subgraph_renamed, weight=None, scale=5000, dim=2)
+#pos = nx.kamada_kawai_layout(subgraph_renamed, pos, scale=500)
+nx.draw(subgraph_renamed, pos, node_size=20, alpha=0.5, node_color="blue", with_labels=False)
+
+#nx.draw_shell(subgraph_renamed, nlist=nlist_values)
+
+pos_xy = {k: {'x': xy[0], 'y': xy[1]} for k, xy in pos.items()}
+
+
+
+
+
+
 from networkx.drawing.nx_agraph import graphviz_layout
 pos = graphviz_layout(
     subgraph_renamed,
