@@ -1,6 +1,6 @@
 # Hostname to environment mapping
 hostname_mapping:
-  "MacBook-Pro-de-Dylan.local": "local_directories"                               # Exact hostname match
+  "/(MacBook-Pro-de-Dylan.local|MBP-de-Dylan.lan)/": "local_directories"                               # Exact hostname match
   "/^narval-.*/": "narval_directories"                                            # Regex pattern for Narval hosts
   "/(mcb|buckeridge|hlr-cfi|ri-muhc|wh|yl)/": "mcb_directories"                   # Regex pattern for MCB hosts
 

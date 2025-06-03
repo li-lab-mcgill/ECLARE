@@ -2371,6 +2371,30 @@ elements = nx_to_cytoscape_elements(
     keep_peaks=set(keep_peaks)
 )
 
+nodes = []
+edges = []
+for elem in elements:
+    d = elem.get("data", {})
+    # If “data” has both “source” and “target”, it’s an edge; otherwise it’s a node.
+    if "source" in d and "target" in d:
+        edges.append(elem)
+    else:
+        nodes.append(elem)
+
+cytoscape_ready = {
+    "elements": {
+        "nodes": nodes,
+        "edges": edges
+    }
+}
+
+# Save elements to a .cyjs file for Cytoscape Desktop import
+import json
+cyjs_path = os.path.join(os.environ['OUTPATH'], 'mdd_subgraph.cyjs')
+with open(cyjs_path, 'w') as f:
+    json.dump(cytoscape_ready, f, indent=2)
+print(f"Saved Cytoscape elements to {cyjs_path}")
+
 import math
 
 # Set R_max = how big an outer circle you want (in pixels)
@@ -2401,8 +2425,8 @@ for element in elements:
 
 import json
 subgraph_renamed_cy = nx.cytoscape_data(subgraph_renamed)
-with open(os.path.join(os.environ['OUTPATH'], 'subgraph_renamed_cy.json'), 'w') as f:
-    json.dump(subgraph_renamed_cy, f)
+with open(os.path.join(os.environ['OUTPATH'], 'mdd_subgraph.cy'), 'w') as f:
+    json.dump(elements, f)
 
 
 # ─── (2) Stylesheet ───
@@ -2488,7 +2512,7 @@ stylesheet = [
 # ─── (3) Choose a dagre layout for left→right flow ───
 layout = {
     "name": "cose-bilkent",
-    "randomize": False,
+    "randomize": True,
 }
 
 # ─── (4) Build the Dash app ───
