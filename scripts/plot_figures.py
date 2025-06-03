@@ -2291,16 +2291,81 @@ deg_celltype_df_mdd_up = deg_celltype_df.set_index('names').loc[ASTON_MAJOR_DEPR
 
 ASTON_MAJOR_DEPRESSIVE_DISORDER_df = pd.concat([deg_celltype_df_mdd_dn, deg_celltype_df_mdd_up])
 
+
+#%% visualize overlap between pathways
+import networkx as nx
+
+nodes, edges = gp.enrichment_map(enr.res2d, top_term=100)
+
+# build graph
+G = nx.from_pandas_edgelist(edges,
+                            source='src_idx',
+                            target='targ_idx',
+                            edge_attr=['jaccard_coef', 'overlap_coef', 'overlap_genes'])
+
+# Subset graph to contain specific pathway
+pathway_name = 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN'
+#pathway_name = 'GOBP_POSITIVE_REGULATION_OF_MOLECULAR_FUNCTION'
+pathway_idx = nodes[nodes['Term'] == pathway_name].index[0]
+
+# Get edges where target gene is in the pathway
+edges_to_keep = [
+    (u, v)
+    for u, v in G.edges()
+    if pathway_idx in set([v, u])
+]
+
+# Create subgraph with only edges to pathway genes
+G = G.edge_subgraph(edges_to_keep).copy()
+
+
+# Add missing node if there is any
+for node in nodes.index:
+    if node not in G.nodes():
+        G.add_node(node)
+
+fig, ax = plt.subplots(figsize=(24, 18))
+
+# init node cooridnates
+pos=nx.layout.circular_layout(G)
+#node_size = nx.get_node_attributes()
+# draw node
+nx.draw_networkx_nodes(G,
+                       pos=pos,
+                       cmap=plt.cm.RdYlBu)
+                       #node_color=list(nodes.NES),
+                       #node_size=list(nodes.Hits_ratio *1000))
+# draw node label
+nx.draw_networkx_labels(G,
+                        pos=pos,
+                        labels=nodes.Term.to_dict())
+# draw edge
+edge_weight = nx.get_edge_attributes(G, 'jaccard_coef').values()
+nx.draw_networkx_edges(G,
+                       pos=pos,
+                       width=list(map(lambda x: x*10, edge_weight)),
+                       edge_color='#CDDBD4')
+
+#plt.xlim(-1.6, 1.6)
+#plt.ylim(-0.8,0.6)
+plt.axis('off')
+plt.show()
+
+top_pathway_edges = edges[(edges['targ_idx'] == pathway_idx) | (edges['src_idx'] == pathway_idx)].sort_values('jaccard_coef', ascending=False).head(10)
+top_pathway_edges['n_genes_overlap'] = top_pathway_edges['overlap_genes'].str.split(',').apply(len)
+display(top_pathway_edges)
+
 #%% TF-enhancer-TG-pathway visualization with networkx and dash-cytoscape
 
-pathway_name = 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN'
-pathway = enr.res2d[enr.res2d['Term'] == pathway_name]
+pathway_names = ['ASTON_MAJOR_DEPRESSIVE_DISORDER_DN', 'GOBP_CENTRAL_NERVOUS_SYSTEM_DEVELOPMENT']
+pathways = enr.res2d[enr.res2d['Term'].isin(pathway_names)]
 
-keep_tg = pathway.Genes.str.split(';').values[0]
-keep_grn = mean_grn_df_filtered[mean_grn_df_filtered['TG'].isin(keep_tg)]
+keep_tg = pathways.set_index('Term').Genes.str.split(';')
+keep_tg_stacked = np.hstack(keep_tg.values)
+keep_grn = mean_grn_df_filtered[mean_grn_df_filtered['TG'].isin(keep_tg_stacked)]
 keep_peaks = keep_grn['enhancer'].unique()
 keep_tf = keep_grn['TF'].unique()
-keep_all = np.concatenate([[pathway_name], keep_tg, keep_peaks, keep_tf])
+keep_all = np.concatenate([pathway_names, keep_tg_stacked, keep_peaks, keep_tf]) # essentially, nodes of the graph
 
 mapping = {v: f'{v.split(":")[0]}-{vi}' for vi, v in enumerate(keep_peaks)}
 keep_peaks = [mapping[peak] for peak in keep_peaks]
@@ -2313,8 +2378,12 @@ for tf, enhancer, motif_score_norm in mean_grn_df_filtered[['TF','enhancer','mot
     mean_grn_filtered_graph.add_edge(tf, enhancer, interaction='binds', weight=motif_score_norm)
 '''
 G = nx.DiGraph()
-for tf, enhancer, tg in mean_grn_df_filtered[['TF','enhancer','TG']].drop_duplicates().itertuples(index=False):
-    if tg in keep_tg:
+
+for pathway_name, keep_tg_pathway in keep_tg.items():
+
+    grn_pathway = mean_grn_df_filtered[mean_grn_df_filtered['TG'].isin(keep_tg_pathway)]
+
+    for tf, enhancer, tg in grn_pathway[['TF','enhancer','TG']].drop_duplicates().itertuples(index=False):
 
         G.add_edge(tf, enhancer, interaction='binds', weight=1)
         G.add_edge(enhancer, tg, interaction='activates', weight=1)
@@ -2409,8 +2478,18 @@ def holoviews_bundling(edges, pos_xy_df):
     bundled = bundle_graph(grn_graph, iterations=5, decay=0.25, initial_bandwidth=0.2) # (d=0.9, bw=0.2) for shell+arf, (d=0.25, bw=0.1) for shell only
     bundled
 
-    (datashade(bundled, normalization='linear', width=800, height=800) * bundled.nodes).opts(
-        opts.Nodes(color='circle', size=10, width=1000, cmap='Set1', legend_position='right'))
+    shaded = (datashade(bundled, normalization='linear', width=800, height=800) * bundled.nodes).opts(opts.Nodes(color='type', size=10, width=1000, cmap='Set1',legend_position='right'))
+    all_nodes = hv.Nodes(bundled.nodes)
+    highlight = all_nodes.select(index=['SYNJ2']).opts(fill_color='white', line_color='black', size=15)
+
+    shaded * highlight
+
+    incident_edges_hv = bundled.select(index=["SYNJ2"], selection_mode="edges").opts(edge_color="black", node_color='type', node_cmap='Set1', node_alpha=0.6)
+    incident_node_hv = hv.Nodes(bundled.nodes).select(index=["SYNJ2"]).opts(color='type', cmap='Set1', size=15)
+    shaded_full = (datashade(bundled, normalization='linear', width=800, height=800) * bundled.nodes).opts(opts.Nodes(size=1, alpha=1., width=1000,legend_position='right'))
+    (shaded_full * incident_edges_hv)
+
+
 
 
 # collect only edges where source or target is in `keep`
@@ -2653,7 +2732,7 @@ if __name__ == "__main__":
     app.run(debug=True)
 
 
- # %% TF-gene-T
+ # %% TF-gene-TG network visualization
 import dash
 from dash import html
 import dash_cytoscape as cyto
@@ -2916,72 +2995,6 @@ plt.tight_layout()
 plt.show()
 '''
 
-
-#%% TF-enhancer-TG-pathway visualization
-
-
-
-#%% visualize overlap between pathways
-import networkx as nx
-
-nodes, edges = gp.enrichment_map(enr.res2d, top_term=100)
-
-# build graph
-G = nx.from_pandas_edgelist(edges,
-                            source='src_idx',
-                            target='targ_idx',
-                            edge_attr=['jaccard_coef', 'overlap_coef', 'overlap_genes'])
-
-# Subset graph to contain specific pathway
-pathway_name = 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN'
-#pathway_name = 'GOBP_POSITIVE_REGULATION_OF_MOLECULAR_FUNCTION'
-pathway_idx = nodes[nodes['Term'] == pathway_name].index[0]
-
-# Get edges where target gene is in the pathway
-edges_to_keep = [
-    (u, v)
-    for u, v in G.edges()
-    if pathway_idx in set([v, u])
-]
-
-# Create subgraph with only edges to pathway genes
-G = G.edge_subgraph(edges_to_keep).copy()
-
-
-# Add missing node if there is any
-for node in nodes.index:
-    if node not in G.nodes():
-        G.add_node(node)
-
-fig, ax = plt.subplots(figsize=(24, 18))
-
-# init node cooridnates
-pos=nx.layout.circular_layout(G)
-#node_size = nx.get_node_attributes()
-# draw node
-nx.draw_networkx_nodes(G,
-                       pos=pos,
-                       cmap=plt.cm.RdYlBu)
-                       #node_color=list(nodes.NES),
-                       #node_size=list(nodes.Hits_ratio *1000))
-# draw node label
-nx.draw_networkx_labels(G,
-                        pos=pos,
-                        labels=nodes.Term.to_dict())
-# draw edge
-edge_weight = nx.get_edge_attributes(G, 'jaccard_coef').values()
-nx.draw_networkx_edges(G,
-                       pos=pos,
-                       width=list(map(lambda x: x*10, edge_weight)),
-                       edge_color='#CDDBD4')
-
-#plt.xlim(-1.6, 1.6)
-#plt.ylim(-0.8,0.6)
-plt.axis('off')
-plt.show()
-
-top_pathway_edges = edges[(edges['targ_idx'] == pathway_idx) | (edges['src_idx'] == pathway_idx)].sort_values('jaccard_coef', ascending=False).head(10)
-display(top_pathway_edges)
 
 
 #%% flashtalk
