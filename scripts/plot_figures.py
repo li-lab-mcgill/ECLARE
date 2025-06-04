@@ -2121,6 +2121,38 @@ lr_up_filtered = LR_up[LR_up.index.isin(genes_names_filtered)]
 lr_down_filtered = LR_down[LR_down.index.isin(genes_names_filtered)]
 t_slopes_filtered = t_slopes[genes_names_filtered]
 
+## filtered LR values ex-DEG (replace with other non-DEG genes)
+lr_filtered_is_deg = lr_filtered.index.isin(celltype_degs_df.index)
+
+if lr_filtered_is_deg.any():
+    lr_filtered_woDeg = lr_filtered[~lr_filtered_is_deg]
+else:
+    print('No DEG genes in LR')
+
+## LR values for DEG genes (not all DEG genes are in LR)
+LR_deg = LR.loc[LR.index.isin(celltype_degs_df['gene'])]
+deg_not_in_lr = celltype_degs_df[~celltype_degs_df['gene'].isin(LR.index)]['gene'].drop_duplicates().to_list()
+deg_not_in_lr_series = pd.Series(deg_not_in_lr, index=deg_not_in_lr)
+LR_deg = pd.concat([LR_deg, deg_not_in_lr_series])
+
+## DEG genes with top filtered LR genes
+#where_filtered_idxs = np.sort(np.flip(lr_fitted_cdf.argsort())[:len(lr_filtered)]); top_lr_filtered = LR[where_filtered_idxs]; assert top_lr_filtered.equals(lr_filtered)
+n_lr_deg = len(lr_filtered) + celltype_degs_df['gene'].nunique()
+n_lr_minus_deg = len(lr_filtered) - celltype_degs_df['gene'].nunique(); assert n_lr_minus_deg > 0, 'list of DEG genes is longer than list of filtered LR genes'
+
+where_filtered_with_excess = np.flip(lr_fitted_cdf.argsort())[:n_lr_deg]
+where_filtered_with_excess_top = where_filtered_with_excess[:n_lr_minus_deg]
+where_filtered_with_excess_bottom = where_filtered_with_excess[-n_lr_minus_deg:]
+
+top_lr_filtered = LR[where_filtered_with_excess_top]
+top_lr_filtered_wDeg = pd.concat([top_lr_filtered, LR_deg])
+
+bottom_lr_filtered = LR[where_filtered_with_excess_bottom]
+bottom_lr_filtered_wDeg = pd.concat([bottom_lr_filtered, LR_deg])
+
+n_genes = np.unique([len(lr_filtered), len(top_lr_filtered_wDeg), len(bottom_lr_filtered_wDeg)]); assert len(n_genes) == 1, 'number of genes in each list must be the same'
+n_genes = n_genes[0]
+
 #%% Merge lr_filtered into mean_grn_df
 
 mean_grn_df_filtered = mean_grn_df.merge(lr_filtered, left_on='TG', right_index=True, how='right')
@@ -2255,25 +2287,55 @@ ax = dotplot(pre_res.res2d,
 #%% EnrichR
 from IPython.display import display
 
-lr_filtered_type = lr_filtered.copy()
+def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
 
-enr = gp.enrichr(lr_filtered_type.index.to_list(),
-                    gene_sets=brain_gmt_cortical_wGO,
-                    outdir=None)
+    enr = gp.enrichr(lr_filtered_type.index.to_list(),
+                        gene_sets=pathways,
+                        outdir=None)
 
-display(enr.res2d.sort_values('Adjusted P-value', ascending=True).head(20)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
+    display(enr.res2d.sort_values('Adjusted P-value', ascending=True).head(20)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
 
-# dotplot
-gp.dotplot(enr.res2d,
-           column='Adjusted P-value',
-           figsize=(3,7),
-           title='',
-           cmap=plt.cm.viridis,
-           size=12, # adjust dot size
-           cutoff=0.25,
-           top_term=20,
-           show_ring=False)
+    # dotplot
+    gp.dotplot(enr.res2d,
+            column='Adjusted P-value',
+            figsize=(3,7),
+            title='',
+            cmap=plt.cm.viridis,
+            size=12, # adjust dot size
+            cutoff=0.25,
+            top_term=20,
+            show_ring=False)
+    plt.show()
+
+    return enr
+
+pathways = brain_gmt_cortical_wGO
+enr = do_enrichr(lr_filtered, pathways)
+enr_top_wDeg = do_enrichr(top_lr_filtered_wDeg, pathways)
+enr_bottom_wDeg = do_enrichr(bottom_lr_filtered_wDeg, pathways)
+
+enr_sig_pathways = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]['Term'].to_list()
+enr_sig_pathways_wDeg = enr_top_wDeg.res2d[enr_top_wDeg.res2d['Adjusted P-value'] < 0.05]['Term'].to_list()
+enr_sig_pathways_wDeg_bottom = enr_bottom_wDeg.res2d[enr_bottom_wDeg.res2d['Adjusted P-value'] < 0.05]['Term'].to_list()
+
+from matplotlib_venn import venn3
+
+# Create sets of significant pathways for each case
+set1 = set(enr_sig_pathways)
+set2 = set(enr_sig_pathways_wDeg)
+set3 = set(enr_sig_pathways_wDeg_bottom)
+
+# Create venn diagram
+plt.figure(figsize=(10, 8))
+venn3([set1, set2, set3], 
+      set_labels=('All LR', 'Top LR + DEG', 'Bottom LR + DEG'),
+      set_colors=('skyblue', 'lightgreen', 'salmon'),
+      alpha=0.6)
+
+plt.title(f'Overlap of Significant Pathways (n genes = {n_genes})')
 plt.show()
+
+
 
 #%% isolated analysis for ASTON MDD pathways
 
@@ -2402,7 +2464,7 @@ nlist = nlist.reindex(['pathway', 'tg', 'enhancer', 'tf'])
 nlist_values = list(nlist.values)
 
 pos = nx.shell_layout(G, nlist_values, scale=5000)
-pos = nx.arf_layout(G, pos, max_iter=1000, a=5)
+#pos = nx.arf_layout(G, pos, max_iter=1000, a=5)
 pos_xy = {k: {'x': xy[0], 'y': xy[1]} for k, xy in pos.items()}
 
 plt.figure(figsize=(8, 8))
