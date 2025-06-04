@@ -2307,16 +2307,15 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
             show_ring=False)
     plt.show()
 
-    return enr
+    enr_sig_pathways = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]['Term'].to_list()
+
+    return enr, enr_sig_pathways
 
 pathways = brain_gmt_cortical_wGO
-enr = do_enrichr(lr_filtered, pathways)
-enr_top_wDeg = do_enrichr(top_lr_filtered_wDeg, pathways)
-enr_bottom_wDeg = do_enrichr(bottom_lr_filtered_wDeg, pathways)
-
-enr_sig_pathways = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]['Term'].to_list()
-enr_sig_pathways_wDeg = enr_top_wDeg.res2d[enr_top_wDeg.res2d['Adjusted P-value'] < 0.05]['Term'].to_list()
-enr_sig_pathways_wDeg_bottom = enr_bottom_wDeg.res2d[enr_bottom_wDeg.res2d['Adjusted P-value'] < 0.05]['Term'].to_list()
+enr, enr_sig_pathways = do_enrichr(lr_filtered, pathways)
+enr_top_wDeg, enr_sig_pathways_wDeg = do_enrichr(top_lr_filtered_wDeg, pathways)
+enr_bottom_wDeg, enr_sig_pathways_wDeg_bottom = do_enrichr(bottom_lr_filtered_wDeg, pathways)
+enr_deg, enr_sig_pathways_deg = do_enrichr(LR_deg, pathways)
 
 from matplotlib_venn import venn3
 
@@ -2324,18 +2323,94 @@ from matplotlib_venn import venn3
 set1 = set(enr_sig_pathways)
 set2 = set(enr_sig_pathways_wDeg)
 set3 = set(enr_sig_pathways_wDeg_bottom)
+set4 = set(enr_sig_pathways_deg)
 
 # Create venn diagram
 plt.figure(figsize=(10, 8))
 venn3([set1, set2, set3], 
-      set_labels=('All LR', 'Top LR + DEG', 'Bottom LR + DEG'),
+      set_labels=('All LR', 'DEG + Top LR', 'DEG + Bottom LR'),
       set_colors=('skyblue', 'lightgreen', 'salmon'),
       alpha=0.6)
 
 plt.title(f'Overlap of Significant Pathways (n genes = {n_genes})')
 plt.show()
 
+from venn import venn
+enrs_dict = {
+    'All LR': set1,
+    'DEG + Top LR': set2,
+    'DEG + Bottom LR': set3,
+    'DEG': set4
+}
 
+venn(enrs_dict)
+
+
+## check ranks of pre-defined pathways
+
+enr_sorted = enr.res2d.sort_values('Adjusted P-value').reset_index()
+enr_sorted_top_wDeg = enr_top_wDeg.res2d.sort_values('Adjusted P-value').reset_index()
+enr_sorted_bottom_wDeg = enr_bottom_wDeg.res2d.sort_values('Adjusted P-value').reset_index()
+
+pathways = [
+    'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN',
+    'ASTON_MAJOR_DEPRESSIVE_DISORDER_UP',
+    'LU_AGING_BRAIN_UP',
+    'BLALOCK_ALZHEIMERS_DISEASE_UP',
+    'Gandal_2018_BipolarDisorder_Downregulated_Cortex'
+    ]
+
+pathway_ranks = pd.DataFrame(index=pathways, columns=['ALL LR', 'DEG + Top LR', 'DEG + Bottom LR'])
+
+for pathway in pathways:
+    pathway_ranks.loc[pathway, 'ALL LR'] = enr_sorted[enr_sorted['Term'] == pathway].index[0]
+    pathway_ranks.loc[pathway, 'DEG + Top LR'] = enr_sorted_top_wDeg[enr_sorted_top_wDeg['Term'] == pathway].index[0]
+    pathway_ranks.loc[pathway, 'DEG + Bottom LR'] = enr_sorted_bottom_wDeg[enr_sorted_bottom_wDeg['Term'] == pathway].index[0]
+
+# %%
+
+# ─── 3. Sort pathways by “Ir” (optional) ───
+order = pathway_ranks["ALL LR"].sort_values().index.tolist()
+
+pathway_ranks = pathway_ranks.loc[order]
+
+pathway_ranks_long = (
+    pathway_ranks
+    .reset_index()
+    .melt(id_vars="index", var_name="method", value_name="rank")
+    .rename(columns={"index": "pathway"})
+)
+
+# ─── 4. Plot the stripplot ───
+plt.figure(figsize=(6, 4 + 0.2 * pathway_ranks.shape[0]))
+ax = sns.stripplot(
+    data=pathway_ranks_long,
+    y="pathway",
+    x="rank",
+    hue="method",
+    dodge=True,       # side‐by‐side dots per pathway
+    jitter=False,     # no vertical jitter
+    size=6,
+    palette="Set2",
+    log_scale=True
+)
+
+# ─── 5. Add horizontal dividing lines ───
+n_paths = len(pathways)
+for i in range(n_paths - 1):
+    ypos = i + 0.5
+    ax.axhline(y=ypos, color="lightgray", linewidth=0.8, linestyle="--")
+
+# ─── 6. Tidy up labels & legend ───
+ax.set_ylabel("Brain GMT Pathway")
+ax.set_xlabel("Rank (smaller = better)")
+ax.set_title("Per‐Pathway Ranks Across Methods")
+
+# Place legend outside so it doesn’t overlap
+ax.legend(bbox_to_anchor=(1.02, 1), borderaxespad=0)
+
+plt.tight_layout()
+plt.show()
 
 #%% isolated analysis for ASTON MDD pathways
 
