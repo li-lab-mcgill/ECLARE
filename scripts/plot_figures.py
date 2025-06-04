@@ -1579,6 +1579,11 @@ with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as 
     all_dicts = pickle.load(f)
 mean_grn_df = all_dicts[-1]
 
+X_rna_dict = tree()
+X_atac_dict = tree()
+overlapping_target_genes_dict = tree()
+overlapping_tfs_dict = tree()
+
 genes_by_peaks_corrs_dict = tree()
 genes_by_peaks_masks_dict = tree()
 n_dict = tree()
@@ -1815,7 +1820,13 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
             scompreg_loglikelihoods, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, std_errs, intercept_stderrs = \
                 get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
 
+
             ## save to dicts
+            X_rna_dict[sex][celltype][condition if condition != '' else 'all'] = X_rna
+            X_atac_dict[sex][celltype][condition if condition != '' else 'all'] = X_atac
+            overlapping_target_genes_dict[sex][celltype][condition if condition != '' else 'all'] = overlapping_target_genes
+            overlapping_tfs_dict[sex][celltype][condition if condition != '' else 'all'] = overlapping_tfs
+
             scompreg_loglikelihoods_dict[sex][celltype][condition if condition != '' else 'all'] = scompreg_loglikelihoods
             std_errs_dict[sex][celltype][condition if condition != '' else 'all'] = std_errs
             tg_expressions_dict[sex][celltype][condition if condition != '' else 'all'] = tg_expressions
@@ -2491,6 +2502,75 @@ plt.show()
 top_pathway_edges = edges[(edges['targ_idx'] == pathway_idx) | (edges['src_idx'] == pathway_idx)].sort_values('jaccard_coef', ascending=False).head(10)
 top_pathway_edges['n_genes_overlap'] = top_pathway_edges['overlap_genes'].str.split(',').apply(len)
 display(top_pathway_edges)
+
+#%% obtain LR for TF-peak-TG combinations
+
+X_rna_control = X_rna_dict[sex][celltype]['Control']
+X_atac_control = X_atac_dict[sex][celltype]['Control']
+
+X_rna_case = X_rna_dict[sex][celltype]['Case']
+X_atac_case = X_atac_dict[sex][celltype]['Case']
+
+X_rna_all = torch.cat([X_rna_control, X_rna_case], dim=0)
+X_atac_all = torch.cat([X_atac_control, X_atac_case], dim=0)
+
+overlapping_target_genes_control = overlapping_target_genes_dict[sex][celltype]['Control']
+overlapping_target_genes_case = overlapping_target_genes_dict[sex][celltype]['Case']
+overlapping_tfs_case = overlapping_tfs_dict[sex][celltype]['Case']
+overlapping_tfs_control = overlapping_tfs_dict[sex][celltype]['Control']
+
+if np.all(overlapping_tfs_case == overlapping_tfs_control) & np.all(overlapping_target_genes_case == overlapping_target_genes_control):
+    overlapping_target_genes = overlapping_target_genes_case
+    overlapping_tfs = overlapping_tfs_case
+else:
+    raise ValueError('overlapping_tfs_case and overlapping_tfs_control are not the same')
+
+mean_grn_df, tfrps_control, tg_expressions_control = get_scompreg_loglikelihood_full(mean_grn_df, X_rna_control, X_atac_control, overlapping_target_genes, overlapping_tfs, 'll_control')
+mean_grn_df, tfrps_case, tg_expressions_case = get_scompreg_loglikelihood_full(mean_grn_df, X_rna_case, X_atac_case, overlapping_target_genes, overlapping_tfs, 'll_case')
+#mean_grn_df, tfrps_all, tg_expressions_all = get_scompreg_loglikelihood_full(mean_grn_df, X_rna_all, X_atac_all, overlapping_target_genes, overlapping_tfs, 'll_all')
+
+assert list(tfrps_control.keys()) == list(tfrps_case.keys())
+assert list(tg_expressions_control.keys()) == list(tg_expressions_case.keys())
+
+def scompreg_likelihood_ratio(tg_expression, tfrp):
+
+    try:
+        linregress_res = linregress(tg_expression, tfrp) # if unpack directly, returns only 5 of the 6 outputs..
+    except:
+        log_gaussian_likelihood = np.nan
+    else:
+        slope, intercept, r_value, p_value, std_err, intercept_stderr = (linregress_res.slope, linregress_res.intercept, linregress_res.rvalue, linregress_res.pvalue, linregress_res.stderr, linregress_res.intercept_stderr)
+        tfrp_predictions = slope * tg_expression + intercept
+
+        ## compute residuals and variance
+        n = len(tfrp)
+        sq_residuals = (tfrp - tfrp_predictions)**2
+        var = sq_residuals.sum() / n
+        log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
+
+    return log_gaussian_likelihood
+
+
+for gene in tqdm(overlapping_target_genes, total=len(overlapping_target_genes), desc='Null LR'):
+
+    tfrps_control_gene = tfrps_control[gene]
+    tfrps_case_gene = tfrps_case[gene]
+    tg_expressions_control_gene = tg_expressions_control[gene]
+    tg_expressions_case_gene = tg_expressions_case[gene]
+    
+    tfrps_all_gene = pd.concat([tfrps_control_gene, tfrps_case_gene], axis=1)
+    tg_expressions_all_gene = torch.cat([tg_expressions_control_gene, tg_expressions_case_gene], dim=0).numpy()
+
+    scompreg_likelihood_ratio_lambda = lambda tfrp: scompreg_likelihood_ratio(tg_expressions_all_gene, tfrp)
+    tfrps_all_gene['scompreg_likelihood_ratio'] = tfrps_all_gene.apply(scompreg_likelihood_ratio_lambda, axis=1)
+
+    mean_grn_df.loc[tfrps_all_gene.index, 'll_all'] = tfrps_all_gene['scompreg_likelihood_ratio']
+    
+
+LR_grns = -2 * (mean_grn_df.apply(lambda grn: grn['ll_all'] - (grn['ll_case'] + grn['ll_control']), axis=1))
+mean_grn_df['LR_grns'] = LR_grns
+
+
 
 #%% TF-enhancer-TG-pathway visualization with networkx and dash-cytoscape
 
