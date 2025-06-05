@@ -1341,8 +1341,8 @@ rna  = anndata.read_h5ad(rna_fullpath, backed='r')
 
 rna_full = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna.h5ad'), backed='r')
 
-mdd_atac = atac[::10].to_memory()
-mdd_rna = rna[::10].to_memory()
+mdd_atac = atac[::1].to_memory()
+mdd_rna = rna[::1].to_memory()
 
 mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
 
@@ -1622,7 +1622,7 @@ display(deg_overlap_grouped_df.sort_values(by='Case', ascending=False).T)
 
 ## define sex and celltype
 sex='Female'
-celltype=''
+celltype='Mic'
 do_corrs_or_cosines = ''
 
 ## get HVG features
@@ -2132,6 +2132,12 @@ lr_up_filtered = LR_up[LR_up.index.isin(genes_names_filtered)]
 lr_down_filtered = LR_down[LR_down.index.isin(genes_names_filtered)]
 t_slopes_filtered = t_slopes[genes_names_filtered]
 
+#%% Get gene sets that include DEG genes...
+
+
+## ...from Maitra et al. 2023
+celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
+
 ## filtered LR values ex-DEG (replace with other non-DEG genes)
 lr_filtered_is_deg = lr_filtered.index.isin(celltype_degs_df.index)
 
@@ -2143,7 +2149,7 @@ else:
 ## LR values for DEG genes (not all DEG genes are in LR)
 LR_deg = LR.loc[LR.index.isin(celltype_degs_df['gene'])]
 deg_not_in_lr = celltype_degs_df[~celltype_degs_df['gene'].isin(LR.index)]['gene'].drop_duplicates().to_list()
-deg_not_in_lr_series = pd.Series(deg_not_in_lr, index=deg_not_in_lr)
+deg_not_in_lr_series = pd.Series(np.nan, index=deg_not_in_lr)
 LR_deg = pd.concat([LR_deg, deg_not_in_lr_series])
 
 ## DEG genes with top filtered LR genes
@@ -2163,6 +2169,45 @@ bottom_lr_filtered_wDeg = pd.concat([bottom_lr_filtered, LR_deg])
 
 n_genes = np.unique([len(lr_filtered), len(top_lr_filtered_wDeg), len(bottom_lr_filtered_wDeg)]); assert len(n_genes) == 1, 'number of genes in each list must be the same'
 n_genes = n_genes[0]
+
+## ...from scanpy DEG analysis
+mdd_rna_female_celltype = mdd_rna_female[mdd_rna_female.obs[rna_celltype_key].str.startswith(celltype)]
+sc.tl.rank_genes_groups(mdd_rna_female_celltype, rna_condition_key, reference='Control', method=deg_method, key_added=deg_method, pts=True)
+sc_deg_df = sc.get.rank_genes_groups_df(mdd_rna_female_celltype, group='Case', key=deg_method)
+sc_deg_df = sc_deg_df[sc_deg_df['pvals_adj'] < 0.05]
+
+## filtered LR values ex-DEG (replace with other non-DEG genes)
+lr_filtered_is_deg = lr_filtered.index.isin(sc_deg_df['names'])
+
+if lr_filtered_is_deg.any():
+    lr_filtered_woDeg = lr_filtered[~lr_filtered_is_deg]
+else:
+    print('No scanpy DEG genes in LR')
+
+## LR values for DEG genes (not all DEG genes are in LR)
+sc_LR_deg = LR.loc[LR.index.isin(sc_deg_df['names'])]
+sc_deg_not_in_lr = sc_deg_df[~sc_deg_df['names'].isin(LR.index)]['names'].drop_duplicates().to_list()
+sc_deg_not_in_lr_series = pd.Series(np.nan, index=sc_deg_not_in_lr)
+sc_LR_deg = pd.concat([sc_LR_deg, sc_deg_not_in_lr_series])
+
+## DEG genes with top filtered LR genes
+#where_filtered_idxs = np.sort(np.flip(lr_fitted_cdf.argsort())[:len(lr_filtered)]); top_lr_filtered = LR[where_filtered_idxs]; assert top_lr_filtered.equals(lr_filtered)
+sc_n_lr_deg = len(lr_filtered) + sc_deg_df['names'].nunique()
+sc_n_lr_minus_deg = len(lr_filtered) - sc_deg_df['names'].nunique(); assert sc_n_lr_minus_deg > 0, 'list of DEG genes is longer than list of filtered LR genes'
+
+where_filtered_with_excess = np.flip(lr_fitted_cdf.argsort())[:sc_n_lr_deg]
+where_filtered_with_excess_top = where_filtered_with_excess[:sc_n_lr_minus_deg]
+where_filtered_with_excess_bottom = where_filtered_with_excess[-sc_n_lr_minus_deg:]
+
+sc_top_lr_filtered = LR[where_filtered_with_excess_top]
+sc_bottom_lr_filtered = LR[where_filtered_with_excess_bottom]
+
+sc_top_lr_filtered_wDeg = pd.concat([sc_top_lr_filtered, sc_LR_deg])
+sc_bottom_lr_filtered_wDeg = pd.concat([sc_bottom_lr_filtered, sc_LR_deg])
+
+sc_n_genes = np.unique([len(lr_filtered), len(top_lr_filtered_wDeg), len(bottom_lr_filtered_wDeg)]); assert len(sc_n_genes) == 1, 'number of genes in each list must be the same'
+sc_n_genes = sc_n_genes[0]
+
 
 #%% Merge lr_filtered into mean_grn_df
 
@@ -2200,7 +2245,7 @@ scglue.genomics.write_links(
 tg_dist_counts_sorted = mean_grn_df_filtered.groupby('TG')[['dist']].mean().merge(mean_grn_df_filtered['TG'].value_counts(), left_index=True, right_on='TG').sort_values('dist').head(20)
 display(tg_dist_counts_sorted)
 
-gene = 'ACTR3'
+gene = 'INPP5J'
 tg_grn = mean_grn_df_filtered[mean_grn_df_filtered['TG']==gene].sort_values('dist')[['enhancer','dist','lrCorr']].groupby('enhancer').mean()
 tg_grn_bounds = np.stack(tg_grn.index.str.split(':|-')).flatten()
 tg_grn_bounds = [int(bound) for bound in tg_grn_bounds if bound.isdigit()] + [genes.loc[gene, 'chromStart'].drop_duplicates().values[0]] + [genes.loc[gene, 'chromEnd'].drop_duplicates().values[0]]
@@ -2280,11 +2325,11 @@ gene sets of interest:
 
 pre_res.res2d.sort_values('FWER p-val', ascending=True).head(20)
 
-#%% plot enrichment map
+## plot enrichment map
 term2 = pre_res.res2d.Term
 axes = pre_res.plot(terms=term2[5])
 
-#%% dotplot
+## dotplot
 from gseapy import dotplot
 # to save your figure, make sure that ``ofname`` is not None
 ax = dotplot(pre_res.res2d,
@@ -2314,7 +2359,7 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
             cmap=plt.cm.viridis,
             size=12, # adjust dot size
             cutoff=0.25,
-            top_term=20,
+            top_term=15,
             show_ring=False)
     plt.show()
 
@@ -2322,106 +2367,194 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
 
     return enr, enr_sig_pathways
 
-pathways = brain_gmt_cortical_wGO
+pathways = brain_gmt_cortical
 enr, enr_sig_pathways = do_enrichr(lr_filtered, pathways)
-enr_top_wDeg, enr_sig_pathways_wDeg = do_enrichr(top_lr_filtered_wDeg, pathways)
-enr_bottom_wDeg, enr_sig_pathways_wDeg_bottom = do_enrichr(bottom_lr_filtered_wDeg, pathways)
-enr_deg, enr_sig_pathways_deg = do_enrichr(LR_deg, pathways)
 
-from matplotlib_venn import venn3
+enr_deg, enr_sig_pathways_deg = do_enrichr(LR_deg, pathways)
+enr_top_wDeg, enr_sig_pathways_top_wDeg = do_enrichr(top_lr_filtered_wDeg, pathways)
+enr_bottom_wDeg, enr_sig_pathways_bottom_wDeg = do_enrichr(bottom_lr_filtered_wDeg, pathways)
+
+sc_enr_deg, sc_enr_sig_pathways_deg = do_enrichr(sc_LR_deg, pathways)
+sc_enr_top_wDeg, sc_enr_sig_pathways_top_wDeg = do_enrichr(sc_top_lr_filtered_wDeg, pathways)
+sc_enr_bottom_wDeg, sc_enr_sig_pathways_bottom_wDeg = do_enrichr(sc_bottom_lr_filtered_wDeg, pathways)
 
 # Create sets of significant pathways for each case
 set1 = set(enr_sig_pathways)
-set2 = set(enr_sig_pathways_wDeg)
-set3 = set(enr_sig_pathways_wDeg_bottom)
-set4 = set(enr_sig_pathways_deg)
 
-# Create venn diagram
-plt.figure(figsize=(10, 8))
-venn3([set1, set2, set3], 
-      set_labels=('All LR', 'DEG + Top LR', 'DEG + Bottom LR'),
-      set_colors=('skyblue', 'lightgreen', 'salmon'),
-      alpha=0.6)
+set2 = set(enr_sig_pathways_deg)
+set3 = set(enr_sig_pathways_top_wDeg)
+set4 = set(enr_sig_pathways_bottom_wDeg)
 
-plt.title(f'Overlap of Significant Pathways (n genes = {n_genes})')
-plt.show()
+set5 = set(sc_enr_sig_pathways_deg)
+set6 = set(sc_enr_sig_pathways_top_wDeg)
+set7 = set(sc_enr_sig_pathways_bottom_wDeg)
 
 from venn import venn
 enrs_dict = {
     'All LR': set1,
-    'DEG + Top LR': set2,
-    'DEG + Bottom LR': set3,
-    'DEG': set4
+    'DEG + Top LR': set3,
+    'DEG + Bottom LR': set4,
+    'DEG': set2,
 }
-
 venn(enrs_dict)
 
+sc_enrs_dict = {
+    'All LR': set1,
+    'DEG + Top LR': set6,
+    'DEG + Bottom LR': set7,
+    'DEG': set5,
+}
+venn(sc_enrs_dict)
 
-## check ranks of pre-defined pathways
 
-enr_sorted = enr.res2d.sort_values('Adjusted P-value').reset_index()
-enr_sorted_top_wDeg = enr_top_wDeg.res2d.sort_values('Adjusted P-value').reset_index()
-enr_sorted_bottom_wDeg = enr_bottom_wDeg.res2d.sort_values('Adjusted P-value').reset_index()
+#%% check ranks of pre-defined pathways
+
+## rank by adjusted p-value
+enr_sorted = enr.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
+enr_sorted_deg = enr_deg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
+enr_sorted_top_wDeg = enr_top_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
+enr_sorted_bottom_wDeg = enr_bottom_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
+sc_enr_sorted_deg = sc_enr_deg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
+sc_enr_sorted_top_wDeg = sc_enr_top_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
+sc_enr_sorted_bottom_wDeg = sc_enr_bottom_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
+
+## compute normalized ranks
+enr_sorted['normalized_rank'] = enr_sorted['rank'] / len(enr_sorted)
+enr_sorted_deg['normalized_rank'] = enr_sorted_deg['rank'] / len(enr_sorted_deg)
+enr_sorted_top_wDeg['normalized_rank'] = enr_sorted_top_wDeg['rank'] / len(enr_sorted_top_wDeg)
+enr_sorted_bottom_wDeg['normalized_rank'] = enr_sorted_bottom_wDeg['rank'] / len(enr_sorted_bottom_wDeg)
+sc_enr_sorted_deg['normalized_rank'] = sc_enr_sorted_deg['rank'] / len(sc_enr_sorted_deg)
+sc_enr_sorted_top_wDeg['normalized_rank'] = sc_enr_sorted_top_wDeg['rank'] / len(sc_enr_sorted_top_wDeg)
+sc_enr_sorted_bottom_wDeg['normalized_rank'] = sc_enr_sorted_bottom_wDeg['rank'] / len(sc_enr_sorted_bottom_wDeg)
 
 pathways = [
     'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN',
     'ASTON_MAJOR_DEPRESSIVE_DISORDER_UP',
+    'LU_AGING_BRAIN_DN',
     'LU_AGING_BRAIN_UP',
+    'BLALOCK_ALZHEIMERS_DISEASE_DN',
     'BLALOCK_ALZHEIMERS_DISEASE_UP',
-    'Gandal_2018_BipolarDisorder_Downregulated_Cortex'
+    'Gandal_2018_BipolarDisorder_Downregulated_Cortex',
+    'Gandal_2018_BipolarDisorder_Upregulated_Cortex',
     ]
 
-pathway_ranks = pd.DataFrame(index=pathways, columns=['ALL LR', 'DEG + Top LR', 'DEG + Bottom LR'])
+rank_type = 'Adjusted P-value'
+pathway_ranks = pd.DataFrame(index=pathways, \
+    columns=['ALL LR', 'DEG + Top LR', 'DEG + Bottom LR', 'DEG', 'sc DEG + Top LR', 'sc DEG + Bottom LR', 'sc DEG'])
+pathway_ranks.attrs['rank_type'] = rank_type
+
+
+def get_pathway_rank(enr_res2d, pathway, rank_type='Adjusted P-value', return_nan=True):
+
+    if len(enr_res2d[enr_res2d['Term'] == pathway]) > 0:
+        return enr_res2d[enr_res2d['Term'] == pathway][rank_type].values[0]
+    else:
+        if return_nan:
+            return np.nan
+        else:
+            return max(enr_res2d[rank_type])
 
 for pathway in pathways:
-    pathway_ranks.loc[pathway, 'ALL LR'] = enr_sorted[enr_sorted['Term'] == pathway].index[0]
-    pathway_ranks.loc[pathway, 'DEG + Top LR'] = enr_sorted_top_wDeg[enr_sorted_top_wDeg['Term'] == pathway].index[0]
-    pathway_ranks.loc[pathway, 'DEG + Bottom LR'] = enr_sorted_bottom_wDeg[enr_sorted_bottom_wDeg['Term'] == pathway].index[0]
+    pathway_ranks.loc[pathway, 'ALL LR'] = get_pathway_rank(enr_sorted, pathway, rank_type)
 
-# %%
+    pathway_ranks.loc[pathway, 'DEG + Top LR'] = get_pathway_rank(enr_sorted_top_wDeg, pathway, rank_type)
+    pathway_ranks.loc[pathway, 'DEG + Bottom LR'] = get_pathway_rank(enr_sorted_bottom_wDeg, pathway, rank_type)
+    pathway_ranks.loc[pathway, 'DEG'] = get_pathway_rank(enr_sorted_deg, pathway, rank_type)
 
-# ─── 3. Sort pathways by “Ir” (optional) ───
-order = pathway_ranks["ALL LR"].sort_values().index.tolist()
+    pathway_ranks.loc[pathway, 'sc DEG + Top LR'] = get_pathway_rank(sc_enr_sorted_top_wDeg, pathway, rank_type)
+    pathway_ranks.loc[pathway, 'sc DEG + Bottom LR'] = get_pathway_rank(sc_enr_sorted_bottom_wDeg, pathway, rank_type)
+    pathway_ranks.loc[pathway, 'sc DEG'] = get_pathway_rank(sc_enr_sorted_deg, pathway, rank_type)
 
-pathway_ranks = pathway_ranks.loc[order]
+#%% plot ranks across methods and pathways
 
-pathway_ranks_long = (
-    pathway_ranks
-    .reset_index()
-    .melt(id_vars="index", var_name="method", value_name="rank")
-    .rename(columns={"index": "pathway"})
-)
+def plot_pathway_ranks(pathway_ranks, stem=True):
 
-# ─── 4. Plot the stripplot ───
-plt.figure(figsize=(6, 4 + 0.2 * pathway_ranks.shape[0]))
-ax = sns.stripplot(
-    data=pathway_ranks_long,
-    y="pathway",
-    x="rank",
-    hue="method",
-    dodge=True,       # side‐by‐side dots per pathway
-    jitter=False,     # no vertical jitter
-    size=6,
-    palette="Set2",
-    log_scale=True
-)
+    # ─── 3. Sort pathways by “ALL LR” (optional) ───
+    order = pathway_ranks["ALL LR"].sort_values().index.tolist()
 
-# ─── 5. Add horizontal dividing lines ───
-n_paths = len(pathways)
-for i in range(n_paths - 1):
-    ypos = i + 0.5
-    ax.axhline(y=ypos, color="lightgray", linewidth=0.8, linestyle="--")
+    pathway_ranks = pathway_ranks.loc[order]
 
-# ─── 6. Tidy up labels & legend ───
-ax.set_ylabel("Brain GMT Pathway")
-ax.set_xlabel("Rank (smaller = better)")
-ax.set_title("Per‐Pathway Ranks Across Methods")
+    pathway_ranks_long = (
+        pathway_ranks
+        .reset_index()
+        .melt(id_vars="index", var_name="method", value_name="rank")
+        .rename(columns={"index": "pathway"})
+    )
 
-# Place legend outside so it doesn’t overlap
-ax.legend(bbox_to_anchor=(1.02, 1), borderaxespad=0)
+    # ─── 4. Plot the stripplot ───
+    fig, ax = plt.subplots(1, 2, figsize=(12, 4 + 0.5 * pathway_ranks.shape[0]), sharex=False, sharey=True)
+    sns.stripplot(
+        data=pathway_ranks_long,
+        y="pathway",
+        x="rank",
+        hue="method",
+        dodge=True,       # side‐by‐side dots per pathway
+        jitter=False,     # no vertical jitter
+        size=6,
+        palette="tab10",
+        ax=ax[0]
+    )
+    sns.stripplot(
+        data=pathway_ranks_long,
+        y="pathway",
+        x="rank",
+        hue="method",
+        dodge=True,       # side‐by‐side dots per pathway
+        jitter=False,     # no vertical jitter
+        size=6,
+        palette="tab10",
+        legend=False,
+        ax=ax[1]
+    ); ax[1].set_xscale('log')
 
-plt.tight_layout()
-plt.show()
+    if stem:
+
+        # ─── Add horizontal stems from the rightmost edge to each marker ───
+        for subax in ax:
+            # 1) Record the current x‐axis limits:
+            x_min, x_max = subax.get_xlim()
+
+            # 2) Loop over each PathCollection in this subplot.
+            #    Each collection corresponds to one hue level (one "method").
+            for collec in subax.collections:
+                # get_offsets() is an Nx2 array of (x, y) positions for every dot in that hue.
+                offsets = collec.get_offsets()
+                # Choose a stem color (e.g. light gray); you could also pull collec.get_facecolor()[0]
+                stem_color = "lightgray"
+                for (x_pt, y_pt) in offsets:
+                    # draw a line from x_max → x_pt at y=y_pt
+                    subax.plot(
+                        [x_max, x_pt],        # x data: from right edge to the point
+                        [y_pt, y_pt],         # y data: horizontal at the same y
+                        color=stem_color,
+                        linewidth=0.6,
+                        alpha=0.7,
+                        zorder=0  # put stems “underneath” the markers
+                    )
+
+            # 3) Re‐enforce the original x‐limits so the stems don’t stretch the view
+            subax.set_xlim(x_min, x_max)
+
+    # ─── 5. Add horizontal dividing lines ───
+    n_paths = len(pathways)
+    for i in range(n_paths - 1):
+        ypos = i + 0.5
+        ax[0].axhline(y=ypos, color="lightgray", linewidth=2, linestyle="--")
+        ax[1].axhline(y=ypos, color="lightgray", linewidth=2, linestyle="--")
+
+    # ─── 6. Tidy up labels & legend ───
+    ax[0].set_ylabel("Brain GMT Pathway")
+    ax[0].set_xlabel(f"{pathway_ranks.attrs['rank_type']}")
+    ax[1].set_xlabel(f"{pathway_ranks.attrs['rank_type']} (log scale)")
+    ax[0].set_title("Per‐Pathway Ranks Across Methods")
+
+    # Place legend outside so it doesn’t overlap
+    #ax[0].legend(bbox_to_anchor=(1.02, 1), borderaxespad=0)
+
+    plt.tight_layout()
+    plt.show()
+
+plot_pathway_ranks(pathway_ranks, stem=True)
 
 #%% isolated analysis for ASTON MDD pathways
 
@@ -2506,6 +2639,7 @@ plt.show()
 '''
 
 #%% obtain LR for TF-peak-TG combinations
+from eclare.data_utils import get_scompreg_loglikelihood_full
 
 X_rna_control = X_rna_dict[sex][celltype]['Control']
 X_atac_control = X_atac_dict[sex][celltype]['Control']
