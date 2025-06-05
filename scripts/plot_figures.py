@@ -2641,7 +2641,38 @@ nlist = nlist.reindex(['pathway', 'tg', 'enhancer', 'tf'])
 nlist_values = list(nlist.values)
 
 pos = nx.shell_layout(G, nlist_values, scale=5000)
-#pos = nx.arf_layout(G, pos, a=1.1, dt=0.0001)
+
+# Apply type-specific rotations to node positions
+def rotate_nodes(pos, nlist, angle_dict={'pathway': 0, 'tg': 0, 'enhancer': -np.pi/8, 'tf': -np.pi/3}):
+    for node_type, nodes in nlist.items():
+        # Get the center point of nodes for this type
+        type_pos = np.array([pos[node] for node in nodes])
+        center = type_pos.mean(axis=0)
+        
+        # Calculate rotation angle based on node type
+        angle = angle_dict[node_type]
+        
+        # Apply rotation to each node position
+        for node in nodes:
+            # Get current position relative to center
+            rel_pos = np.array(pos[node]) - center
+            
+            # Create rotation matrix
+            rot_matrix = np.array([
+                [np.cos(angle), -np.sin(angle)],
+                [np.sin(angle), np.cos(angle)]
+            ])
+            
+            # Apply rotation
+            rotated_pos = np.dot(rot_matrix, rel_pos)
+            
+            # Update position
+            pos[node] = tuple(rotated_pos + center)
+
+    return pos
+pos = rotate_nodes(pos, nlist)
+
+pos = nx.arf_layout(G, pos, max_iter=250, a=1.1, dt=0.001)
 pos_xy = {k: {'x': xy[0], 'y': xy[1]} for k, xy in pos.items()}
 
 plt.figure(figsize=(8, 8))
@@ -2719,7 +2750,7 @@ def holoviews_bundling(edges, pos_xy_df):
                   cmap='Set1',
                   show_legend=True)
 
-    bundled = bundle_graph(grn_graph, decay=0.9, initial_bandwidth=0.1) # (d=0.9, bw=0.2) for shell+arf, (d=0.25, bw=0.1) for shell only
+    bundled = bundle_graph(grn_graph, decay=0.9, initial_bandwidth=0.2) # (d=0.9, bw=0.2) for shell+arf, (d=0.25, bw=0.1) for shell only
 
     edges_only = bundled.opts(node_alpha=0, edge_color="gray", edge_line_width=1)
 
