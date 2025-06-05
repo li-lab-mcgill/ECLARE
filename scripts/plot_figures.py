@@ -2176,14 +2176,6 @@ sc.tl.rank_genes_groups(mdd_rna_female_celltype, rna_condition_key, reference='C
 sc_deg_df = sc.get.rank_genes_groups_df(mdd_rna_female_celltype, group='Case', key=deg_method)
 sc_deg_df = sc_deg_df[sc_deg_df['pvals_adj'] < 0.05]
 
-## filtered LR values ex-DEG (replace with other non-DEG genes)
-lr_filtered_is_deg = lr_filtered.index.isin(sc_deg_df['names'])
-
-if lr_filtered_is_deg.any():
-    lr_filtered_woDeg = lr_filtered[~lr_filtered_is_deg]
-else:
-    print('No scanpy DEG genes in LR')
-
 ## LR values for DEG genes (not all DEG genes are in LR)
 sc_LR_deg = LR.loc[LR.index.isin(sc_deg_df['names'])]
 sc_deg_not_in_lr = sc_deg_df[~sc_deg_df['names'].isin(LR.index)]['names'].drop_duplicates().to_list()
@@ -2207,6 +2199,20 @@ sc_bottom_lr_filtered_wDeg = pd.concat([sc_bottom_lr_filtered, sc_LR_deg])
 
 sc_n_genes = np.unique([len(lr_filtered), len(top_lr_filtered_wDeg), len(bottom_lr_filtered_wDeg)]); assert len(sc_n_genes) == 1, 'number of genes in each list must be the same'
 sc_n_genes = sc_n_genes[0]
+
+## filtered LR values ex-DEG (replace with other non-DEG genes)
+sc_lr_filtered_is_deg = lr_filtered.index.isin(sc_deg_df['names'])
+
+if sc_lr_filtered_is_deg.any():
+    sc_lr_filtered_woDeg_short = lr_filtered[~sc_lr_filtered_is_deg]
+    sc_deg_woLR = lr_filtered[sc_lr_filtered_is_deg]
+    print(f'{sc_lr_filtered_is_deg.sum()} DEG genes removed from LR')
+
+    replace_degs_with_non_degs = where_filtered_with_excess[ len(lr_filtered) : (len(lr_filtered) + sc_lr_filtered_is_deg.sum()) ]
+    sc_lr_filtered_woDeg = pd.concat([sc_lr_filtered_woDeg_short, LR[replace_degs_with_non_degs]])
+
+else:
+    print('No scanpy DEG genes in LR')
 
 
 #%% Merge lr_filtered into mean_grn_df
@@ -2370,6 +2376,10 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
 pathways = brain_gmt_cortical
 enr, enr_sig_pathways = do_enrichr(lr_filtered, pathways)
 
+enr_woDeg, enr_sig_pathways_woDeg = do_enrichr(sc_lr_filtered_woDeg, pathways)
+enr_woDeg_short, enr_sig_pathways_woDeg_short = do_enrichr(sc_lr_filtered_woDeg_short, pathways)
+enr_deg_woLR, enr_sig_pathways_deg_woLR = do_enrichr(sc_deg_woLR, pathways)
+
 enr_deg, enr_sig_pathways_deg = do_enrichr(LR_deg, pathways)
 enr_top_wDeg, enr_sig_pathways_top_wDeg = do_enrichr(top_lr_filtered_wDeg, pathways)
 enr_bottom_wDeg, enr_sig_pathways_bottom_wDeg = do_enrichr(bottom_lr_filtered_wDeg, pathways)
@@ -2389,6 +2399,10 @@ set5 = set(sc_enr_sig_pathways_deg)
 set6 = set(sc_enr_sig_pathways_top_wDeg)
 set7 = set(sc_enr_sig_pathways_bottom_wDeg)
 
+set8 = set(enr_sig_pathways_woDeg)
+set9 = set(enr_sig_pathways_woDeg_short)
+set10 = set(enr_sig_pathways_deg_woLR)
+
 from venn import venn
 enrs_dict = {
     'All LR': set1,
@@ -2405,6 +2419,14 @@ sc_enrs_dict = {
     'DEG': set5,
 }
 venn(sc_enrs_dict)
+
+sc_enrs_dict_woDeg = {
+    'All LR': set1,
+    'All LR - ex sc DEG': set8,
+    'All LR - ex sc DEG (short)': set9,
+    'DEG - ex LR': set10,
+}
+venn(sc_enrs_dict_woDeg)
 
 
 #%% check ranks of pre-defined pathways
