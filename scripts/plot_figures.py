@@ -1339,12 +1339,28 @@ atac_fullpath = os.path.join(atac_datapath, ATAC_file)
 atac = anndata.read_h5ad(atac_fullpath, backed='r')
 rna  = anndata.read_h5ad(rna_fullpath, backed='r')
 
-rna_full = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna.h5ad'), backed='r')
+## get data after decimation
+decimate_factor = 10
 
-mdd_atac = atac[::1].to_memory()
-mdd_rna = rna[::1].to_memory()
+mdd_atac = atac[::decimate_factor].to_memory()
+mdd_rna = rna[::decimate_factor].to_memory()
 
 mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
+
+## also load counts data for pyDESeq2 and full processed data for annotations
+rna_full = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna.h5ad'), backed='r')
+rna_scaled_with_counts = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna_scaled.h5ad'), backed='r')
+rna_scaled_with_counts = rna_scaled_with_counts[::decimate_factor].to_memory()
+
+rna_counts_X = rna_scaled_with_counts.raw.X.astype(int).toarray()
+rna_counts_obs = rna_scaled_with_counts.obs
+rna_counts_var = rna_full[::decimate_factor].var
+
+mdd_rna_counts = anndata.AnnData(
+    X=rna_counts_X,
+    var=rna_counts_var,
+    obs=rna_counts_obs,
+)
 
 ## define keys
 rna_celltype_key='ClustersMapped'
@@ -1416,6 +1432,80 @@ sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_condition_key)
 sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_celltype_key)
 sc.pl.dotplot(mdd_rna_female[mdd_rna_female.obs[rna_celltype_key]=='Mic'], genes, groupby=rna_condition_key)
 
+## pyDESeq2
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.default_inference import DefaultInference
+from pydeseq2.ds import DeseqStats
+
+## learn SEACell assignments based on processed data to apply onto counts data
+ct_map_dict = dict({1: 'ExN', 0: 'InN', 4: 'Oli', 2: 'Ast', 3: 'OPC', 6: 'End', 5: 'Mix', 7: 'Mic'})
+rna_scaled_with_counts.obs[rna_celltype_key] = rna_scaled_with_counts.obs['Broad'].map(ct_map_dict)
+
+sex = 'Female'
+celltype = 'Mic'
+
+mdd_seacells_counts_dict = {}
+
+for condition in unique_conditions:
+
+    ## select cell indices
+    rna_indices = pd.DataFrame({
+        'is_celltype': rna_scaled_with_counts.obs[rna_celltype_key].str.startswith(celltype),
+        'is_condition': rna_scaled_with_counts.obs[rna_condition_key].str.startswith(condition),
+        'is_sex': rna_scaled_with_counts.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
+    }).prod(axis=1).astype(bool).values.nonzero()[0]
+
+    rna_sampled = rna_scaled_with_counts[rna_indices]
+
+    ## learn SEACell assignments for this condition
+    seacells_model = SEACells.core.SEACells(
+        rna_sampled, 
+        build_kernel_on='X_pca', # could also opt for batch-corrected PCA (Harmony), but ok if pseudo-bulk within batch
+        n_SEACells=max(rna_sampled.n_obs // 100, 15), 
+        n_waypoint_eigs=15,
+        convergence_epsilon = 1e-5,
+        max_franke_wolfe_iters=100,
+        use_gpu=True if torch.cuda.is_available() else False
+        )
+    
+    seacells_model.construct_kernel_matrix()
+    seacells_model.initialize_archetypes()
+    seacells_model.fit(min_iter=10, max_iter=100)
+
+    ## summarize counts data by SEACell
+    mdd_rna_counts.obs.loc[rna_sampled.obs_names,'SEACell'] = rna_sampled.obs['SEACell'].add(f'_{condition}_{sex}_{celltype}')
+    mdd_seacells_counts = SEACells.core.summarize_by_SEACell(mdd_rna_counts, SEACells_label='SEACell', summarize_layer='X')
+    mdd_seacells_counts = mdd_seacells_counts[mdd_seacells_counts.obs_names != 'nan']
+
+    mdd_seacells_counts.obs[rna_condition_key] = condition
+    mdd_seacells_counts.obs[rna_sex_key] = sex
+    mdd_seacells_counts.obs[rna_celltype_key] = celltype
+
+    mdd_seacells_counts_dict[condition] = mdd_seacells_counts
+
+## concatenate all SEACell counts data across conditions
+mdd_seacells_counts_adata = anndata.concat(mdd_seacells_counts_dict.values(), axis=0)
+mdd_seacells_counts_adata = mdd_seacells_counts_adata[:, mdd_seacells_counts_adata.var_names.isin(mdd_rna.var_names)]
+mdd_seacells_counts_adata.var = mdd_rna.var
+
+## run pyDESeq2
+inference = DefaultInference(n_cpus=8)
+dds = DeseqDataSet(
+    counts=mdd_seacells_counts_adata.X.astype(int).toarray(),
+    metadata=mdd_seacells_counts_adata.obs,
+    design_factors=rna_condition_key, # currently using v0.4.12 rather than v0.5.1, so use "design_factors" rather than formulaic "design"
+    refit_cooks=True,
+    inference=inference,
+    # n_cpus=8, # n_cpus can be specified here or in the inference object
+)
+dds.deseq2()
+stat_res = DeseqStats(dds, inference=inference)
+stat_res.summary()
+
+## get results and volcano plot
+results = stat_res.results_df
+results['pH'] = -np.log10(results['pvalue'])
+sns.scatterplot(data=results, x='log2FoldChange', y='pH')
 
 #%% Get mean GRN from brainSCOPE & scglue preprocessing
 
