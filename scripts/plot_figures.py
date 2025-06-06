@@ -1622,7 +1622,7 @@ display(deg_overlap_grouped_df.sort_values(by='Case', ascending=False).T)
 
 ## define sex and celltype
 sex='Female'
-celltype='Mic'
+celltype='Oli'
 do_corrs_or_cosines = ''
 
 ## get HVG features
@@ -2752,7 +2752,7 @@ mean_grn_df_filtered_pruned = mean_grn_df_filtered[mean_grn_df_filtered['LR_grns
 
 #%% TF-enhancer-TG-pathway visualization with networkx and dash-cytoscape
 
-pathway_names = ['ASTON_MAJOR_DEPRESSIVE_DISORDER_DN', 'GOBP_PERIPHERAL_NERVOUS_SYSTEM_DEVELOPMENT']
+pathway_names = ['ASTON_MAJOR_DEPRESSIVE_DISORDER_DN', 'LU_AGING_BRAIN_UP']
 pathways = enr.res2d[enr.res2d['Term'].isin(pathway_names)]
 pathways_edge = top_pathway_edges.loc[top_pathway_edges[['src_name','targ_name']].apply(lambda x: np.isin(x, pathway_names).all(), axis=1)]
 
@@ -2774,7 +2774,7 @@ for tf, enhancer, motif_score_norm in mean_grn_df_filtered_pruned[['TF','enhance
     mean_grn_filtered_graph.add_edge(tf, enhancer, interaction='binds', weight=motif_score_norm)
 '''
 G = nx.DiGraph()
-G.add_edge(pathways_edge['src_name'].values[0], pathways_edge['targ_name'].values[0], interaction='pathway_overlap', weight=pathways_edge['jaccard_coef'].values[0])
+#G.add_edge(pathways_edge['src_name'].values[0], pathways_edge['targ_name'].values[0], interaction='pathway_overlap', weight=pathways_edge['jaccard_coef'].values[0])
 
 for pathway_name, keep_tg_pathway in keep_tg.items():
 
@@ -2799,7 +2799,7 @@ nlist_values = list(nlist.values)
 pos = nx.shell_layout(G, nlist_values, scale=5000)
 
 # Apply type-specific rotations to node positions
-def rotate_nodes(pos, nlist, angle_dict={'pathway': 0, 'tg': 0, 'enhancer': -np.pi/8, 'tf': -np.pi/3}):
+def rotate_nodes(pos, nlist, angle_dict={'pathway': 0, 'tg': np.pi/8, 'enhancer': -np.pi/8, 'tf': -np.pi/2}):
     for node_type, nodes in nlist.items():
         # Get the center point of nodes for this type
         type_pos = np.array([pos[node] for node in nodes])
@@ -2828,7 +2828,7 @@ def rotate_nodes(pos, nlist, angle_dict={'pathway': 0, 'tg': 0, 'enhancer': -np.
     return pos
 pos = rotate_nodes(pos, nlist)
 
-pos = nx.arf_layout(G, pos, max_iter=250, a=1.1, dt=0.001)
+pos = nx.arf_layout(G, pos, max_iter=10000, a=1.1, dt=0.001)
 pos_xy = {k: {'x': xy[0], 'y': xy[1]} for k, xy in pos.items()}
 
 plt.figure(figsize=(8, 8))
@@ -2838,16 +2838,9 @@ cyto_data = nx.cytoscape_data(G)
 elements = cyto_data['elements']
 
 def datashader_bundling(edges, pos_xy_df):
-    import math
-    import numpy as np
-    import pandas as pd
-
     import datashader as ds
     import datashader.transfer_functions as tf_ds
-    from datashader.layout import random_layout, circular_layout, forceatlas2_layout
-    from datashader.bundling import connect_edges, hammer_bundle
-
-    from itertools import chain
+    from datashader.bundling import hammer_bundle
 
     #nodes = pd.DataFrame.from_dict(dict(G.nodes), orient='index').reset_index()
     #nodes = nodes.drop(columns=['type', 'layer'])
@@ -2890,10 +2883,9 @@ def datashader_bundling(edges, pos_xy_df):
 
 def holoviews_bundling(edges, pos_xy_df):
     
-    import holoviews.operation.datashader as hd
     import holoviews as hv
     from holoviews import opts
-    from holoviews.operation.datashader import datashade, bundle_graph
+    from holoviews.operation.datashader import bundle_graph
 
     hv.extension("bokeh")
 
@@ -2906,7 +2898,7 @@ def holoviews_bundling(edges, pos_xy_df):
                   cmap='Set1',
                   show_legend=True)
 
-    bundled = bundle_graph(grn_graph, decay=0.9, initial_bandwidth=0.2) # (d=0.9, bw=0.2) for shell+arf, (d=0.25, bw=0.1) for shell only
+    bundled = bundle_graph(grn_graph, decay=0.5, initial_bandwidth=0.5) # (d=0.9, bw=0.2) for shell+arf, (d=0.25, bw=0.1) for shell only
 
     edges_only = bundled.opts(node_alpha=0, edge_color="gray", edge_line_width=1)
 
