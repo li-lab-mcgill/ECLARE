@@ -1405,16 +1405,6 @@ subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condit
 confound_vars = ["Batch", "Sample", "Chemistry", "percent.mt", "nCount_RNA"]
 display(mdd_rna.obs.groupby('Sample')[confound_vars].nunique())
 
-## get DEG genes
-deg_df = sc.get.rank_genes_groups_df(mdd_rna_female, group='Case', key=deg_method)
-genes = deg_df['names'][:20]
-
-## dotplot per subject
-sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_subject_key)
-sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_condition_key)
-sc.pl.dotplot(mdd_rna_female, genes, groupby=rna_celltype_key)
-sc.pl.dotplot(mdd_rna_female[mdd_rna_female.obs[rna_celltype_key]=='Mic'], genes, groupby=rna_condition_key)
-
 ## pyDESeq2
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.default_inference import DefaultInference
