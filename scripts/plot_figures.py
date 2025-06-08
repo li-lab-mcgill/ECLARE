@@ -1340,7 +1340,7 @@ atac = anndata.read_h5ad(atac_fullpath, backed='r')
 rna  = anndata.read_h5ad(rna_fullpath, backed='r')
 
 ## get data after decimation
-decimate_factor = 10
+decimate_factor = 1
 
 mdd_atac = atac[::decimate_factor].to_memory()
 mdd_rna = rna[::decimate_factor].to_memory()
@@ -1404,23 +1404,6 @@ subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condit
 ## shows that unique Batch and Chemistry per Sample
 confound_vars = ["Batch", "Sample", "Chemistry", "percent.mt", "nCount_RNA"]
 display(mdd_rna.obs.groupby('Sample')[confound_vars].nunique())
-
-#confound_vars = ["percent.mt", "nCount_RNA"]
-#sc.pp.regress_out(mdd_rna, confound_vars) # takes about 1 hour to run
-
-## DEG analysis (female only)
-deg_method = 'wilcoxon'
-
-mdd_rna_female = mdd_rna[mdd_rna.obs[rna_sex_key] == 'Female']
-
-sc.tl.rank_genes_groups(mdd_rna_female, rna_condition_key, reference='Control', method=deg_method, key_added=deg_method, pts=True)
-sc.pl.rank_genes_groups(mdd_rna_female, n_genes=25, sharey=False, key = deg_method)
-
-fig, ax = plt.subplots(3,1, figsize=[10,9])
-sc.pl.rank_genes_groups_violin(mdd_rna_female, n_genes=10, key=deg_method, strip=False, show=False, ax=ax[0]); ax[0].set_title('all')
-sc.pl.rank_genes_groups_violin(mdd_rna_female[mdd_rna_female.obs[rna_celltype_key]=='Mic'], n_genes=10, key=deg_method, strip=False, show=False, ax=ax[1]); ax[1].set_title('microglia')
-sc.pl.rank_genes_groups_violin(mdd_rna_female[mdd_rna_female.obs[rna_celltype_key]=='InN'], n_genes=10, key=deg_method, strip=False, show=False, ax=ax[2]); ax[2].set_title('inhibitory neurons')
-fig.tight_layout(); fig.show()
 
 ## get DEG genes
 deg_df = sc.get.rank_genes_groups_df(mdd_rna_female, group='Case', key=deg_method)
