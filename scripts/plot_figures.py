@@ -1410,66 +1410,113 @@ from pydeseq2.dds import DeseqDataSet
 from pydeseq2.default_inference import DefaultInference
 from pydeseq2.ds import DeseqStats
 
-## learn SEACell assignments based on processed data to apply onto counts data
 ct_map_dict = dict({1: 'ExN', 0: 'InN', 4: 'Oli', 2: 'Ast', 3: 'OPC', 6: 'End', 5: 'Mix', 7: 'Mic'})
 rna_scaled_with_counts.obs[rna_celltype_key] = rna_scaled_with_counts.obs['Broad'].map(ct_map_dict)
 
-sex = 'Female'
-celltype = 'Mic'
+pseudo_replicates = 'Subjects'
 
-mdd_seacells_counts_dict = {}
+if pseudo_replicates == 'SEACells':
+    ## learn SEACell assignments based on processed data to apply onto counts data
+    sex = 'Female'
+    celltype = 'Mic'
 
-for condition in unique_conditions:
+    mdd_seacells_counts_dict = {}
 
-    ## select cell indices
-    rna_indices = pd.DataFrame({
-        'is_celltype': rna_scaled_with_counts.obs[rna_celltype_key].str.startswith(celltype),
-        'is_condition': rna_scaled_with_counts.obs[rna_condition_key].str.startswith(condition),
-        'is_sex': rna_scaled_with_counts.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
-    }).prod(axis=1).astype(bool).values.nonzero()[0]
+    for condition in unique_conditions:
 
-    rna_sampled = rna_scaled_with_counts[rna_indices]
+        ## select cell indices
+        rna_indices = pd.DataFrame({
+            'is_celltype': rna_scaled_with_counts.obs[rna_celltype_key].str.startswith(celltype),
+            'is_condition': rna_scaled_with_counts.obs[rna_condition_key].str.startswith(condition),
+            'is_sex': rna_scaled_with_counts.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
+        }).prod(axis=1).astype(bool).values.nonzero()[0]
 
-    ## learn SEACell assignments for this condition
-    seacells_model = SEACells.core.SEACells(
-        rna_sampled, 
-        build_kernel_on='X_pca', # could also opt for batch-corrected PCA (Harmony), but ok if pseudo-bulk within batch
-        n_SEACells=max(rna_sampled.n_obs // 100, 15), 
-        n_waypoint_eigs=15,
-        convergence_epsilon = 1e-5,
-        max_franke_wolfe_iters=100,
-        use_gpu=True if torch.cuda.is_available() else False
+        rna_sampled = rna_scaled_with_counts[rna_indices]
+
+        ## learn SEACell assignments for this condition
+        seacells_model = SEACells.core.SEACells(
+            rna_sampled, 
+            build_kernel_on='X_pca', # could also opt for batch-corrected PCA (Harmony), but ok if pseudo-bulk within batch
+            n_SEACells=max(rna_sampled.n_obs // 100, 15), 
+            n_waypoint_eigs=15,
+            convergence_epsilon = 1e-5,
+            max_franke_wolfe_iters=100,
+            use_gpu=True if torch.cuda.is_available() else False
+            )
+        
+        seacells_model.construct_kernel_matrix()
+        seacells_model.initialize_archetypes()
+        seacells_model.fit(min_iter=10, max_iter=100)
+
+        ## summarize counts data by SEACell - remove 'nan' obs_names which groups cells not corresponding to celltype or sex
+        mdd_rna_counts.obs.loc[rna_sampled.obs_names,'SEACell'] = rna_sampled.obs['SEACell'].add(f'_{condition}_{sex}_{celltype}')
+        mdd_seacells_counts = SEACells.core.summarize_by_SEACell(mdd_rna_counts, SEACells_label='SEACell', summarize_layer='X')
+        mdd_seacells_counts = mdd_seacells_counts[mdd_seacells_counts.obs_names != 'nan']
+
+        mdd_seacells_counts.obs[rna_condition_key] = condition
+        mdd_seacells_counts.obs[rna_sex_key] = sex
+        mdd_seacells_counts.obs[rna_celltype_key] = celltype
+
+        mdd_seacells_counts_dict[condition] = mdd_seacells_counts
+
+    ## concatenate all SEACell counts data across conditions
+    mdd_seacells_counts_adata = anndata.concat(mdd_seacells_counts_dict.values(), axis=0)
+    mdd_seacells_counts_adata = mdd_seacells_counts_adata[:, mdd_seacells_counts_adata.var_names.isin(mdd_rna.var_names)]
+    mdd_seacells_counts_adata.var = mdd_rna.var
+
+    counts = mdd_seacells_counts_adata.X.astype(int).toarray()
+    metadata = mdd_seacells_counts_adata.obs
+
+elif pseudo_replicates == 'Subjects':
+
+    mdd_subjects_counts_dict = {}
+
+    for subject in overlapping_subjects:
+
+        rna_indices =  pd.DataFrame({
+            'is_subject': mdd_rna.obs[rna_subject_key].str.startswith(subject),
+            'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype)
+        })
+        rna_indices = rna_indices.prod(axis=1).astype(bool).values.nonzero()[0]
+
+        rna_sampled = rna_scaled_with_counts[rna_indices]
+        rna_subject_counts = rna_sampled.raw.X.sum(axis=0).A1.astype(int)
+        rna_subject_var = rna_sampled.raw.var.set_index('_index')
+
+        subject_condition = mdd_rna.obs[rna_condition_key][mdd_rna.obs[rna_subject_key] == subject].iloc[0]
+        subject_sex = mdd_rna.obs[rna_sex_key][mdd_rna.obs[rna_subject_key] == subject].iloc[0]
+        rna_subject_obs = pd.DataFrame(
+            np.hstack([subject_condition, subject_sex, celltype]).reshape(1, -1),
+            columns=[rna_condition_key, rna_sex_key, rna_celltype_key],
+            index=[subject],
         )
-    
-    seacells_model.construct_kernel_matrix()
-    seacells_model.initialize_archetypes()
-    seacells_model.fit(min_iter=10, max_iter=100)
 
-    ## summarize counts data by SEACell
-    mdd_rna_counts.obs.loc[rna_sampled.obs_names,'SEACell'] = rna_sampled.obs['SEACell'].add(f'_{condition}_{sex}_{celltype}')
-    mdd_seacells_counts = SEACells.core.summarize_by_SEACell(mdd_rna_counts, SEACells_label='SEACell', summarize_layer='X')
-    mdd_seacells_counts = mdd_seacells_counts[mdd_seacells_counts.obs_names != 'nan']
+        rna_subject_counts_ad = anndata.AnnData(
+            X=rna_subject_counts.reshape(1, -1),
+            var=rna_subject_var,
+            obs=rna_subject_obs,
+        )
+        mdd_subjects_counts_dict[subject] = rna_subject_counts_ad
 
-    mdd_seacells_counts.obs[rna_condition_key] = condition
-    mdd_seacells_counts.obs[rna_sex_key] = sex
-    mdd_seacells_counts.obs[rna_celltype_key] = celltype
+    mdd_subjects_counts_adata = anndata.concat(mdd_subjects_counts_dict.values(), axis=0)
+    mdd_subjects_counts_adata = mdd_subjects_counts_adata[:, mdd_subjects_counts_adata.var_names.isin(mdd_rna.var_names)]
+    mdd_subjects_counts_adata.var = mdd_rna.var
 
-    mdd_seacells_counts_dict[condition] = mdd_seacells_counts
+    ## retain sex of interest
+    mdd_subjects_counts_adata = mdd_subjects_counts_adata[mdd_subjects_counts_adata.obs[rna_sex_key] == sex]
 
-## concatenate all SEACell counts data across conditions
-mdd_seacells_counts_adata = anndata.concat(mdd_seacells_counts_dict.values(), axis=0)
-mdd_seacells_counts_adata = mdd_seacells_counts_adata[:, mdd_seacells_counts_adata.var_names.isin(mdd_rna.var_names)]
-mdd_seacells_counts_adata.var = mdd_rna.var
+    counts = mdd_subjects_counts_adata.X.astype(int).toarray()
+    metadata = mdd_subjects_counts_adata.obs
+
 
 ## run pyDESeq2
 inference = DefaultInference(n_cpus=8)
 dds = DeseqDataSet(
-    counts=mdd_seacells_counts_adata.X.astype(int).toarray(),
-    metadata=mdd_seacells_counts_adata.obs,
-    design_factors=rna_condition_key, # currently using v0.4.12 rather than v0.5.1, so use "design_factors" rather than formulaic "design"
+    counts=counts,
+    metadata=metadata,
+    design_factors=rna_condition_key,
     refit_cooks=True,
     inference=inference,
-    # n_cpus=8, # n_cpus can be specified here or in the inference object
 )
 dds.deseq2()
 stat_res = DeseqStats(dds, inference=inference)
