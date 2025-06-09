@@ -1401,6 +1401,9 @@ subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condit
 
 #%% differential expression analysis
 
+tmp = mdd_rna[(mdd_rna.obs[rna_sex_key]=='Female') & (mdd_rna.obs[rna_celltype_key]=='Mic')]
+sc.tl.rank_genes_groups(tmp, groupby=rna_condition_key, reference='Control', method='wilcoxon')
+
 ## shows that unique Batch and Chemistry per Sample
 confound_vars = ["Batch", "Sample", "Chemistry", "percent.mt", "nCount_RNA"]
 display(mdd_rna.obs.groupby('Sample')[confound_vars].nunique())
@@ -1532,7 +1535,6 @@ results['pH'] = -np.log10(results['padj'])
 sns.scatterplot(data=results, x='log2FoldChange', y='pH', hue='signif_padj', marker='o', alpha=0.5)
 
 ## extract significant genes
-
 significant_genes = mdd_subjects_counts_adata.var_names[results['signif_padj']]
 mdd_subjects_counts_adata.var.loc[significant_genes, 'signif_padj'] = True
 
@@ -1554,10 +1556,6 @@ mg = mygene.MyGeneInfo()
 MAGMAPATH = os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10_mac')
 magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job500', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
 magma_out_path = os.path.join(os.environ['OUTPATH'], 'pyDESeq2_significant_genes')
-
-## write gene set file
-magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'pyDESeq2_significant_genes.entrez.gmt')
-set_file_df.to_csv(magma_set_file_path, index=True, header=False, sep='\t')
 
 ## read "genes.raw" file and see if IDs start with "ENSG" or is integer
 genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
@@ -1594,6 +1592,11 @@ else:
         significant_genes_entrez_ids.append(entrez_id)
 
     set_file_df = pd.DataFrame(np.reshape(significant_genes_entrez_ids, (1, -1)), index=['pyDESeq2'])
+
+
+## write gene set file
+magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'pyDESeq2_significant_genes.gmt')
+set_file_df.to_csv(magma_set_file_path, index=True, header=False, sep='\t')
 
 ## run MAGMA (a terminal command)
 os.system(f"{MAGMAPATH}/magma --gene-results {magma_genes_raw_path} --set-annot {magma_set_file_path} --out {magma_out_path}")
@@ -1799,7 +1802,8 @@ doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'comb
 #maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
 
 deg_dict = maitra_female_degs_df.groupby('cluster_id.female')['gene'].unique().to_dict()
-deg_overlap_df = sc.tl.marker_gene_overlap(mdd_rna_female, deg_dict, key=deg_method, adj_pval_threshold=0.05).astype(int)
+
+deg_overlap_df = pd.DataFrame.from_dict({key: np.isin(deg_dict[key], significant_genes).sum() for key in deg_dict.keys()}, orient='index').rename(columns={0: 'Case'})
 deg_overlap_df = pd.concat([deg_overlap_df, deg_overlap_df.sum(axis=0).to_frame().T.rename(index={0: 'TOTAL'})], axis=0)
 
 for celltype in deg_overlap_df.index:
@@ -1965,7 +1969,6 @@ if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'
             plt.show()
 
             ## get mean GRN from brainSCOPE
-            deg_genes = deg_df[deg_df['pvals'] < 0.05]['names'].to_list()
             mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned)
 
             overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
@@ -2364,10 +2367,14 @@ n_genes = np.unique([len(lr_filtered), len(top_lr_filtered_wDeg), len(bottom_lr_
 n_genes = n_genes[0]
 
 ## ...from scanpy DEG analysis
+'''
 mdd_rna_female_celltype = mdd_rna_female[mdd_rna_female.obs[rna_celltype_key].str.startswith(celltype)]
 sc.tl.rank_genes_groups(mdd_rna_female_celltype, rna_condition_key, reference='Control', method=deg_method, key_added=deg_method, pts=True)
 sc_deg_df = sc.get.rank_genes_groups_df(mdd_rna_female_celltype, group='Case', key=deg_method)
 sc_deg_df = sc_deg_df[sc_deg_df['pvals_adj'] < 0.05]
+'''
+
+sc_deg_df = pd.DataFrame(significant_genes, columns=['names'], index=significant_genes)
 
 ## LR values for DEG genes (not all DEG genes are in LR)
 sc_LR_deg = LR.loc[LR.index.isin(sc_deg_df['names'])]
@@ -2492,6 +2499,62 @@ gset_by_blacklist_df_wGO.columns = brain_gmt_wGO_names
 
 keep_cortical_gmt_wGO = gset_by_blacklist_df_wGO.loc[:,~gset_by_blacklist_df_wGO.any(axis=0).values].columns.tolist()
 brain_gmt_cortical_wGO = {k:v for k,v in brain_gmt_wGO.items() if k in keep_cortical_gmt_wGO}
+
+#%% MAGMA
+
+## get entrez IDs or Ensembl IDs for significant genes
+import mygene
+mg = mygene.MyGeneInfo()
+
+## paths for MAGMA
+MAGMAPATH = os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10_mac')
+magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job500', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
+magma_out_path = os.path.join(os.environ['OUTPATH'], 'sc-compReg_significant_genes')
+
+## read "genes.raw" file and see if IDs start with "ENSG" or is integer
+genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
+genes_raw_ids = genes_raw_df[0].apply(lambda x: x.split(' ')[0])
+
+if genes_raw_ids.str.startswith('ENSG').all():
+
+    print(f"IDs are Ensembl IDs")
+
+    significant_genes_mg_df = mg.querymany(
+        lr_filtered.index.to_list(),
+        scopes="symbol",
+        fields="ensembl.gene",
+        species="human",
+        size=1,
+        as_dataframe=True,
+        )
+
+    significant_genes_ensembl_ids = list(set(
+        significant_genes_mg_df['ensembl.gene'].dropna().to_list() + \
+        significant_genes_mg_df['ensembl'].dropna().apply(lambda gene: [ensembl['gene'] for ensembl in gene]).explode().to_list()
+    ))
+
+    set_file_df = pd.DataFrame(np.reshape(significant_genes_ensembl_ids, (1, -1)), index=['sc-compReg'])
+    
+else:
+
+    print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
+
+    significant_genes_entrez_ids = []
+    for gene in tqdm(filtered_genes.index.to_list(), total=len(filtered_genes), desc='Getting entrez IDs for significant genes'):
+        entrez_id_res = mg.query(gene, species='human', scopes='entrezgenes', size=1)
+        entrez_id = entrez_id_res['hits'][0]['_id']
+        significant_genes_entrez_ids.append(entrez_id)
+
+    set_file_df = pd.DataFrame(np.reshape(significant_genes_entrez_ids, (1, -1)), index=['sc-compReg'])
+
+
+## write gene set file
+magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'sc-compReg_significant_genes.gmt')
+set_file_df.to_csv(magma_set_file_path, index=True, header=False, sep='\t')
+
+## run MAGMA (a terminal command)
+os.system(f"{MAGMAPATH}/magma --gene-results {magma_genes_raw_path} --set-annot {magma_set_file_path} --out {magma_out_path}")
+
 
 #%% GSEApy
 
