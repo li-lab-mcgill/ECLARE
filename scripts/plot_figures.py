@@ -1524,8 +1524,23 @@ stat_res.summary()
 
 ## get results and volcano plot
 results = stat_res.results_df
-results['pH'] = -np.log10(results['pvalue'])
-sns.scatterplot(data=results, x='log2FoldChange', y='pH')
+results['signif_padj'] = results['padj'] < 0.05
+results['signif_lfc'] = results['log2FoldChange'].abs() > 1.5
+results['signif'] = results['signif_padj'] & results['signif_lfc']
+results['pH'] = -np.log10(results['padj'])
+sns.scatterplot(data=results, x='log2FoldChange', y='pH', hue='signif_padj', marker='o', alpha=0.5)
+
+## extract significant genes
+significant_genes = mdd_subjects_counts_adata.var_names[results['signif_padj']]
+mdd_subjects_counts_adata.var.loc[significant_genes, 'signif_padj'] = True
+
+## violin plot
+df = mdd_subjects_counts_adata[:,mdd_subjects_counts_adata.var_names.isin(significant_genes[:10])].to_df()
+df = df.reset_index()
+df = pd.melt(df, id_vars=['index'], var_name='gene', value_name='expression')
+df = df.merge(mdd_subjects_counts_adata.obs, left_on='index', right_index=True)
+
+sns.violinplot(data=df, x=rna_condition_key, y='X', hue=rna_celltype_key)
 
 #%% Get mean GRN from brainSCOPE & scglue preprocessing
 
