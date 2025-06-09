@@ -1401,9 +1401,6 @@ subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condit
 
 #%% differential expression analysis
 
-tmp = mdd_rna[(mdd_rna.obs[rna_sex_key]=='Female') & (mdd_rna.obs[rna_celltype_key]=='Mic')]
-sc.tl.rank_genes_groups(tmp, groupby=rna_condition_key, reference='Control', method='wilcoxon')
-
 ## shows that unique Batch and Chemistry per Sample
 confound_vars = ["Batch", "Sample", "Chemistry", "percent.mt", "nCount_RNA"]
 display(mdd_rna.obs.groupby('Sample')[confound_vars].nunique())
