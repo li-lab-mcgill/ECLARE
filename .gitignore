@@ -3,6 +3,7 @@ config/config.yaml
 MCB_bash_scripts/
 build/
 mlruns/
+magma_*/
 
 benchmark_*/**/*_env
 **/.git

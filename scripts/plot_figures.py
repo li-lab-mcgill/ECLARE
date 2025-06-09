@@ -1413,12 +1413,13 @@ from pydeseq2.ds import DeseqStats
 ct_map_dict = dict({1: 'ExN', 0: 'InN', 4: 'Oli', 2: 'Ast', 3: 'OPC', 6: 'End', 5: 'Mix', 7: 'Mic'})
 rna_scaled_with_counts.obs[rna_celltype_key] = rna_scaled_with_counts.obs['Broad'].map(ct_map_dict)
 
+sex = 'Female'
+celltype = 'Mic'
+
 pseudo_replicates = 'Subjects'
 
 if pseudo_replicates == 'SEACells':
     ## learn SEACell assignments based on processed data to apply onto counts data
-    sex = 'Female'
-    celltype = 'Mic'
 
     mdd_seacells_counts_dict = {}
 
@@ -1531,6 +1532,7 @@ results['pH'] = -np.log10(results['padj'])
 sns.scatterplot(data=results, x='log2FoldChange', y='pH', hue='signif_padj', marker='o', alpha=0.5)
 
 ## extract significant genes
+
 significant_genes = mdd_subjects_counts_adata.var_names[results['signif_padj']]
 mdd_subjects_counts_adata.var.loc[significant_genes, 'signif_padj'] = True
 
@@ -1541,6 +1543,72 @@ df = pd.melt(df, id_vars=['index'], var_name='gene', value_name='expression')
 df = df.merge(mdd_subjects_counts_adata.obs, left_on='index', right_index=True)
 
 sns.violinplot(data=df, x=rna_condition_key, y='X', hue=rna_celltype_key)
+
+#%% MAGMA on pyDESeq2 significant genes
+
+## get entrez IDs or Ensembl IDs for significant genes
+import mygene
+mg = mygene.MyGeneInfo()
+
+## paths for MAGMA
+MAGMAPATH = os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10_mac')
+magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job500', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
+magma_out_path = os.path.join(os.environ['OUTPATH'], 'pyDESeq2_significant_genes')
+
+## write gene set file
+magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'pyDESeq2_significant_genes.entrez.gmt')
+set_file_df.to_csv(magma_set_file_path, index=True, header=False, sep='\t')
+
+## read "genes.raw" file and see if IDs start with "ENSG" or is integer
+genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
+genes_raw_ids = genes_raw_df[0].apply(lambda x: x.split(' ')[0])
+
+if genes_raw_ids.str.startswith('ENSG').all():
+
+    print(f"IDs are Ensembl IDs")
+
+    significant_genes_mg_df = mg.querymany(
+        significant_genes.to_list(),
+        scopes="symbol",
+        fields="ensembl.gene",
+        species="human",
+        size=1,
+        as_dataframe=True,
+        )
+
+    significant_genes_ensembl_ids = list(set(
+        significant_genes_mg_df['ensembl.gene'].dropna().to_list() + \
+        significant_genes_mg_df['ensembl'].dropna().apply(lambda gene: [ensembl['gene'] for ensembl in gene]).explode().to_list()
+    ))
+
+    set_file_df = pd.DataFrame(np.reshape(significant_genes_ensembl_ids, (1, -1)), index=['pyDESeq2'])
+    
+else:
+
+    print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
+
+    significant_genes_entrez_ids = []
+    for gene in tqdm(significant_genes, total=len(significant_genes), desc='Getting entrez IDs for significant genes'):
+        entrez_id_res = mg.query(gene, species='human', scopes='entrezgenes', size=1)
+        entrez_id = entrez_id_res['hits'][0]['_id']
+        significant_genes_entrez_ids.append(entrez_id)
+
+    set_file_df = pd.DataFrame(np.reshape(significant_genes_entrez_ids, (1, -1)), index=['pyDESeq2'])
+
+## run MAGMA (a terminal command)
+os.system(f"{MAGMAPATH}/magma --gene-results {magma_genes_raw_path} --set-annot {magma_set_file_path} --out {magma_out_path}")
+
+## check content of output file and log file
+outfile = magma_out_path + '.gsa.out'
+logfile = magma_out_path + '.log'
+
+with open(logfile, 'r') as f:
+    for line in f:
+        print(line)
+with open(outfile, 'r') as f:
+    for line in f:
+        print(line)
+
 
 #%% Get mean GRN from brainSCOPE & scglue preprocessing
 
