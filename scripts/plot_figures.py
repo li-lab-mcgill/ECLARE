@@ -1546,72 +1546,6 @@ df = df.merge(mdd_subjects_counts_adata.obs, left_on='index', right_index=True)
 
 sns.violinplot(data=df, x=rna_condition_key, y='X', hue=rna_celltype_key)
 
-#%% MAGMA on pyDESeq2 significant genes
-
-## get entrez IDs or Ensembl IDs for significant genes
-import mygene
-mg = mygene.MyGeneInfo()
-
-## paths for MAGMA
-MAGMAPATH = os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10_mac')
-magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job500', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
-magma_out_path = os.path.join(os.environ['OUTPATH'], 'pyDESeq2_significant_genes')
-
-## read "genes.raw" file and see if IDs start with "ENSG" or is integer
-genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
-genes_raw_ids = genes_raw_df[0].apply(lambda x: x.split(' ')[0])
-
-if genes_raw_ids.str.startswith('ENSG').all():
-
-    print(f"IDs are Ensembl IDs")
-
-    significant_genes_mg_df = mg.querymany(
-        significant_genes.to_list(),
-        scopes="symbol",
-        fields="ensembl.gene",
-        species="human",
-        size=1,
-        as_dataframe=True,
-        )
-
-    significant_genes_ensembl_ids = list(set(
-        significant_genes_mg_df['ensembl.gene'].dropna().to_list() + \
-        significant_genes_mg_df['ensembl'].dropna().apply(lambda gene: [ensembl['gene'] for ensembl in gene]).explode().to_list()
-    ))
-
-    set_file_df = pd.DataFrame(np.reshape(significant_genes_ensembl_ids, (1, -1)), index=['pyDESeq2'])
-    
-else:
-
-    print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
-
-    significant_genes_entrez_ids = []
-    for gene in tqdm(significant_genes, total=len(significant_genes), desc='Getting entrez IDs for significant genes'):
-        entrez_id_res = mg.query(gene, species='human', scopes='entrezgenes', size=1)
-        entrez_id = entrez_id_res['hits'][0]['_id']
-        significant_genes_entrez_ids.append(entrez_id)
-
-    set_file_df = pd.DataFrame(np.reshape(significant_genes_entrez_ids, (1, -1)), index=['pyDESeq2'])
-
-
-## write gene set file
-magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'pyDESeq2_significant_genes.gmt')
-set_file_df.to_csv(magma_set_file_path, index=True, header=False, sep='\t')
-
-## run MAGMA (a terminal command)
-os.system(f"{MAGMAPATH}/magma --gene-results {magma_genes_raw_path} --set-annot {magma_set_file_path} --out {magma_out_path}")
-
-## check content of output file and log file
-outfile = magma_out_path + '.gsa.out'
-logfile = magma_out_path + '.log'
-
-with open(logfile, 'r') as f:
-    for line in f:
-        print(line)
-with open(outfile, 'r') as f:
-    for line in f:
-        print(line)
-
 
 #%% Get mean GRN from brainSCOPE & scglue preprocessing
 
@@ -2515,46 +2449,63 @@ magma_out_path = os.path.join(os.environ['OUTPATH'], 'sc-compReg_significant_gen
 genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
 genes_raw_ids = genes_raw_df[0].apply(lambda x: x.split(' ')[0])
 
-if genes_raw_ids.str.startswith('ENSG').all():
+gene_sets = {'sc-compReg': lr_filtered.index.to_list(), 'pyDESeq2': significant_genes.to_list()}
+set_file_dict = {}
 
-    print(f"IDs are Ensembl IDs")
+for gene_set_name, gene_set in gene_sets.items():
 
-    significant_genes_mg_df = mg.querymany(
-        lr_filtered.index.to_list(),
-        scopes="symbol",
-        fields="ensembl.gene",
-        species="human",
-        size=1,
-        as_dataframe=True,
-        )
+    if genes_raw_ids.str.startswith('ENSG').all():
 
-    significant_genes_ensembl_ids = list(set(
-        significant_genes_mg_df['ensembl.gene'].dropna().to_list() + \
-        significant_genes_mg_df['ensembl'].dropna().apply(lambda gene: [ensembl['gene'] for ensembl in gene]).explode().to_list()
-    ))
+        print(f"IDs are Ensembl IDs")
 
-    set_file_df = pd.DataFrame(np.reshape(significant_genes_ensembl_ids, (1, -1)), index=['sc-compReg'])
-    
-else:
+        significant_genes_mg_df = mg.querymany(
+            gene_set,
+            scopes="symbol",
+            fields="ensembl.gene",
+            species="human",
+            size=1,
+            as_dataframe=True,
+            )
 
-    print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
+        significant_genes_ensembl_ids = list(set(
+            significant_genes_mg_df['ensembl.gene'].dropna().to_list() + \
+            significant_genes_mg_df['ensembl'].dropna().apply(lambda gene: [ensembl['gene'] for ensembl in gene]).explode().to_list()
+        ))
 
-    significant_genes_entrez_ids = []
-    for gene in tqdm(filtered_genes.index.to_list(), total=len(filtered_genes), desc='Getting entrez IDs for significant genes'):
-        entrez_id_res = mg.query(gene, species='human', scopes='entrezgenes', size=1)
-        entrez_id = entrez_id_res['hits'][0]['_id']
-        significant_genes_entrez_ids.append(entrez_id)
+        set_file_dict[gene_set_name] = significant_genes_ensembl_ids
+        
+    else:
 
-    set_file_df = pd.DataFrame(np.reshape(significant_genes_entrez_ids, (1, -1)), index=['sc-compReg'])
+        print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
 
+        significant_genes_entrez_ids = []
+        for gene in tqdm(gene_set, total=len(gene_set), desc='Getting entrez IDs for significant genes'):
+            entrez_id_res = mg.query(gene, species='human', scopes='entrezgenes', size=1)
+            entrez_id = entrez_id_res['hits'][0]['_id']
+            significant_genes_entrez_ids.append(entrez_id)
+
+        set_file_dict[gene_set_name] = significant_genes_entrez_ids
 
 ## write gene set file
-magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'sc-compReg_significant_genes.gmt')
-set_file_df.to_csv(magma_set_file_path, index=True, header=False, sep='\t')
+magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'significant_gene_sets.gmt')
+
+with open(magma_set_file_path, 'w') as f:
+    for gene_set_name, gene_set in set_file_dict.items():
+        f.write(f"{gene_set_name} {' '.join(gene_set)}\n")
 
 ## run MAGMA (a terminal command)
 os.system(f"{MAGMAPATH}/magma --gene-results {magma_genes_raw_path} --set-annot {magma_set_file_path} --out {magma_out_path}")
 
+## check content of output file and log file
+outfile = magma_out_path + '.gsa.out'
+logfile = magma_out_path + '.log'
+
+with open(logfile, 'r') as f:
+    for line in f:
+        print(line)
+with open(outfile, 'r') as f:
+    for line in f:
+        print(line)
 
 #%% GSEApy
 
