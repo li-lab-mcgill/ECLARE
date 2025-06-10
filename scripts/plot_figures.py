@@ -1413,6 +1413,7 @@ from pydeseq2.ds import DeseqStats
 ct_map_dict = dict({1: 'ExN', 0: 'InN', 4: 'Oli', 2: 'Ast', 3: 'OPC', 6: 'End', 5: 'Mix', 7: 'Mic'})
 rna_scaled_with_counts.obs[rna_celltype_key] = rna_scaled_with_counts.obs['Broad'].map(ct_map_dict)
 
+## define sex and celltype
 sex = 'Female'
 celltype = 'Mic'
 
@@ -1541,7 +1542,9 @@ df = df.reset_index()
 df = pd.melt(df, id_vars=['index'], var_name='gene', value_name='expression')
 df = df.merge(mdd_subjects_counts_adata.obs, left_on='index', right_index=True)
 
-sns.violinplot(data=df, x=rna_condition_key, y='X', hue=rna_celltype_key)
+fig, ax = plt.subplots(figsize=(14, 5))
+sns.violinplot(data=df, x='gene', y='expression', hue=rna_condition_key, split=True, inner=None, cut=0, ax=ax)
+fig.show()
 
 
 #%% Get mean GRN from brainSCOPE & scglue preprocessing
@@ -1748,9 +1751,6 @@ for celltype in deg_overlap_df.index:
 deg_overlap_grouped_df = deg_overlap_df.groupby('unique_celltype').sum()
 display(deg_overlap_grouped_df.sort_values(by='Case', ascending=False).T)
 
-## define sex and celltype
-sex='Female'
-celltype='Oli'
 do_corrs_or_cosines = ''
 
 ## get HVG features
@@ -2297,7 +2297,7 @@ bottom_lr_filtered_wDeg = pd.concat([bottom_lr_filtered, LR_deg])
 n_genes = np.unique([len(lr_filtered), len(top_lr_filtered_wDeg), len(bottom_lr_filtered_wDeg)]); assert len(n_genes) == 1, 'number of genes in each list must be the same'
 n_genes = n_genes[0]
 
-## ...from scanpy DEG analysis
+## ...from scanpy pyDESeq2 analysis
 '''
 mdd_rna_female_celltype = mdd_rna_female[mdd_rna_female.obs[rna_celltype_key].str.startswith(celltype)]
 sc.tl.rank_genes_groups(mdd_rna_female_celltype, rna_condition_key, reference='Control', method=deg_method, key_added=deg_method, pts=True)
@@ -2382,7 +2382,7 @@ scglue.genomics.write_links(
 tg_dist_counts_sorted = mean_grn_df_filtered.groupby('TG')[['dist']].mean().merge(mean_grn_df_filtered['TG'].value_counts(), left_index=True, right_on='TG').sort_values('dist').head(20)
 display(tg_dist_counts_sorted)
 
-gene = 'INPP5J'
+gene = tg_dist_counts_sorted.iloc[10].name
 tg_grn = mean_grn_df_filtered[mean_grn_df_filtered['TG']==gene].sort_values('dist')[['enhancer','dist','lrCorr']].groupby('enhancer').mean()
 tg_grn_bounds = np.stack(tg_grn.index.str.split(':|-')).flatten()
 tg_grn_bounds = [int(bound) for bound in tg_grn_bounds if bound.isdigit()] + [genes.loc[gene, 'chromStart'].drop_duplicates().values[0]] + [genes.loc[gene, 'chromEnd'].drop_duplicates().values[0]]
@@ -2438,50 +2438,68 @@ import mygene
 mg = mygene.MyGeneInfo()
 
 ## paths for MAGMA
-MAGMAPATH = os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10_mac')
-magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job500', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
+MAGMAPATH = glob(os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10*'))[0]
+magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job604461', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
 magma_out_path = os.path.join(os.environ['OUTPATH'], 'sc-compReg_significant_genes')
 
 ## read "genes.raw" file and see if IDs start with "ENSG" or is integer
 genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
 genes_raw_ids = genes_raw_df[0].apply(lambda x: x.split(' ')[0])
 
-gene_sets = {'sc-compReg': lr_filtered.index.to_list(), 'pyDESeq2': significant_genes.to_list()}
+genes_out_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job604461', 'magma.genes.out'), sep='\t')
+genes_magma_control = genes_out_df.loc[genes_out_df['ZSTAT'].argsort()][-len(significant_genes):]['GENE'].to_list()
+
+lr_filtered_top = lr_filtered[lr_filtered.argsort().values][-len(significant_genes):]
+lr_filtered_union = pd.concat([lr_filtered, pd.Series(significant_genes, index=significant_genes)]).drop_duplicates()
+
+gene_sets = {
+    'sc-compReg': lr_filtered.index.to_list(),
+    'pyDESeq2': significant_genes.to_list(),
+    'magma-control': genes_magma_control,
+    'sc-compReg-top': lr_filtered_top.index.to_list()}
+
 set_file_dict = {}
 
 for gene_set_name, gene_set in gene_sets.items():
 
-    if genes_raw_ids.str.startswith('ENSG').all():
+    if pd.Series(gene_set).str.startswith('ENSG').all():
+        print(f"IDs are already Ensembl IDs")
+        set_file_dict[gene_set_name] = gene_set
 
-        print(f"IDs are Ensembl IDs")
-
-        significant_genes_mg_df = mg.querymany(
-            gene_set,
-            scopes="symbol",
-            fields="ensembl.gene",
-            species="human",
-            size=1,
-            as_dataframe=True,
-            )
-
-        significant_genes_ensembl_ids = list(set(
-            significant_genes_mg_df['ensembl.gene'].dropna().to_list() + \
-            significant_genes_mg_df['ensembl'].dropna().apply(lambda gene: [ensembl['gene'] for ensembl in gene]).explode().to_list()
-        ))
-
-        set_file_dict[gene_set_name] = significant_genes_ensembl_ids
-        
     else:
+        print(f"IDs are not Ensembl IDs, converting to Ensembl IDs")
 
-        print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
+        if genes_raw_ids.str.startswith('ENSG').all():
 
-        significant_genes_entrez_ids = []
-        for gene in tqdm(gene_set, total=len(gene_set), desc='Getting entrez IDs for significant genes'):
-            entrez_id_res = mg.query(gene, species='human', scopes='entrezgenes', size=1)
-            entrez_id = entrez_id_res['hits'][0]['_id']
-            significant_genes_entrez_ids.append(entrez_id)
+            print(f"IDs are Ensembl IDs")
 
-        set_file_dict[gene_set_name] = significant_genes_entrez_ids
+            significant_genes_mg_df = mg.querymany(
+                gene_set,
+                scopes="symbol",
+                fields="ensembl.gene",
+                species="human",
+                size=1,
+                as_dataframe=True,
+                )
+
+            significant_genes_ensembl_ids = list(set(
+                significant_genes_mg_df['ensembl.gene'].dropna().to_list() + \
+                (significant_genes_mg_df['ensembl'].dropna().apply(lambda gene: [ensembl['gene'] for ensembl in gene]).explode().to_list() if ('ensembl' in significant_genes_mg_df.columns) else [])
+            ))
+
+            set_file_dict[gene_set_name] = significant_genes_ensembl_ids
+            
+        else:
+
+            print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
+
+            significant_genes_entrez_ids = []
+            for gene in tqdm(gene_set, total=len(gene_set), desc='Getting entrez IDs for significant genes'):
+                entrez_id_res = mg.query(gene, species='human', scopes='entrezgenes', size=1)
+                entrez_id = entrez_id_res['hits'][0]['_id']
+                significant_genes_entrez_ids.append(entrez_id)
+
+            set_file_dict[gene_set_name] = significant_genes_entrez_ids
 
 ## write gene set file
 magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'significant_gene_sets.gmt')
