@@ -2252,6 +2252,7 @@ lr_fitted_cdf = gamma.cdf(lr, a=res.x[0], scale=res.x[1])
 where_filtered = lr_fitted_cdf > (1-p_threshold)
 
 lr_filtered = LR[where_filtered]
+Z_filtered = Z[where_filtered]
 genes_names_filtered = lr_filtered.index.to_list()
 
 ## filter LR_up and LR_down, note that splits gene set in half, could use more leniant threshold to include more genes for up and down, or even create separate null distributions for each
@@ -2456,9 +2457,11 @@ gene_sets = {
     'sc-compReg': lr_filtered.index.to_list(),
     'pyDESeq2': significant_genes.to_list(),
     'magma-control': genes_magma_control,
-    'sc-compReg-top': lr_filtered_top.index.to_list()}
+    'sc-compReg-top': lr_filtered_top.index.to_list(),
+    'Z_IGNORE': Z.index.to_list()}
 
 set_file_dict = {}
+sig_ensembl_ids_all_dict = {}
 
 for gene_set_name, gene_set in gene_sets.items():
 
@@ -2481,14 +2484,16 @@ for gene_set_name, gene_set in gene_sets.items():
                 size=1,
                 as_dataframe=True,
                 )
+            
+            sig_ensembl_ids = significant_genes_mg_df['ensembl.gene'].dropna()
+            sig_ensembl_ids_exploded = (significant_genes_mg_df['ensembl'].dropna().apply(lambda gene: [ensembl['gene'] for ensembl in gene]).explode() if ('ensembl' in significant_genes_mg_df.columns) else pd.Series(dtype=str))
+            sig_ensembl_ids_all = pd.concat([sig_ensembl_ids, sig_ensembl_ids_exploded])
 
-            significant_genes_ensembl_ids = list(set(
-                significant_genes_mg_df['ensembl.gene'].dropna().to_list() + \
-                (significant_genes_mg_df['ensembl'].dropna().apply(lambda gene: [ensembl['gene'] for ensembl in gene]).explode().to_list() if ('ensembl' in significant_genes_mg_df.columns) else [])
-            ))
+            significant_genes_ensembl_ids = list(set(sig_ensembl_ids_all.to_list()))
 
             set_file_dict[gene_set_name] = significant_genes_ensembl_ids
-            
+            sig_ensembl_ids_all_dict[gene_set_name] = sig_ensembl_ids_all
+
         else:
 
             print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
@@ -2506,19 +2511,78 @@ magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'significant_gene_sets
 
 with open(magma_set_file_path, 'w') as f:
     for gene_set_name, gene_set in set_file_dict.items():
-        f.write(f"{gene_set_name} {' '.join(gene_set)}\n")
+        if not gene_set_name.endswith('IGNORE'):
+            f.write(f"{gene_set_name} {' '.join(gene_set)}\n")
+
+## write gene covariate file
+Z_IGNORE_ensembl = sig_ensembl_ids_all_dict['Z_IGNORE']
+Z_IGNORE_ensembl.name = 'ensembl'
+
+Z.name = 'ZSTAT'
+Z.index.name = 'gene'
+
+Z_ensembl = pd.merge(Z, Z_IGNORE_ensembl, left_index=True, right_index=True, how='right')
+Z_ensembl = Z_ensembl.set_index('ensembl', drop=True)
+
+magma_genecovar_path = os.path.join(os.environ['OUTPATH'], 'Z.covariates.txt')
+Z_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
+
+'''
+sc_compReg_ensembl = sig_ensembl_ids_all_dict['sc-compReg']
+sc_compReg_ensembl.name = 'ensembl'
+
+Z_filtered.name = 'ZSTAT'
+Z_filtered.index.name = 'gene'
+
+Z_filtered_ensembl = pd.merge(Z_filtered, sc_compReg_ensembl, left_index=True, right_index=True, how='right')
+Z_filtered_ensembl = Z_filtered_ensembl.set_index('ensembl', drop=True)
+
+magma_genecovar_path = os.path.join(os.environ['OUTPATH'], 'Z_filtered.covariates.txt')
+Z_filtered_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
+'''
+
+
+## write list file for interaction analysis
+magma_list_file_path = os.path.join(os.environ['OUTPATH'], 'significant_genes.list')
+list_file_dict = {'condition-interaction': ['sc-compReg', 'ZSTAT']}
+pd.DataFrame.from_dict(list_file_dict, orient='index').to_csv(magma_list_file_path, sep='\t', header=False, index=False)
 
 ## run MAGMA (a terminal command)
-os.system(f"{MAGMAPATH}/magma --gene-results {magma_genes_raw_path} --set-annot {magma_set_file_path} --out {magma_out_path}")
+magma_gs_cmd = f"""{MAGMAPATH}/magma \
+    --gene-results {magma_genes_raw_path} \
+    --set-annot {magma_set_file_path} \
+    --model self-contained correct=all\
+    --out {magma_out_path}"""
+
+magma_cvar_cmd = f"""{MAGMAPATH}/magma \
+    --gene-results {magma_genes_raw_path} \
+    --gene-covar {magma_genecovar_path} \
+    --model correct=all\
+    --out {magma_out_path}"""
+
+magma_gs_cvar_interaction_cmd = f"""{MAGMAPATH}/magma \
+    --gene-results {magma_genes_raw_path} \
+    --set-annot {magma_set_file_path} \
+    --gene-covar {magma_genecovar_path} \
+    --model interaction={magma_list_file_path}\
+    --out {magma_out_path}"""
+
+os.system(magma_gs_cmd)
+os.system(magma_cvar_cmd)
+os.system(magma_gs_cvar_interaction_cmd)
 
 ## check content of output file and log file
-outfile = magma_out_path + '.gsa.out'
 logfile = magma_out_path + '.log'
+outfile = magma_out_path + '.gsa.out'
+outfile_self = magma_out_path + '.gsa.self.out'
 
 with open(logfile, 'r') as f:
     for line in f:
         print(line)
 with open(outfile, 'r') as f:
+    for line in f:
+        print(line)
+with open(outfile_self, 'r') as f:
     for line in f:
         print(line)
 
