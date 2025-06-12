@@ -72,6 +72,17 @@ def cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_grou
         plan = res.plan
         value = res.value_linear
 
+        '''
+        plan_df = pd.DataFrame(plan.cpu().numpy(), index=mdd_atac_sampled_group.obs[atac_subject_key], columns=mdd_rna_sampled_group.obs[rna_subject_key])
+        row_order = plan_df.index.argsort()
+        col_order = plan_df.columns.argsort()
+        plan_df = plan_df.iloc[row_order, col_order]
+
+        fig, ax = plt.subplots(figsize=(12, 10))
+        sns.heatmap(plan_df, ax=ax)
+        plt.show()
+        '''
+
     elif type == 'partial':
         a, b = torch.ones((len(student_logits.shape[0]),)) / len(student_logits.shape[0]), torch.ones((len(student_logits.shape[1]),)) / len(student_logits.shape[1])
         mass = 1 - (a[0] * cells_gap).item()
@@ -1602,6 +1613,167 @@ def run_gseapy(rank, brain_gmt_cortical):
 
     return pre_res
 
+def get_pathway_ranks(enr, enr_deg, enr_top_wDeg, enr_bottom_wDeg, rank_type='Adjusted P-value'):
+
+    ## rank by adjusted p-value
+    enr_sorted = enr.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
+    enr_sorted_deg = enr_deg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
+    enr_sorted_top_wDeg = enr_top_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
+    enr_sorted_bottom_wDeg = enr_bottom_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
+
+    ## compute normalized ranks
+    enr_sorted['normalized_rank'] = enr_sorted['rank'] / len(enr_sorted)
+    enr_sorted_deg['normalized_rank'] = enr_sorted_deg['rank'] / len(enr_sorted_deg)
+    enr_sorted_top_wDeg['normalized_rank'] = enr_sorted_top_wDeg['rank'] / len(enr_sorted_top_wDeg)
+    enr_sorted_bottom_wDeg['normalized_rank'] = enr_sorted_bottom_wDeg['rank'] / len(enr_sorted_bottom_wDeg)
+
+    pathways = [
+        'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN',
+        'ASTON_MAJOR_DEPRESSIVE_DISORDER_UP',
+        'LU_AGING_BRAIN_DN',
+        'LU_AGING_BRAIN_UP',
+        'BLALOCK_ALZHEIMERS_DISEASE_DN',
+        'BLALOCK_ALZHEIMERS_DISEASE_UP',
+        'Gandal_2018_BipolarDisorder_Downregulated_Cortex',
+        'Gandal_2018_BipolarDisorder_Upregulated_Cortex',
+        ]
+
+    pathway_ranks = pd.DataFrame(index=pathways, \
+        columns=['ALL LR', 'DEG + Top LR', 'DEG + Bottom LR', 'DEG'])
+    pathway_ranks.attrs['rank_type'] = rank_type
+
+
+    def get_pathway_rank(enr_res2d, pathway, rank_type='Adjusted P-value', return_nan=True):
+
+        if len(enr_res2d[enr_res2d['Term'] == pathway]) > 0:
+            return enr_res2d[enr_res2d['Term'] == pathway][rank_type].values[0]
+        else:
+            if return_nan:
+                return np.nan
+            else:
+                return max(enr_res2d[rank_type])
+
+    for pathway in pathways:
+        pathway_ranks.loc[pathway, 'ALL LR'] = get_pathway_rank(enr_sorted, pathway, rank_type)
+
+        pathway_ranks.loc[pathway, 'DEG + Top LR'] = get_pathway_rank(enr_sorted_top_wDeg, pathway, rank_type)
+        pathway_ranks.loc[pathway, 'DEG + Bottom LR'] = get_pathway_rank(enr_sorted_bottom_wDeg, pathway, rank_type)
+        pathway_ranks.loc[pathway, 'DEG'] = get_pathway_rank(enr_sorted_deg, pathway, rank_type)
+
+    return pathway_ranks
+
+def plot_pathway_ranks(pathway_ranks, stem=True):
+
+    # ─── 3. Sort pathways by “ALL LR” (optional) ───
+    order = pathway_ranks["ALL LR"].sort_values().index.tolist()
+
+    pathway_ranks = pathway_ranks.loc[order]
+
+    pathway_ranks_long = (
+        pathway_ranks
+        .reset_index()
+        .melt(id_vars="index", var_name="method", value_name="rank")
+        .rename(columns={"index": "pathway"})
+    )
+
+    # ─── 4. Plot the stripplot ───
+    fig, ax = plt.subplots(1, 2, figsize=(12, 4 + 0.5 * pathway_ranks.shape[0]), sharex=False, sharey=True)
+    sns.stripplot(
+        data=pathway_ranks_long,
+        y="pathway",
+        x="rank",
+        hue="method",
+        dodge=True,       # side‐by‐side dots per pathway
+        jitter=False,     # no vertical jitter
+        size=6,
+        palette="tab10",
+        ax=ax[0]
+    )
+    sns.stripplot(
+        data=pathway_ranks_long,
+        y="pathway",
+        x="rank",
+        hue="method",
+        dodge=True,       # side‐by‐side dots per pathway
+        jitter=False,     # no vertical jitter
+        size=6,
+        palette="tab10",
+        legend=False,
+        ax=ax[1]
+    ); ax[1].set_xscale('log')
+
+    if stem:
+
+        # ─── Add horizontal stems from the rightmost edge to each marker ───
+        for subax in ax:
+            # 1) Record the current x‐axis limits:
+            x_min, x_max = subax.get_xlim()
+
+            # 2) Loop over each PathCollection in this subplot.
+            #    Each collection corresponds to one hue level (one "method").
+            for collec in subax.collections:
+                # get_offsets() is an Nx2 array of (x, y) positions for every dot in that hue.
+                offsets = collec.get_offsets()
+                # Choose a stem color (e.g. light gray); you could also pull collec.get_facecolor()[0]
+                stem_color = "lightgray"
+                for (x_pt, y_pt) in offsets:
+                    # draw a line from x_max → x_pt at y=y_pt
+                    subax.plot(
+                        [x_max, x_pt],        # x data: from right edge to the point
+                        [y_pt, y_pt],         # y data: horizontal at the same y
+                        color=stem_color,
+                        linewidth=0.6,
+                        alpha=0.7,
+                        zorder=0  # put stems “underneath” the markers
+                    )
+
+            # 3) Re‐enforce the original x‐limits so the stems don’t stretch the view
+            subax.set_xlim(x_min, x_max)
+
+    # ─── 5. Add horizontal dividing lines ───
+    n_paths = len(pathways)
+    for i in range(n_paths - 1):
+        ypos = i + 0.5
+        ax[0].axhline(y=ypos, color="lightgray", linewidth=2, linestyle="--")
+        ax[1].axhline(y=ypos, color="lightgray", linewidth=2, linestyle="--")
+
+    # ─── 6. Tidy up labels & legend ───
+    ax[0].set_ylabel("Brain GMT Pathway")
+    ax[0].set_xlabel(f"{pathway_ranks.attrs['rank_type']}")
+    ax[1].set_xlabel(f"{pathway_ranks.attrs['rank_type']} (log scale)")
+    ax[0].set_title("Per‐Pathway Ranks Across Methods")
+
+    # Place legend outside so it doesn’t overlap
+    #ax[0].legend(bbox_to_anchor=(1.02, 1), borderaxespad=0)
+
+    plt.tight_layout()
+    plt.show()
+
+def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
+
+    enr = gp.enrichr(lr_filtered_type.index.to_list(),
+                        gene_sets=pathways,
+                        outdir=None)
+
+    display(enr.res2d.sort_values('Adjusted P-value', ascending=True).head(20)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
+
+    # dotplot
+    max_pval = enr.res2d['Adjusted P-value'].max()
+    gp.dotplot(enr.res2d,
+            column='Adjusted P-value',
+            figsize=(3,7),
+            title='',
+            cmap=plt.cm.viridis,
+            size=12, # adjust dot size
+            cutoff=max_pval,
+            top_term=15,
+            show_ring=False)
+    plt.show()
+
+    enr_sig_pathways = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]['Term'].to_list()
+
+    return enr, enr_sig_pathways
+
 cuda_available = torch.cuda.is_available()
 
 #%%
@@ -2305,7 +2477,8 @@ _, fig, rna_atac_df_umap = plot_umap_embeddings(eclare_rna_latents, eclare_atac_
 
 #%% get peak-gene correlations
 
-X_rna_dict, X_atac_dict, overlapping_target_genes_dict, overlapping_tfs_dict, genes_by_peaks_corrs_dict, genes_by_peaks_masks_dict, n_dict, scompreg_loglikelihoods_dict, std_errs_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, tfrps_dict, tfrp_predictions_dict = initialize_dicts()
+X_rna_dict, X_atac_dict, overlapping_target_genes_dict, overlapping_tfs_dict, genes_by_peaks_corrs_dict, genes_by_peaks_masks_dict, n_dict, scompreg_loglikelihoods_dict, std_errs_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, tfrps_dict, tfrp_predictions_dict \
+    = initialize_dicts()
 
 with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
     all_dicts = pickle.load(f)
@@ -2314,6 +2487,7 @@ mean_grn_df = all_dicts[-1]
 ## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
 cutoff = 5025 # better a multiple of 75 due to formation of SEACells
 do_corrs_or_cosines = ''
+ot_alignment_type = 'all'
 
 for celltype in unique_celltypes:
 
@@ -2325,29 +2499,103 @@ for celltype in unique_celltypes:
         all_rna_indices = []
         all_atac_indices = []
 
-        for subject in subjects_by_condition_n_sex_df[condition, sex.lower()]:
+        if ot_alignment_type == 'subjects':
 
-            #print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {mdd_atac.n_vars} - DEG genes: {mdd_rna.n_vars}')
+            for subject in subjects_by_condition_n_sex_df[condition, sex.lower()]:
+
+                #print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {mdd_atac.n_vars} - DEG genes: {mdd_rna.n_vars}')
+
+                ## select cell indices
+                rna_indices = pd.DataFrame({
+                    'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype),
+                    'is_condition': mdd_rna.obs[rna_condition_key].str.startswith(condition),
+                    'is_sex': mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
+                    'is_subject': mdd_rna.obs[rna_subject_key] == subject # do not use startswith to avoid multiple subjects
+                }).prod(axis=1).astype(bool).values.nonzero()[0]
+
+                atac_indices = pd.DataFrame({
+                    'is_celltype': mdd_atac.obs[atac_celltype_key].str.startswith(celltype),
+                    'is_condition': mdd_atac.obs[atac_condition_key].str.startswith(condition),
+                    'is_sex': mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower()),
+                    'is_subject': mdd_atac.obs[atac_subject_key] == subject # do not use startswith to avoid multiple subjects
+                }).prod(axis=1).astype(bool).values.nonzero()[0]
+
+                all_rna_indices.append(pd.DataFrame(np.vstack([rna_indices, [subject]*len(rna_indices), [celltype]*len(rna_indices), [condition]*len(rna_indices), [sex]*len(rna_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
+                all_atac_indices.append(pd.DataFrame(np.vstack([atac_indices, [subject]*len(atac_indices), [celltype]*len(atac_indices), [condition]*len(atac_indices), [sex]*len(atac_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
+
+                assert len(rna_indices) > 0 and len(atac_indices) > 0, f"No indices found for sex: {sex} - celltype: {celltype} - condition: {condition} - subject: {subject}"
+
+                ## sample indices
+                if len(rna_indices) > cutoff:
+                    sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
+                    _, sampled_indices = next(sss.split(rna_indices, mdd_rna.obs[rna_celltype_key].iloc[rna_indices]))
+                    rna_indices = rna_indices[sampled_indices]
+                if len(atac_indices) > cutoff:
+                    sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
+                    _, sampled_indices = next(sss.split(atac_indices, mdd_atac.obs[atac_celltype_key].iloc[atac_indices]))
+                    atac_indices = atac_indices[sampled_indices]
+
+                ## sample data
+                mdd_rna_sampled_group = mdd_rna[rna_indices]
+                mdd_atac_sampled_group = mdd_atac[atac_indices]
+
+                ## get latents
+                rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_sampled_group, mdd_atac_sampled_group, return_tensor=True)
+                rna_latents = rna_latents.cpu()
+                atac_latents = atac_latents.cpu()
+
+                ## get logits - already normalized during clip loss, but need to normalize before to be consistent with Concerto
+                rna_latents = torch.nn.functional.normalize(rna_latents, p=2, dim=1)
+                atac_latents = torch.nn.functional.normalize(atac_latents, p=2, dim=1)
+                student_logits = torch.matmul(atac_latents, rna_latents.T)
+
+                a, b = torch.ones((len(atac_latents),)) / len(atac_latents), torch.ones((len(rna_latents),)) / len(rna_latents)
+
+                cells_gap = np.abs(len(atac_latents) - len(rna_latents))
+
+                ## if imbalance, use partial wasserstein to find cells to reject and resample accordingly
+                if cells_gap > 0:
+                    print(f'cells_gap: {cells_gap} (atac: {len(atac_latents)} - rna: {len(rna_latents)})')
+                    mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits = \
+                        cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd')
+
+                ## compute optimal transport plan for alignment on remaining cells
+                res = ot_solve(1 - student_logits)
+                plan = res.plan
+                value = res.value_linear
+
+                ## re-order ATAC latents to match plan (can rerun OT analysis to ensure diagonal matching structure)
+                atac_latents = atac_latents[plan.argmax(axis=0)]
+                mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
+
+                ## append to list
+                mdd_rna_aligned.append(mdd_rna_sampled_group)
+                mdd_atac_aligned.append(mdd_atac_sampled_group)
+
+            ## concatenate aligned anndatas
+            mdd_rna_aligned = anndata.concat(mdd_rna_aligned, axis=0)
+            mdd_atac_aligned = anndata.concat(mdd_atac_aligned, axis=0)
+
+            assert np.equal(mdd_rna_aligned.obs[rna_subject_key].values, mdd_atac_aligned.obs[atac_subject_key].values).all()
+            assert (mdd_rna_aligned.obs_names.nunique() == mdd_rna_aligned.n_obs) & (mdd_atac_aligned.obs_names.nunique() == mdd_atac_aligned.n_obs)
+
+
+        elif ot_alignment_type == 'all':
 
             ## select cell indices
             rna_indices = pd.DataFrame({
                 'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype),
                 'is_condition': mdd_rna.obs[rna_condition_key].str.startswith(condition),
                 'is_sex': mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
-                'is_subject': mdd_rna.obs[rna_subject_key] == subject # do not use startswith to avoid multiple subjects
+                'is_subject': mdd_rna.obs[rna_subject_key].isin(overlapping_subjects)
             }).prod(axis=1).astype(bool).values.nonzero()[0]
 
             atac_indices = pd.DataFrame({
                 'is_celltype': mdd_atac.obs[atac_celltype_key].str.startswith(celltype),
                 'is_condition': mdd_atac.obs[atac_condition_key].str.startswith(condition),
                 'is_sex': mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower()),
-                'is_subject': mdd_atac.obs[atac_subject_key] == subject # do not use startswith to avoid multiple subjects
+                'is_subject': mdd_atac.obs[atac_subject_key].isin(overlapping_subjects)
             }).prod(axis=1).astype(bool).values.nonzero()[0]
-
-            all_rna_indices.append(pd.DataFrame(np.vstack([rna_indices, [subject]*len(rna_indices), [celltype]*len(rna_indices), [condition]*len(rna_indices), [sex]*len(rna_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
-            all_atac_indices.append(pd.DataFrame(np.vstack([atac_indices, [subject]*len(atac_indices), [celltype]*len(atac_indices), [condition]*len(atac_indices), [sex]*len(atac_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
-
-            assert len(rna_indices) > 0 and len(atac_indices) > 0, f"No indices found for sex: {sex} - celltype: {celltype} - condition: {condition} - subject: {subject}"
 
             ## sample indices
             if len(rna_indices) > cutoff:
@@ -2379,7 +2627,7 @@ for celltype in unique_celltypes:
 
             ## if imbalance, use partial wasserstein to find cells to reject and resample accordingly
             if cells_gap > 0:
-                print(f'cells_gap: {cells_gap}')
+                print(f'cells_gap: {cells_gap} (atac: {len(atac_latents)} - rna: {len(rna_latents)})')
                 mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits = \
                     cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd')
 
@@ -2393,22 +2641,16 @@ for celltype in unique_celltypes:
             mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
 
             ## append to list
-            mdd_rna_aligned.append(mdd_rna_sampled_group)
-            mdd_atac_aligned.append(mdd_atac_sampled_group)
+            mdd_rna_aligned = mdd_rna_sampled_group
+            mdd_atac_aligned = mdd_atac_sampled_group
 
-        ## concatenate aligned anndatas
-        mdd_rna_aligned = anndata.concat(mdd_rna_aligned, axis=0)
-        mdd_atac_aligned = anndata.concat(mdd_atac_aligned, axis=0)
-
-        assert np.equal(mdd_rna_aligned.obs[rna_subject_key].values, mdd_atac_aligned.obs[atac_subject_key].values).all()
-        assert (mdd_rna_aligned.obs_names.nunique() == mdd_rna_aligned.n_obs) & (mdd_atac_aligned.obs_names.nunique() == mdd_atac_aligned.n_obs)
-
+        ## add var to aligned anndatas
         mdd_rna_aligned.var = mdd_rna.var
         mdd_atac_aligned.var = mdd_atac.var
 
         ## plot UMAP of aligned RNA latents and ATAC latents
         rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_aligned, mdd_atac_aligned, return_tensor=True)
-        plot_umap_embeddings(rna_latents, atac_latents, [celltype]*len(rna_latents), [celltype]*len(atac_latents), [condition]*len(rna_latents), [condition]*len(atac_latents), color_map_ct={celltype: 'black'}, umap_embedding=None)
+        umap_embedder, _, _ = plot_umap_embeddings(rna_latents, atac_latents, [celltype]*len(rna_latents), [celltype]*len(atac_latents), [condition]*len(rna_latents), [condition]*len(atac_latents), color_map_ct={celltype: 'black'}, umap_embedding=None)
 
         ## get mean GRN from brainSCOPE
         mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned)
@@ -2426,9 +2668,23 @@ for celltype in unique_celltypes:
             mdd_rna_sampled_group = mdd_rna_sampled_group[sampled_indices]
             mdd_atac_sampled_group = mdd_atac_sampled_group[sampled_indices]
 
+        ## save original PCA and UMAP
+        mdd_rna_sampled_group.obsm['X_pca_orig'] = mdd_rna_sampled_group.obsm['X_pca']
+        mdd_rna_sampled_group.obsm['X_umap_orig'] = mdd_rna_sampled_group.obsm['X_umap']
+        mdd_atac_sampled_group.obsm['X_pca_orig'] = mdd_atac_sampled_group.obsm['X_pca']
+
+        ## PCA and UMAP
+        sc.pp.pca(mdd_rna_sampled_group, n_comps=50)
+        sc.pp.neighbors(mdd_rna_sampled_group, n_neighbors=15)
+        sc.tl.umap(mdd_rna_sampled_group)
+
+        sc.pp.pca(mdd_atac_sampled_group, n_comps=50)
+        #sc.pp.neighbors(mdd_atac_sampled_group, n_neighbors=15)
+        #sc.tl.umap(mdd_atac_sampled_group)
+
         ## run SEACells to obtain pseudobulked counts
         mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = \
-            run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_UMAP_pca')
+            run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_umap')
 
         X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
         X_atac = torch.from_numpy(mdd_atac_sampled_group_seacells.X.toarray())
@@ -2549,31 +2805,7 @@ run_magma(lr_filtered, Z, significant_genes)
 #%% EnrichR
 from IPython.display import display
 
-def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
-
-    enr = gp.enrichr(lr_filtered_type.index.to_list(),
-                        gene_sets=pathways,
-                        outdir=None)
-
-    display(enr.res2d.sort_values('Adjusted P-value', ascending=True).head(20)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
-
-    # dotplot
-    max_pval = enr.res2d['Adjusted P-value'].max()
-    gp.dotplot(enr.res2d,
-            column='Adjusted P-value',
-            figsize=(3,7),
-            title='',
-            cmap=plt.cm.viridis,
-            size=12, # adjust dot size
-            cutoff=max_pval,
-            top_term=15,
-            show_ring=False)
-    plt.show()
-
-    enr_sig_pathways = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]['Term'].to_list()
-
-    return enr, enr_sig_pathways
-
+## Perform EnrichR on different gene sets
 pathways = brain_gmt_cortical
 deg_df = pd.DataFrame(index=significant_genes)
 
@@ -2607,160 +2839,8 @@ venn(enrs_dict)
 
 #%% check ranks of pre-defined pathways
 
-## rank by adjusted p-value
-enr_sorted = enr.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
-enr_sorted_deg = enr_deg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
-enr_sorted_top_wDeg = enr_top_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
-enr_sorted_bottom_wDeg = enr_bottom_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
-
-## compute normalized ranks
-enr_sorted['normalized_rank'] = enr_sorted['rank'] / len(enr_sorted)
-enr_sorted_deg['normalized_rank'] = enr_sorted_deg['rank'] / len(enr_sorted_deg)
-enr_sorted_top_wDeg['normalized_rank'] = enr_sorted_top_wDeg['rank'] / len(enr_sorted_top_wDeg)
-enr_sorted_bottom_wDeg['normalized_rank'] = enr_sorted_bottom_wDeg['rank'] / len(enr_sorted_bottom_wDeg)
-
-pathways = [
-    'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN',
-    'ASTON_MAJOR_DEPRESSIVE_DISORDER_UP',
-    'LU_AGING_BRAIN_DN',
-    'LU_AGING_BRAIN_UP',
-    'BLALOCK_ALZHEIMERS_DISEASE_DN',
-    'BLALOCK_ALZHEIMERS_DISEASE_UP',
-    'Gandal_2018_BipolarDisorder_Downregulated_Cortex',
-    'Gandal_2018_BipolarDisorder_Upregulated_Cortex',
-    ]
-
-rank_type = 'rank'
-
-pathway_ranks = pd.DataFrame(index=pathways, \
-    columns=['ALL LR', 'DEG + Top LR', 'DEG + Bottom LR', 'DEG'])
-pathway_ranks.attrs['rank_type'] = rank_type
-
-
-def get_pathway_rank(enr_res2d, pathway, rank_type='Adjusted P-value', return_nan=True):
-
-    if len(enr_res2d[enr_res2d['Term'] == pathway]) > 0:
-        return enr_res2d[enr_res2d['Term'] == pathway][rank_type].values[0]
-    else:
-        if return_nan:
-            return np.nan
-        else:
-            return max(enr_res2d[rank_type])
-
-for pathway in pathways:
-    pathway_ranks.loc[pathway, 'ALL LR'] = get_pathway_rank(enr_sorted, pathway, rank_type)
-
-    pathway_ranks.loc[pathway, 'DEG + Top LR'] = get_pathway_rank(enr_sorted_top_wDeg, pathway, rank_type)
-    pathway_ranks.loc[pathway, 'DEG + Bottom LR'] = get_pathway_rank(enr_sorted_bottom_wDeg, pathway, rank_type)
-    pathway_ranks.loc[pathway, 'DEG'] = get_pathway_rank(enr_sorted_deg, pathway, rank_type)
-
-#%% plot ranks across methods and pathways
-
-def plot_pathway_ranks(pathway_ranks, stem=True):
-
-    # ─── 3. Sort pathways by “ALL LR” (optional) ───
-    order = pathway_ranks["ALL LR"].sort_values().index.tolist()
-
-    pathway_ranks = pathway_ranks.loc[order]
-
-    pathway_ranks_long = (
-        pathway_ranks
-        .reset_index()
-        .melt(id_vars="index", var_name="method", value_name="rank")
-        .rename(columns={"index": "pathway"})
-    )
-
-    # ─── 4. Plot the stripplot ───
-    fig, ax = plt.subplots(1, 2, figsize=(12, 4 + 0.5 * pathway_ranks.shape[0]), sharex=False, sharey=True)
-    sns.stripplot(
-        data=pathway_ranks_long,
-        y="pathway",
-        x="rank",
-        hue="method",
-        dodge=True,       # side‐by‐side dots per pathway
-        jitter=False,     # no vertical jitter
-        size=6,
-        palette="tab10",
-        ax=ax[0]
-    )
-    sns.stripplot(
-        data=pathway_ranks_long,
-        y="pathway",
-        x="rank",
-        hue="method",
-        dodge=True,       # side‐by‐side dots per pathway
-        jitter=False,     # no vertical jitter
-        size=6,
-        palette="tab10",
-        legend=False,
-        ax=ax[1]
-    ); ax[1].set_xscale('log')
-
-    if stem:
-
-        # ─── Add horizontal stems from the rightmost edge to each marker ───
-        for subax in ax:
-            # 1) Record the current x‐axis limits:
-            x_min, x_max = subax.get_xlim()
-
-            # 2) Loop over each PathCollection in this subplot.
-            #    Each collection corresponds to one hue level (one "method").
-            for collec in subax.collections:
-                # get_offsets() is an Nx2 array of (x, y) positions for every dot in that hue.
-                offsets = collec.get_offsets()
-                # Choose a stem color (e.g. light gray); you could also pull collec.get_facecolor()[0]
-                stem_color = "lightgray"
-                for (x_pt, y_pt) in offsets:
-                    # draw a line from x_max → x_pt at y=y_pt
-                    subax.plot(
-                        [x_max, x_pt],        # x data: from right edge to the point
-                        [y_pt, y_pt],         # y data: horizontal at the same y
-                        color=stem_color,
-                        linewidth=0.6,
-                        alpha=0.7,
-                        zorder=0  # put stems “underneath” the markers
-                    )
-
-            # 3) Re‐enforce the original x‐limits so the stems don’t stretch the view
-            subax.set_xlim(x_min, x_max)
-
-    # ─── 5. Add horizontal dividing lines ───
-    n_paths = len(pathways)
-    for i in range(n_paths - 1):
-        ypos = i + 0.5
-        ax[0].axhline(y=ypos, color="lightgray", linewidth=2, linestyle="--")
-        ax[1].axhline(y=ypos, color="lightgray", linewidth=2, linestyle="--")
-
-    # ─── 6. Tidy up labels & legend ───
-    ax[0].set_ylabel("Brain GMT Pathway")
-    ax[0].set_xlabel(f"{pathway_ranks.attrs['rank_type']}")
-    ax[1].set_xlabel(f"{pathway_ranks.attrs['rank_type']} (log scale)")
-    ax[0].set_title("Per‐Pathway Ranks Across Methods")
-
-    # Place legend outside so it doesn’t overlap
-    #ax[0].legend(bbox_to_anchor=(1.02, 1), borderaxespad=0)
-
-    plt.tight_layout()
-    plt.show()
-
+pathway_ranks = get_pathway_ranks(enr, enr_deg, enr_top_wDeg, enr_bottom_wDeg)
 plot_pathway_ranks(pathway_ranks, stem=True)
-
-#%% isolated analysis for ASTON MDD pathways
-
-mdd_rna_female_celltype = mdd_rna_female[mdd_rna_female.obs[rna_celltype_key] == celltype]
-sc.tl.rank_genes_groups(mdd_rna_female_celltype, groupby=rna_condition_key, reference='Control', method='wilcoxon')
-deg_celltype_df = sc.get.rank_genes_groups_df(mdd_rna_female_celltype, group='Case', key=deg_method)
-
-ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes_df = enr.res2d[enr.res2d['Term'] == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
-ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes = ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes_df['Genes'].values[0].split(';') # gene set based on temporal cortex
-deg_celltype_df_mdd_dn = deg_celltype_df.set_index('names').loc[ASTON_MAJOR_DEPRESSIVE_DISORDER_DN_genes]
-
-ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes_df = enr.res2d[enr.res2d['Term'] == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_UP']
-ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes = ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes_df['Genes'].values[0].split(';') # gene set based on temporal cortex
-deg_celltype_df_mdd_up = deg_celltype_df.set_index('names').loc[ASTON_MAJOR_DEPRESSIVE_DISORDER_UP_genes]
-
-ASTON_MAJOR_DEPRESSIVE_DISORDER_df = pd.concat([deg_celltype_df_mdd_dn, deg_celltype_df_mdd_up])
-
 
 #%% visualize overlap between pathways
 import networkx as nx
