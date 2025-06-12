@@ -61,6 +61,10 @@ from umap import UMAP
 from torchmetrics.functional import kendall_rank_corrcoef
 from scipy.stats import norm, linregress
 
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.default_inference import DefaultInference
+from pydeseq2.ds import DeseqStats
+
 def cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd'):
 
     if type == 'emd':
@@ -868,6 +872,168 @@ def metric_boxplots(df, target_source_combinations=False, include_paired=True):
     fig.tight_layout()
     fig.show()
 
+## functions for pyDESeq2 on counts data
+def get_pseudo_replicates_counts(sex, celltype, rna_scaled_with_counts, mdd_rna_var, rna_celltype_key, rna_condition_key, rna_sex_key, pseudo_replicates='Subjects', overlapping_only=False):
+
+    if pseudo_replicates == 'SEACells':
+        ## learn SEACell assignments based on processed data to apply onto counts data
+
+        mdd_seacells_counts_dict = {}
+
+        for condition in unique_conditions:
+
+            ## select cell indices
+            rna_indices = pd.DataFrame({
+                'is_celltype': rna_scaled_with_counts.obs[rna_celltype_key].str.startswith(celltype),
+                'is_condition': rna_scaled_with_counts.obs[rna_condition_key].str.startswith(condition),
+                'is_sex': rna_scaled_with_counts.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
+            }).prod(axis=1).astype(bool).values.nonzero()[0]
+
+            rna_sampled = rna_scaled_with_counts[rna_indices]
+
+            ## learn SEACell assignments for this condition
+            seacells_model = SEACells.core.SEACells(
+                rna_sampled, 
+                build_kernel_on='X_pca', # could also opt for batch-corrected PCA (Harmony), but ok if pseudo-bulk within batch
+                n_SEACells=max(rna_sampled.n_obs // 100, 15), 
+                n_waypoint_eigs=15,
+                convergence_epsilon = 1e-5,
+                max_franke_wolfe_iters=100,
+                use_gpu=True if torch.cuda.is_available() else False
+                )
+            
+            seacells_model.construct_kernel_matrix()
+            seacells_model.initialize_archetypes()
+            seacells_model.fit(min_iter=10, max_iter=100)
+
+            ## summarize counts data by SEACell - remove 'nan' obs_names which groups cells not corresponding to celltype or sex
+            mdd_rna_counts.obs.loc[rna_sampled.obs_names,'SEACell'] = rna_sampled.obs['SEACell'].add(f'_{condition}_{sex}_{celltype}')
+            mdd_seacells_counts = SEACells.core.summarize_by_SEACell(mdd_rna_counts, SEACells_label='SEACell', summarize_layer='X')
+            mdd_seacells_counts = mdd_seacells_counts[mdd_seacells_counts.obs_names != 'nan']
+
+            mdd_seacells_counts.obs[rna_condition_key] = condition
+            mdd_seacells_counts.obs[rna_sex_key] = sex
+            mdd_seacells_counts.obs[rna_celltype_key] = celltype
+
+            mdd_seacells_counts_dict[condition] = mdd_seacells_counts
+
+        ## concatenate all SEACell counts data across conditions
+        mdd_seacells_counts_adata = anndata.concat(mdd_seacells_counts_dict.values(), axis=0)
+        mdd_seacells_counts_adata = mdd_seacells_counts_adata[:, mdd_seacells_counts_adata.var_names.isin(mdd_rna.var_names)]
+        mdd_seacells_counts_adata.var = mdd_rna.var
+
+        counts = mdd_seacells_counts_adata.X.astype(int).toarray()
+        metadata = mdd_seacells_counts_adata.obs
+
+    elif pseudo_replicates == 'Subjects':
+
+        subjects_from_sex = rna_scaled_with_counts.obs[rna_scaled_with_counts.obs[rna_sex_key] == sex][rna_subject_key].unique()
+        if overlapping_only:
+            subjects_from_sex = subjects_from_sex[np.isin(subjects_from_sex, [os.split('_')[-1] for os in overlapping_subjects])]
+
+        mdd_subjects_counts_dict = {}
+
+        for subject in subjects_from_sex:
+
+            rna_indices =  pd.DataFrame({
+                'is_subject': rna_scaled_with_counts.obs[rna_subject_key] == subject,
+                'is_celltype': rna_scaled_with_counts.obs[rna_celltype_key].str.startswith(celltype)
+            })
+            rna_indices = rna_indices.prod(axis=1).astype(bool).values.nonzero()[0]
+
+            rna_sampled = rna_scaled_with_counts[rna_indices]
+            rna_subject_counts = rna_sampled.raw.X.sum(axis=0).A1.astype(int)
+            rna_subject_var = rna_sampled.raw.var.set_index('_index')
+
+            subject_condition = rna_scaled_with_counts.obs[rna_condition_key][rna_scaled_with_counts.obs[rna_subject_key] == subject].iloc[0]
+            rna_subject_obs = pd.DataFrame(
+                np.hstack([subject_condition, sex, celltype]).reshape(1, -1),
+                columns=[rna_condition_key, rna_sex_key, rna_celltype_key],
+                index=[subject],
+            )
+
+            rna_subject_counts_ad = anndata.AnnData(
+                X=rna_subject_counts.reshape(1, -1),
+                var=rna_subject_var,
+                obs=rna_subject_obs,
+            )
+            mdd_subjects_counts_dict[subject] = rna_subject_counts_ad
+
+        mdd_subjects_counts_adata = anndata.concat(mdd_subjects_counts_dict.values(), axis=0)
+        mdd_subjects_counts_adata = mdd_subjects_counts_adata[:, mdd_subjects_counts_adata.var_names.isin(mdd_rna_var.index)]
+        mdd_subjects_counts_adata.var = mdd_rna_var
+
+        counts = mdd_subjects_counts_adata.X.astype(int)#.toarray()
+        metadata = mdd_subjects_counts_adata.obs
+
+    return mdd_subjects_counts_adata, counts, metadata
+
+def run_pyDESeq2(counts, metadata, rna_condition_key):
+
+    inference = DefaultInference(n_cpus=8)
+    dds = DeseqDataSet(
+        counts=counts,
+        metadata=metadata,
+        design_factors=rna_condition_key,
+        ref_level=[rna_condition_key, "Control"],
+        refit_cooks=True,
+        inference=inference,
+    )
+    dds.deseq2()
+    stat_res = DeseqStats(dds, inference=inference)
+    stat_res.summary()
+
+    ## get results and volcano plot
+    results = stat_res.results_df
+    results['signif_padj'] = results['padj'] < 0.05
+    results['signif_lfc'] = results['log2FoldChange'].abs() > 1.5
+    results['signif'] = results['signif_padj'] & results['signif_lfc']
+    results['-log10(padj)'] = -np.log10(results['padj'])
+    sns.scatterplot(data=results, x='log2FoldChange', y='-log10(padj)', hue='signif_padj', marker='o', alpha=0.5)
+
+    ## extract significant genes
+    significant_genes = mdd_subjects_counts_adata.var_names[results['signif_padj']]
+    mdd_subjects_counts_adata.var['signif_padj'] = False
+    mdd_subjects_counts_adata.var.loc[significant_genes, 'signif_padj'] = True
+
+    ## violin plot
+    df = mdd_subjects_counts_adata[:,mdd_subjects_counts_adata.var_names.isin(significant_genes[:10])].to_df()
+    df = df.reset_index()
+    df = pd.melt(df, id_vars=['index'], var_name='gene', value_name='expression')
+    df = df.merge(mdd_subjects_counts_adata.obs, left_on='index', right_index=True)
+    df = df.sort_values(rna_condition_key, ascending=False) # forces controls to be listed first, putting controls on the left-hand violin plots
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    sns.violinplot(data=df, x='gene', y='expression', hue=rna_condition_key, split=True, inner=None, cut=0, ax=ax)
+    fig.show()
+
+    return mdd_subjects_counts_adata, results, significant_genes
+
+## functions for dicts
+def tree(): return defaultdict(tree)
+def initialize_dicts():
+
+    X_rna_dict = tree()
+    X_atac_dict = tree()
+    overlapping_target_genes_dict = tree()
+    overlapping_tfs_dict = tree()
+
+    genes_by_peaks_corrs_dict = tree()
+    genes_by_peaks_masks_dict = tree()
+    n_dict = tree()
+
+    scompreg_loglikelihoods_dict = tree()
+    std_errs_dict = tree()
+    slopes_dict = tree()
+    intercepts_dict = tree()
+    intercept_stderrs_dict = tree()
+
+    tg_expressions_dict = tree()
+    tfrps_dict = tree()
+    tfrp_predictions_dict = tree()
+
+    return X_rna_dict, X_atac_dict, overlapping_target_genes_dict, overlapping_tfs_dict, genes_by_peaks_corrs_dict, genes_by_peaks_masks_dict, n_dict, scompreg_loglikelihoods_dict, std_errs_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, tfrps_dict, tfrp_predictions_dict
+
 
 cuda_available = torch.cuda.is_available()
 
@@ -1339,29 +1505,6 @@ atac_fullpath = os.path.join(atac_datapath, ATAC_file)
 atac = anndata.read_h5ad(atac_fullpath, backed='r')
 rna  = anndata.read_h5ad(rna_fullpath, backed='r')
 
-## get data after decimation
-decimate_factor = 1
-
-mdd_atac = atac[::decimate_factor].to_memory()
-mdd_rna = rna[::decimate_factor].to_memory()
-
-mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
-
-## also load counts data for pyDESeq2 and full processed data for annotations
-rna_full = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna.h5ad'), backed='r')
-rna_scaled_with_counts = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna_scaled.h5ad'), backed='r')
-rna_scaled_with_counts = rna_scaled_with_counts[::decimate_factor].to_memory()
-
-rna_counts_X = rna_scaled_with_counts.raw.X.astype(int).toarray()
-rna_counts_obs = rna_scaled_with_counts.obs
-rna_counts_var = rna_full[::decimate_factor].var
-
-mdd_rna_counts = anndata.AnnData(
-    X=rna_counts_X,
-    var=rna_counts_var,
-    obs=rna_counts_obs,
-)
-
 ## define keys
 rna_celltype_key='ClustersMapped'
 atac_celltype_key='ClustersMapped'
@@ -1374,6 +1517,32 @@ atac_subject_key='BrainID'
 
 rna_sex_key = 'Sex'
 atac_sex_key = 'sex'
+
+## get data after decimation
+decimate_factor = 1
+
+mdd_atac = atac[::decimate_factor].to_memory()
+mdd_rna = rna[::decimate_factor].to_memory()
+
+mdd_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame(list(mdd_atac.var_names.str.split(':|-', expand=True)), columns=['chrom', 'start', 'end']))
+
+1## also load counts data for pyDESeq2 and full processed data for annotations
+rna_full = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna.h5ad'), backed='r')
+rna_scaled_with_counts = anndata.read_h5ad(os.path.join(rna_datapath, 'mdd_rna_scaled.h5ad'), backed='r')
+rna_scaled_with_counts = rna_scaled_with_counts[::decimate_factor].to_memory()
+
+ct_map_dict = dict({1: 'ExN', 0: 'InN', 4: 'Oli', 2: 'Ast', 3: 'OPC', 6: 'End', 5: 'Mix', 7: 'Mic'})
+rna_scaled_with_counts.obs[rna_celltype_key] = rna_scaled_with_counts.obs['Broad'].map(ct_map_dict)
+
+rna_counts_X = rna_scaled_with_counts.raw.X.astype(int).toarray()
+rna_counts_obs = rna_scaled_with_counts.obs
+rna_counts_var = rna_full[::decimate_factor].var
+
+mdd_rna_counts = anndata.AnnData(
+    X=rna_counts_X,
+    var=rna_counts_var,
+    obs=rna_counts_obs,
+)
 
 unique_celltypes = np.unique(np.concatenate([mdd_rna.obs[rna_celltype_key], mdd_atac.obs[atac_celltype_key]]))
 unique_conditions = np.unique(np.concatenate([mdd_rna.obs[rna_condition_key], mdd_atac.obs[atac_condition_key]]))
@@ -1398,153 +1567,19 @@ overlapping_subjects = np.intersect1d(mdd_rna.obs[rna_subject_key], mdd_atac.obs
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df[subjects_by_condition_n_sex_df['subject'].isin(overlapping_subjects)]
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condition', 'sex'])['subject'].unique()
 
-
 #%% differential expression analysis
 
 ## shows that unique Batch and Chemistry per Sample
 confound_vars = ["Batch", "Sample", "Chemistry", "percent.mt", "nCount_RNA"]
 display(mdd_rna.obs.groupby('Sample')[confound_vars].nunique())
 
-## pyDESeq2
-from pydeseq2.dds import DeseqDataSet
-from pydeseq2.default_inference import DefaultInference
-from pydeseq2.ds import DeseqStats
-
-ct_map_dict = dict({1: 'ExN', 0: 'InN', 4: 'Oli', 2: 'Ast', 3: 'OPC', 6: 'End', 5: 'Mix', 7: 'Mic'})
-rna_scaled_with_counts.obs[rna_celltype_key] = rna_scaled_with_counts.obs['Broad'].map(ct_map_dict)
-
 ## define sex and celltype
 sex = 'Female'
 celltype = 'Mic'
 
-pseudo_replicates = 'Subjects'
-
-if pseudo_replicates == 'SEACells':
-    ## learn SEACell assignments based on processed data to apply onto counts data
-
-    mdd_seacells_counts_dict = {}
-
-    for condition in unique_conditions:
-
-        ## select cell indices
-        rna_indices = pd.DataFrame({
-            'is_celltype': rna_scaled_with_counts.obs[rna_celltype_key].str.startswith(celltype),
-            'is_condition': rna_scaled_with_counts.obs[rna_condition_key].str.startswith(condition),
-            'is_sex': rna_scaled_with_counts.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
-        }).prod(axis=1).astype(bool).values.nonzero()[0]
-
-        rna_sampled = rna_scaled_with_counts[rna_indices]
-
-        ## learn SEACell assignments for this condition
-        seacells_model = SEACells.core.SEACells(
-            rna_sampled, 
-            build_kernel_on='X_pca', # could also opt for batch-corrected PCA (Harmony), but ok if pseudo-bulk within batch
-            n_SEACells=max(rna_sampled.n_obs // 100, 15), 
-            n_waypoint_eigs=15,
-            convergence_epsilon = 1e-5,
-            max_franke_wolfe_iters=100,
-            use_gpu=True if torch.cuda.is_available() else False
-            )
-        
-        seacells_model.construct_kernel_matrix()
-        seacells_model.initialize_archetypes()
-        seacells_model.fit(min_iter=10, max_iter=100)
-
-        ## summarize counts data by SEACell - remove 'nan' obs_names which groups cells not corresponding to celltype or sex
-        mdd_rna_counts.obs.loc[rna_sampled.obs_names,'SEACell'] = rna_sampled.obs['SEACell'].add(f'_{condition}_{sex}_{celltype}')
-        mdd_seacells_counts = SEACells.core.summarize_by_SEACell(mdd_rna_counts, SEACells_label='SEACell', summarize_layer='X')
-        mdd_seacells_counts = mdd_seacells_counts[mdd_seacells_counts.obs_names != 'nan']
-
-        mdd_seacells_counts.obs[rna_condition_key] = condition
-        mdd_seacells_counts.obs[rna_sex_key] = sex
-        mdd_seacells_counts.obs[rna_celltype_key] = celltype
-
-        mdd_seacells_counts_dict[condition] = mdd_seacells_counts
-
-    ## concatenate all SEACell counts data across conditions
-    mdd_seacells_counts_adata = anndata.concat(mdd_seacells_counts_dict.values(), axis=0)
-    mdd_seacells_counts_adata = mdd_seacells_counts_adata[:, mdd_seacells_counts_adata.var_names.isin(mdd_rna.var_names)]
-    mdd_seacells_counts_adata.var = mdd_rna.var
-
-    counts = mdd_seacells_counts_adata.X.astype(int).toarray()
-    metadata = mdd_seacells_counts_adata.obs
-
-elif pseudo_replicates == 'Subjects':
-
-    mdd_subjects_counts_dict = {}
-
-    for subject in overlapping_subjects:
-
-        rna_indices =  pd.DataFrame({
-            'is_subject': mdd_rna.obs[rna_subject_key].str.startswith(subject),
-            'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype)
-        })
-        rna_indices = rna_indices.prod(axis=1).astype(bool).values.nonzero()[0]
-
-        rna_sampled = rna_scaled_with_counts[rna_indices]
-        rna_subject_counts = rna_sampled.raw.X.sum(axis=0).A1.astype(int)
-        rna_subject_var = rna_sampled.raw.var.set_index('_index')
-
-        subject_condition = mdd_rna.obs[rna_condition_key][mdd_rna.obs[rna_subject_key] == subject].iloc[0]
-        subject_sex = mdd_rna.obs[rna_sex_key][mdd_rna.obs[rna_subject_key] == subject].iloc[0]
-        rna_subject_obs = pd.DataFrame(
-            np.hstack([subject_condition, subject_sex, celltype]).reshape(1, -1),
-            columns=[rna_condition_key, rna_sex_key, rna_celltype_key],
-            index=[subject],
-        )
-
-        rna_subject_counts_ad = anndata.AnnData(
-            X=rna_subject_counts.reshape(1, -1),
-            var=rna_subject_var,
-            obs=rna_subject_obs,
-        )
-        mdd_subjects_counts_dict[subject] = rna_subject_counts_ad
-
-    mdd_subjects_counts_adata = anndata.concat(mdd_subjects_counts_dict.values(), axis=0)
-    mdd_subjects_counts_adata = mdd_subjects_counts_adata[:, mdd_subjects_counts_adata.var_names.isin(mdd_rna.var_names)]
-    mdd_subjects_counts_adata.var = mdd_rna.var
-
-    ## retain sex of interest
-    mdd_subjects_counts_adata = mdd_subjects_counts_adata[mdd_subjects_counts_adata.obs[rna_sex_key] == sex]
-
-    counts = mdd_subjects_counts_adata.X.astype(int).toarray()
-    metadata = mdd_subjects_counts_adata.obs
-
-
-## run pyDESeq2
-inference = DefaultInference(n_cpus=8)
-dds = DeseqDataSet(
-    counts=counts,
-    metadata=metadata,
-    design_factors=rna_condition_key,
-    refit_cooks=True,
-    inference=inference,
-)
-dds.deseq2()
-stat_res = DeseqStats(dds, inference=inference)
-stat_res.summary()
-
-## get results and volcano plot
-results = stat_res.results_df
-results['signif_padj'] = results['padj'] < 0.05
-results['signif_lfc'] = results['log2FoldChange'].abs() > 1.5
-results['signif'] = results['signif_padj'] & results['signif_lfc']
-results['pH'] = -np.log10(results['padj'])
-sns.scatterplot(data=results, x='log2FoldChange', y='pH', hue='signif_padj', marker='o', alpha=0.5)
-
-## extract significant genes
-significant_genes = mdd_subjects_counts_adata.var_names[results['signif_padj']]
-mdd_subjects_counts_adata.var.loc[significant_genes, 'signif_padj'] = True
-
-## violin plot
-df = mdd_subjects_counts_adata[:,mdd_subjects_counts_adata.var_names.isin(significant_genes[:10])].to_df()
-df = df.reset_index()
-df = pd.melt(df, id_vars=['index'], var_name='gene', value_name='expression')
-df = df.merge(mdd_subjects_counts_adata.obs, left_on='index', right_index=True)
-
-fig, ax = plt.subplots(figsize=(14, 5))
-sns.violinplot(data=df, x='gene', y='expression', hue=rna_condition_key, split=True, inner=None, cut=0, ax=ax)
-fig.show()
+## run pyDESeq2 on subject-level pseudo-replicates
+mdd_subjects_counts_adata, counts, metadata = get_pseudo_replicates_counts(sex, celltype, rna_scaled_with_counts, mdd_rna.var, rna_celltype_key, rna_condition_key, rna_sex_key, pseudo_replicates='Subjects', overlapping_only=False)
+mdd_subjects_counts_adata, results, significant_genes = run_pyDESeq2(counts, metadata, rna_condition_key)
 
 
 #%% Get mean GRN from brainSCOPE & scglue preprocessing
@@ -1703,30 +1738,11 @@ _, fig, rna_atac_df_umap = plot_umap_embeddings(eclare_rna_latents, eclare_atac_
 
 #%% get peak-gene correlations
 
-def tree(): return defaultdict(tree)
+X_rna_dict, X_atac_dict, overlapping_target_genes_dict, overlapping_tfs_dict, genes_by_peaks_corrs_dict, genes_by_peaks_masks_dict, n_dict, scompreg_loglikelihoods_dict, std_errs_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, tfrps_dict, tfrp_predictions_dict = initialize_dicts()
 
 with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
     all_dicts = pickle.load(f)
 mean_grn_df = all_dicts[-1]
-
-X_rna_dict = tree()
-X_atac_dict = tree()
-overlapping_target_genes_dict = tree()
-overlapping_tfs_dict = tree()
-
-genes_by_peaks_corrs_dict = tree()
-genes_by_peaks_masks_dict = tree()
-n_dict = tree()
-
-scompreg_loglikelihoods_dict = tree()
-std_errs_dict = tree()
-slopes_dict = tree()
-intercepts_dict = tree()
-intercept_stderrs_dict = tree()
-
-tg_expressions_dict = tree()
-tfrps_dict = tree()
-tfrp_predictions_dict = tree()
 
 ## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
 cutoff = 5025 # better a multiple of 75 due to formation of SEACells
