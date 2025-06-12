@@ -42,8 +42,6 @@ from mlflow.tracking import MlflowClient
 import mlflow.pytorch
 from mlflow.models import Model
 
-from eclare.models import load_CLIP_model, CLIP
-from eclare.setup_utils import mdd_setup
 from eclare.post_hoc_utils import get_latents, sample_proportional_celltypes_and_condition, plot_umap_embeddings, create_celltype_palette
 from eclare.data_utils import get_unified_grns, filter_mean_grn, get_scompreg_loglikelihood
 
@@ -56,10 +54,12 @@ from pyjaspar import jaspardb
 import pyranges as pr
 import gseapy as gp
 from Bio.motifs.jaspar import calculate_pseudocounts
+import mygene
 from sklearn.model_selection import StratifiedShuffleSplit
 from umap import UMAP
 from torchmetrics.functional import kendall_rank_corrcoef
-from scipy.stats import norm, linregress
+from scipy.stats import norm, linregress, gamma
+from scipy.optimize import minimize
 
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.default_inference import DefaultInference
@@ -1033,7 +1033,574 @@ def initialize_dicts():
     tfrp_predictions_dict = tree()
 
     return X_rna_dict, X_atac_dict, overlapping_target_genes_dict, overlapping_tfs_dict, genes_by_peaks_corrs_dict, genes_by_peaks_masks_dict, n_dict, scompreg_loglikelihoods_dict, std_errs_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, tfrps_dict, tfrp_predictions_dict
+def assign_to_dicts(sex, celltype, condition, X_rna, X_atac, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs):
+    X_rna_dict[sex][celltype][condition if condition != '' else 'all'] = X_rna
+    X_atac_dict[sex][celltype][condition if condition != '' else 'all'] = X_atac
+    overlapping_target_genes_dict[sex][celltype][condition if condition != '' else 'all'] = overlapping_target_genes
+    overlapping_tfs_dict[sex][celltype][condition if condition != '' else 'all'] = overlapping_tfs
 
+    scompreg_loglikelihoods_dict[sex][celltype][condition if condition != '' else 'all'] = scompreg_loglikelihoods
+    std_errs_dict[sex][celltype][condition if condition != '' else 'all'] = std_errs
+    tg_expressions_dict[sex][celltype][condition if condition != '' else 'all'] = tg_expressions
+    tfrps_dict[sex][celltype][condition if condition != '' else 'all'] = tfrps
+    tfrp_predictions_dict[sex][celltype][condition if condition != '' else 'all'] = tfrp_predictions
+    slopes_dict[sex][celltype][condition if condition != '' else 'all'] = slopes
+    intercepts_dict[sex][celltype][condition if condition != '' else 'all'] = intercepts
+    intercept_stderrs_dict[sex][celltype][condition if condition != '' else 'all'] = intercept_stderrs
+
+
+## check overlap of DEGs and DARs
+def check_overlap_of_degs_and_dars(significant_genes):
+    maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
+    doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
+    #maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
+
+    deg_dict = maitra_female_degs_df.groupby('cluster_id.female')['gene'].unique().to_dict()
+
+    deg_overlap_df = pd.DataFrame.from_dict({key: np.isin(deg_dict[key], significant_genes).sum() for key in deg_dict.keys()}, orient='index').rename(columns={0: 'Case'})
+    deg_overlap_df = pd.concat([deg_overlap_df, deg_overlap_df.sum(axis=0).to_frame().T.rename(index={0: 'TOTAL'})], axis=0)
+
+    for celltype in deg_overlap_df.index:
+        try:
+            unique_celltype = [unique_celltype for unique_celltype in unique_celltypes if unique_celltype in celltype][0]
+            deg_overlap_df.loc[celltype, 'unique_celltype'] = unique_celltype
+        except:
+            print(f"Could not find unique celltype for {celltype}")
+            continue
+
+    deg_overlap_grouped_df = deg_overlap_df.groupby('unique_celltype').sum()
+    display(deg_overlap_grouped_df.sort_values(by='Case', ascending=False).T)
+
+## sc-compReg functions
+def compute_scompreg_loglikelihoods(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, Z_type='hawkins-wixley'):
+    
+    ## pre-computed log likelihoods
+    scompreg_loglikelihoods_case_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['Case']
+    scompreg_loglikelihoods_control_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['Control']
+    scompreg_loglikelihoods_all_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['all']
+
+    scompreg_loglikelihoods_precomputed_df = pd.DataFrame({
+        'case': scompreg_loglikelihoods_case_precomputed,
+        'control': scompreg_loglikelihoods_control_precomputed,
+        'all': scompreg_loglikelihoods_all_precomputed
+    })
+    genes_names = scompreg_loglikelihoods_precomputed_df.index
+
+    LR_precomputed = -2 * (scompreg_loglikelihoods_precomputed_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
+
+    ## re-computed log likelihoods and confirm that same as pre-computed
+    print(f'Verifying condition-specific log likelihoods')
+    for condition in ['Case', 'Control']:
+
+        tfrps               = tfrps_dict[sex][celltype][condition]
+        tg_expressions      = tg_expressions_dict[sex][celltype][condition]
+
+        for gene in tqdm(genes_names):
+
+            log_gaussian_likelihood_pre = scompreg_loglikelihoods_dict[sex][celltype][condition][gene]
+            if np.isnan(log_gaussian_likelihood_pre):
+                continue
+
+            tfrp                = tfrps.loc[:,gene].values.astype(float)
+            tg_expression       = tg_expressions.loc[:,gene].values.astype(float)
+
+            ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
+            slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
+            tfrp_prediction = slope * tg_expression + intercept
+
+            ## compute residuals and variance
+            n = len(tfrp)
+            sq_residuals = (tfrp - tfrp_prediction)**2
+            var = sq_residuals.sum() / n
+            log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
+
+            diff = np.abs(log_gaussian_likelihood - log_gaussian_likelihood_pre)
+            assert diff < 1e-6
+
+    ## re-compute log likelihoods for pooled conditions
+    tfrps_all = pd.concat([ tfrps_dict[sex][celltype]['Case'], tfrps_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
+    tg_expressions_all = pd.concat([ tg_expressions_dict[sex][celltype]['Case'], tg_expressions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
+    tfrp_predictions_all = pd.concat([ tfrp_predictions_dict[sex][celltype]['Case'], tfrp_predictions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
+
+    ## compute correlation between tfrp predictions and tfrps - could potential use to filter genes
+    tfrp_corrs = tfrp_predictions_all.corrwith(tfrps_all, method='kendall')
+    tfrp_corrs = tfrp_corrs.dropna()
+
+    print(f'Computing pooled log likelihoods')
+    diffs_all = []
+    scompreg_loglikelihoods_all = {}
+
+    for gene in tqdm(genes_names):
+
+        tfrp = tfrps_all.loc[:,gene].values.astype(float)
+        tg_expression = tg_expressions_all.loc[:,gene].values.astype(float)
+
+        try:
+            slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
+            tfrp_predictions = slope * tg_expression + intercept
+        except:
+            print(f'{gene} has no variance in tg_expression')
+            tfrp_predictions = np.ones_like(tg_expression) * np.nan
+            log_gaussian_likelihood = np.array([np.nan])
+        else:
+            n = len(tfrp)
+            sq_residuals = (tfrp - tfrp_predictions)**2
+            var = sq_residuals.sum() / n
+            log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
+        finally:
+            scompreg_loglikelihoods_all[gene] = log_gaussian_likelihood
+
+        #diff = np.abs(log_gaussian_likelihood - scompreg_loglikelihoods_dict[sex][celltype]['all'][gene])
+        #diffs_all.append(diff)
+
+    ## collect all log likelihoods
+    scompreg_loglikelihoods_df = pd.DataFrame({
+        'case': scompreg_loglikelihoods_case_precomputed,
+        'control': scompreg_loglikelihoods_control_precomputed,
+        'all': scompreg_loglikelihoods_all
+    }).dropna() # drop rows with nan
+
+    ## extract gene names from dataframe since some genes were dropped due to nan
+    genes_names = scompreg_loglikelihoods_df.index
+
+    ## compute log likelihood ratio LR
+    LR = -2 * (scompreg_loglikelihoods_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
+
+    if Z_type == 'wilson-hilferty':
+        ## apply Wilson-Hilferty cube-root transformation
+        dof = 3
+        Z = (9*dof/2)**(1/2) * ( (LR/dof)**(1/3) - (1 - 2/(9*dof)) )
+    elif Z_type == 'hawkins-wixley':
+        ## Hawkins & Wixley 1986
+        lambd = 0.2887  # optimal value for dof=3
+        Z = (LR**lambd - 1) / lambd
+
+    ## Recenter Z distribution
+    Z = Z - np.median(Z)
+
+    if (LR < 0).any():
+        print(f'Found negative LR for {celltype} {sex}')
+
+    ## Compute t-statistic between regression slopes
+    slopes_case = slopes_dict[sex][celltype]['Case']
+    slopes_control = slopes_dict[sex][celltype]['Control']
+
+    std_errs_case = std_errs_dict[sex][celltype]['Case']
+    std_errs_control = std_errs_dict[sex][celltype]['Control']
+
+    t_df = pd.DataFrame({
+        'case': slopes_case,
+        'control': slopes_control,
+        'std_err_case': std_errs_case,
+        'std_err_control': std_errs_control
+    }).dropna()
+
+    t_slopes = (t_df['case'] - t_df['control']) / np.sqrt(t_df['std_err_case']**2 + t_df['std_err_control']**2)
+    t_slopes = t_slopes.dropna() # might have residual nan due to std_err being 0
+
+    ## compute correlation between LR and absolute value of slopes t-statistic
+    LR.name = 'LR'
+    t_slopes.name = 't_slopes'
+    LR_t_df = pd.merge(left=LR, right=t_slopes.abs(), left_index=True, right_index=True, how='inner')
+    LR_t_corr = LR_t_df.corr(method='spearman')['LR']['t_slopes']
+    print(f'Correlation between LR and absolute value of slopes t-statistic: {LR_t_corr:.2f}')
+
+    ## separate up and down LR and Z based on sign of t-statistic
+    LR_up = LR[t_slopes > 0]
+    LR_down = LR[t_slopes < 0]
+
+    Z_up = Z[t_slopes > 0]
+    Z_down = Z[t_slopes < 0]
+
+    return LR, Z, LR_up, LR_down, Z_up, Z_down
+
+def filter_LR_stats(LR, Z, LR_up, LR_down):
+
+    # 1) Suppose `lr` is your 1-D array of empirical LR statistics:
+    lr = np.array(LR)
+
+    # 2) Compute subset of empirical quantiles:
+    max_null_quantile = 0.5
+
+    probs = np.linspace(0.05, max_null_quantile, 10)
+    emp_q = np.quantile(lr, probs)
+
+    # 3) Define the objective G(a, b) = sum_i [Gamma.ppf(probs[i], a, scale=b) - emp_q[i]]^2
+    def G(params):
+        a, scale = params
+        # enforce positivity
+        if a <= 0 or scale <= 0:
+            return np.inf
+        theor_q = gamma.ppf(probs, a, scale=scale)
+        return np.sum((theor_q - emp_q)**2)
+
+    # 4) Method-of-moments init on the lower half to get a reasonable starting point
+    m1 = emp_q.mean()
+    v1 = emp_q.var()
+    init_a = m1**2 / v1
+    init_scale = v1 / m1
+
+    # 5) Minimize G(a, scale) over a>0, scale>0
+    res = minimize(G,
+                x0=[init_a, init_scale],
+                bounds=[(1e-8, None), (1e-8, None)],
+                method='L-BFGS-B')
+
+
+    # Plot empirical histogram and fitted gamma distribution
+    plt.figure(figsize=(10, 6))
+    plt.hist(lr, bins=100, density=True, alpha=0.6, label='Empirical LR distribution')
+
+    # Generate points for fitted gamma distribution
+    x = np.linspace(0, max(lr), 1000)
+    fitted_pdf = gamma.pdf(x, a=res.x[0], scale=res.x[1])
+    plt.plot(x, fitted_pdf, 'r-', linewidth=2, label='Fitted gamma distribution')
+
+    # Add veritcal line at last null quantile
+    plt.axvline(emp_q[-1], color='black', linestyle='--', label=f'Last null quantile of empirical distribution (q={probs[-1]:.2f})')
+
+    # Add veritcal line at threshold
+    p_threshold = 0.05
+    lr_at_p = gamma.ppf(1-p_threshold, a=res.x[0], scale=res.x[1])
+    plt.axvline(lr_at_p, color='green', linestyle='--', label=f'Threshold (p={p_threshold:.2f}) @ LR={lr_at_p:.2f}')
+
+    plt.xlabel('LR statistic')
+    plt.ylabel('Density')
+    plt.title('Comparison of Empirical and Fitted LR Distributions')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+    ## filter LR values with fitted null distribution
+    lr_fitted_cdf = gamma.cdf(lr, a=res.x[0], scale=res.x[1])
+    where_filtered = lr_fitted_cdf > (1-p_threshold)
+
+    lr_filtered = LR[where_filtered]
+    Z_filtered = Z[where_filtered]
+    genes_names_filtered = lr_filtered.index.to_list()
+
+    ## filter LR_up and LR_down, note that splits gene set in half, could use more leniant threshold to include more genes for up and down, or even create separate null distributions for each
+    lr_up_filtered = LR_up[LR_up.index.isin(genes_names_filtered)]
+    lr_down_filtered = LR_down[LR_down.index.isin(genes_names_filtered)]
+
+    return lr_filtered, Z_filtered, lr_up_filtered, lr_down_filtered, lr_fitted_cdf
+
+def get_deg_gene_sets(LR, lr_fitted_cdf, significant_genes):
+    
+    sc_deg_df = pd.DataFrame(significant_genes, columns=['names'], index=significant_genes)
+
+    ## LR values for DEG genes (not all DEG genes are in LR)
+    sc_LR_deg = LR.loc[LR.index.isin(sc_deg_df['names'])]
+    sc_deg_not_in_lr = sc_deg_df[~sc_deg_df['names'].isin(LR.index)]['names'].drop_duplicates().to_list()
+    sc_deg_not_in_lr_series = pd.Series(np.nan, index=sc_deg_not_in_lr)
+    sc_LR_deg = pd.concat([sc_LR_deg, sc_deg_not_in_lr_series])
+
+    ## DEG genes with top filtered LR genes
+    #where_filtered_idxs = np.sort(np.flip(lr_fitted_cdf.argsort())[:len(lr_filtered)]); top_lr_filtered = LR[where_filtered_idxs]; assert top_lr_filtered.equals(lr_filtered)
+    sc_n_lr_deg = len(lr_filtered) + sc_deg_df['names'].nunique()
+    sc_n_lr_minus_deg = len(lr_filtered) - sc_deg_df['names'].nunique(); assert sc_n_lr_minus_deg > 0, 'list of DEG genes is longer than list of filtered LR genes'
+
+    where_filtered_with_excess = np.flip(lr_fitted_cdf.argsort())[:sc_n_lr_deg]
+    where_filtered_with_excess_top = where_filtered_with_excess[:sc_n_lr_minus_deg]
+    where_filtered_with_excess_bottom = where_filtered_with_excess[-sc_n_lr_minus_deg:]
+
+    sc_top_lr_filtered = LR[where_filtered_with_excess_top]
+    sc_bottom_lr_filtered = LR[where_filtered_with_excess_bottom]
+
+    sc_top_lr_filtered_wDeg = pd.concat([sc_top_lr_filtered, sc_LR_deg])
+    sc_bottom_lr_filtered_wDeg = pd.concat([sc_bottom_lr_filtered, sc_LR_deg])
+
+    sc_n_genes = np.unique([len(lr_filtered), len(sc_top_lr_filtered_wDeg), len(sc_bottom_lr_filtered_wDeg)]); assert len(sc_n_genes) == 1, 'number of genes in each list must be the same'
+    sc_n_genes = sc_n_genes[0]
+
+    ## filtered LR values ex-DEG (replace with other non-DEG genes)
+    sc_lr_filtered_is_deg = lr_filtered.index.isin(sc_deg_df['names'])
+
+    if sc_lr_filtered_is_deg.any():
+        sc_lr_filtered_woDeg_short = lr_filtered[~sc_lr_filtered_is_deg]
+        sc_deg_woLR = lr_filtered[sc_lr_filtered_is_deg]
+        print(f'{sc_lr_filtered_is_deg.sum()} DEG genes removed from LR')
+
+        replace_degs_with_non_degs = where_filtered_with_excess[ len(lr_filtered) : (len(lr_filtered) + sc_lr_filtered_is_deg.sum()) ]
+        sc_lr_filtered_woDeg = pd.concat([sc_lr_filtered_woDeg_short, LR[replace_degs_with_non_degs]])
+
+    else:
+        print('No scanpy DEG genes in LR')
+
+    return sc_top_lr_filtered_wDeg, sc_bottom_lr_filtered_wDeg, sc_lr_filtered_woDeg
+
+def merge_grn_lr_filtered(mean_grn_df, lr_filtered):
+
+    mean_grn_df_filtered = mean_grn_df.merge(lr_filtered, left_on='TG', right_index=True, how='right')
+    mean_grn_df_filtered['lrCorr'] = mean_grn_df_filtered[['Correlation','LR']].product(axis=1, skipna=True).abs()
+
+    ## create graph from mean_grn_df_filtered with lrCorr as edge weight
+    mean_grn_filtered_graph = nx.from_pandas_edgelist(
+        mean_grn_df_filtered,
+        source='TG',
+        target='enhancer',
+        edge_attr='lrCorr',
+        create_using=nx.DiGraph())
+
+    peaks = scglue.genomics.Bed(mean_grn_df_filtered.assign(name=mean_grn_df_filtered['enhancer']))
+
+    gene_ad = anndata.AnnData(var=pd.DataFrame(index=mean_grn_df_filtered['TG'].to_list()))
+    scglue.data.get_gene_annotation(gene_ad, gtf=os.path.join(os.environ['DATAPATH'], 'gencode.v48.annotation.gtf.gz'), gtf_by='gene_name')
+    genes = scglue.genomics.Bed(gene_ad.var)
+
+    #genes = scglue.genomics.Bed(mdd_rna[:, mdd_rna.var['chrom'].notna()].var.assign(name=mdd_rna[:, mdd_rna.var['chrom'].notna()].var_names))
+    #genes = genes[genes['name'].isin(mean_grn_df_filtered['TG'])]
+    tss = genes.strand_specific_start_site()
+
+    peaks.write_bed(os.path.join(os.environ['OUTPATH'], 'peaks.bed'))
+    scglue.genomics.write_links(
+        mean_grn_filtered_graph,
+        tss,
+        peaks,
+        os.path.join(os.environ['OUTPATH'], 'gene2peak_lrCorr.links'),
+        keep_attrs=["lrCorr"]
+        )
+
+    tg_dist_counts_sorted = mean_grn_df_filtered.groupby('TG')[['dist']].mean().merge(mean_grn_df_filtered['TG'].value_counts(), left_index=True, right_on='TG').sort_values('dist').head(20)
+    display(tg_dist_counts_sorted)
+
+    gene = tg_dist_counts_sorted.iloc[10].name
+    tg_grn = mean_grn_df_filtered[mean_grn_df_filtered['TG']==gene].sort_values('dist')[['enhancer','dist','lrCorr']].groupby('enhancer').mean()
+    tg_grn_bounds = np.stack(tg_grn.index.str.split(':|-')).flatten()
+    tg_grn_bounds = [int(bound) for bound in tg_grn_bounds if bound.isdigit()] + [genes.loc[gene, 'chromStart'].drop_duplicates().values[0]] + [genes.loc[gene, 'chromEnd'].drop_duplicates().values[0]]
+    display(tg_grn)
+    print(f'{genes.loc[gene, "chrom"].drop_duplicates().values[0]}:{min(tg_grn_bounds)}-{max(tg_grn_bounds)}')
+    print(genes.loc[gene,['chrom','chromStart','chromEnd','name']].drop_duplicates())
+
+    return mean_grn_df_filtered
+
+## gene set enrichment analyses
+def get_brain_gmt():
+    
+    brain_gmt = gp.parser.read_gmt(os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_HumanOrthologs.gmt'))
+    brain_gmt_names = pd.Series(list(brain_gmt.keys()))
+    brain_gmt_prefix_unique = np.unique([name.split('_')[0] for name in brain_gmt_names])
+
+    brain_gmt_wGO = gp.parser.read_gmt(os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_wGO_HumanOrthologs.gmt'))
+    brain_gmt_wGO_names = pd.Series(list(brain_gmt_wGO.keys()))
+    brain_gmt_wGO_prefix_unique = np.unique([name.split('_')[0] for name in brain_gmt_wGO_names])
+
+    non_cortical_blacklist = [
+        'DropViz',
+        'HippoSeq',
+        'Coexpression_Hippocampus',
+        'Birt_Hagenauer_2020',
+        'Gray_2014',
+        'Bagot_2016',
+        'Bagot_2017',
+        'Pena_2019',
+        'GeneWeaver',
+        'GenWeaver', # probably same as GeneWeaver
+        'Gemma'
+    ]
+
+    #gset_by_blacklist_df = pd.DataFrame([brain_gmt_names.str.contains(ncbl) for ncbl in non_cortical_blacklist], index=non_cortical_blacklist, columns=brain_gmt_names)
+    gset_by_blacklist_df = pd.DataFrame([brain_gmt_names.str.contains(ncbl) for ncbl in non_cortical_blacklist])
+    gset_by_blacklist_df.index = non_cortical_blacklist
+    gset_by_blacklist_df.columns = brain_gmt_names
+
+    keep_cortical_gmt = gset_by_blacklist_df.loc[:,~gset_by_blacklist_df.any(axis=0).values].columns.tolist()
+    brain_gmt_cortical = {k:v for k,v in brain_gmt.items() if k in keep_cortical_gmt}
+
+    gset_by_blacklist_df_wGO = pd.DataFrame([brain_gmt_wGO_names.str.contains(ncbl) for ncbl in non_cortical_blacklist])
+    gset_by_blacklist_df_wGO.index = non_cortical_blacklist
+    gset_by_blacklist_df_wGO.columns = brain_gmt_wGO_names
+
+    keep_cortical_gmt_wGO = gset_by_blacklist_df_wGO.loc[:,~gset_by_blacklist_df_wGO.any(axis=0).values].columns.tolist()
+    brain_gmt_cortical_wGO = {k:v for k,v in brain_gmt_wGO.items() if k in keep_cortical_gmt_wGO}
+
+    return brain_gmt_cortical, brain_gmt_cortical_wGO
+
+def run_magma(lr_filtered, Z, significant_genes):
+    
+    mg = mygene.MyGeneInfo()
+
+    ## paths for MAGMA
+    MAGMAPATH = glob(os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10*'))[0]
+    magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job604461', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
+    magma_out_path = os.path.join(os.environ['OUTPATH'], 'sc-compReg_significant_genes')
+
+    ## read "genes.raw" file and see if IDs start with "ENSG" or is integer
+    genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
+    genes_raw_ids = genes_raw_df[0].apply(lambda x: x.split(' ')[0])
+
+    genes_out_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job604461', 'magma.genes.out'), sep='\t')
+    genes_magma_control = genes_out_df.loc[genes_out_df['ZSTAT'].argsort()][-len(significant_genes):]['GENE'].to_list()
+
+    lr_filtered_top = lr_filtered[lr_filtered.argsort().values][-len(significant_genes):]
+    lr_filtered_union = pd.concat([lr_filtered, pd.Series(significant_genes, index=significant_genes)]).drop_duplicates()
+
+    gene_sets = {
+        'sc-compReg': lr_filtered.index.to_list(),
+        'pyDESeq2': significant_genes.to_list(),
+        'magma-control': genes_magma_control,
+        'sc-compReg-top': lr_filtered_top.index.to_list(),
+        'Z_IGNORE': Z.index.to_list()}
+
+    ## get entrez IDs or Ensembl IDs for significant genes
+    set_file_dict = {}
+    sig_ensembl_ids_all_dict = {}
+
+    for gene_set_name, gene_set in gene_sets.items():
+
+        if pd.Series(gene_set).str.startswith('ENSG').all():
+            print(f"IDs are already Ensembl IDs")
+            set_file_dict[gene_set_name] = gene_set
+
+        else:
+            print(f"IDs are not Ensembl IDs, converting to Ensembl IDs")
+
+            if genes_raw_ids.str.startswith('ENSG').all():
+
+                print(f"IDs are Ensembl IDs")
+
+                significant_genes_mg_df = mg.querymany(
+                    gene_set,
+                    scopes="symbol",
+                    fields="ensembl.gene",
+                    species="human",
+                    size=1,
+                    as_dataframe=True,
+                    )
+                
+                sig_ensembl_ids = significant_genes_mg_df['ensembl.gene'].dropna()
+                sig_ensembl_ids_exploded = (significant_genes_mg_df['ensembl'].dropna().apply(lambda gene: [ensembl['gene'] for ensembl in gene]).explode() if ('ensembl' in significant_genes_mg_df.columns) else pd.Series(dtype=str))
+                sig_ensembl_ids_all = pd.concat([sig_ensembl_ids, sig_ensembl_ids_exploded])
+
+                significant_genes_ensembl_ids = list(set(sig_ensembl_ids_all.to_list()))
+
+                set_file_dict[gene_set_name] = significant_genes_ensembl_ids
+                sig_ensembl_ids_all_dict[gene_set_name] = sig_ensembl_ids_all
+
+            else:
+
+                print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
+
+                significant_genes_entrez_ids = []
+                for gene in tqdm(gene_set, total=len(gene_set), desc='Getting entrez IDs for significant genes'):
+                    entrez_id_res = mg.query(gene, species='human', scopes='entrezgenes', size=1)
+                    entrez_id = entrez_id_res['hits'][0]['_id']
+                    significant_genes_entrez_ids.append(entrez_id)
+
+                set_file_dict[gene_set_name] = significant_genes_entrez_ids
+
+    ## write gene set file
+    magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'significant_gene_sets.gmt')
+
+    with open(magma_set_file_path, 'w') as f:
+        for gene_set_name, gene_set in set_file_dict.items():
+            if not gene_set_name.endswith('IGNORE'):
+                f.write(f"{gene_set_name} {' '.join(gene_set)}\n")
+
+    ## write gene covariate file
+    Z_IGNORE_ensembl = sig_ensembl_ids_all_dict['Z_IGNORE']
+    Z_IGNORE_ensembl.name = 'ensembl'
+
+    Z.name = 'ZSTAT'
+    Z.index.name = 'gene'
+
+    Z_ensembl = pd.merge(Z, Z_IGNORE_ensembl, left_index=True, right_index=True, how='right')
+    Z_ensembl = Z_ensembl.set_index('ensembl', drop=True)
+
+    magma_genecovar_path = os.path.join(os.environ['OUTPATH'], 'Z.covariates.txt')
+    Z_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
+
+    '''
+    sc_compReg_ensembl = sig_ensembl_ids_all_dict['sc-compReg']
+    sc_compReg_ensembl.name = 'ensembl'
+
+    Z_filtered.name = 'ZSTAT'
+    Z_filtered.index.name = 'gene'
+
+    Z_filtered_ensembl = pd.merge(Z_filtered, sc_compReg_ensembl, left_index=True, right_index=True, how='right')
+    Z_filtered_ensembl = Z_filtered_ensembl.set_index('ensembl', drop=True)
+
+    magma_genecovar_path = os.path.join(os.environ['OUTPATH'], 'Z_filtered.covariates.txt')
+    Z_filtered_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
+    '''
+
+
+    ## write list file for interaction analysis
+    magma_list_file_path = os.path.join(os.environ['OUTPATH'], 'significant_genes.list')
+    list_file_dict = {'condition-interaction': ['sc-compReg', 'ZSTAT']}
+    pd.DataFrame.from_dict(list_file_dict, orient='index').to_csv(magma_list_file_path, sep='\t', header=False, index=False)
+
+    ## run MAGMA (a terminal command)
+    magma_gs_cmd = f"""{MAGMAPATH}/magma \
+        --gene-results {magma_genes_raw_path} \
+        --set-annot {magma_set_file_path} \
+        --model self-contained correct=all\
+        --out {magma_out_path}"""
+
+    magma_cvar_cmd = f"""{MAGMAPATH}/magma \
+        --gene-results {magma_genes_raw_path} \
+        --gene-covar {magma_genecovar_path} \
+        --model correct=all\
+        --out {magma_out_path}"""
+
+    magma_gs_cvar_interaction_cmd = f"""{MAGMAPATH}/magma \
+        --gene-results {magma_genes_raw_path} \
+        --set-annot {magma_set_file_path} \
+        --gene-covar {magma_genecovar_path} \
+        --model interaction={magma_list_file_path}\
+        --out {magma_out_path}"""
+
+    os.system(magma_gs_cmd)
+    os.system(magma_cvar_cmd)
+    os.system(magma_gs_cvar_interaction_cmd)
+
+    ## check content of output file and log file
+    logfile = magma_out_path + '.log'
+    outfile = magma_out_path + '.gsa.out'
+    outfile_self = magma_out_path + '.gsa.self.out'
+
+    with open(logfile, 'r') as f:
+        for line in f:
+            print(line)
+    with open(outfile, 'r') as f:
+        for line in f:
+            print(line)
+    with open(outfile_self, 'r') as f:
+        for line in f:
+            print(line)
+
+    return
+
+def run_gseapy(rank, brain_gmt_cortical):
+
+    ranked_list = pd.DataFrame({'gene': rank.index.to_list(), 'score': rank.values})
+    ranked_list = ranked_list.sort_values(by='score', ascending=False)
+
+    pre_res = gp.prerank(rnk=ranked_list,
+                        gene_sets=brain_gmt_cortical,
+                        outdir=os.path.join(os.environ['OUTPATH'], 'gseapy_results'),
+                        min_size=2,
+                        max_size=len(ranked_list),
+                        permutation_num=1000)
+
+    pre_res.res2d.sort_values('FWER p-val', ascending=True).head(20)
+
+    ## plot enrichment map
+    term2 = pre_res.res2d.Term
+    axes = pre_res.plot(terms=term2[0])
+
+    ## dotplot
+    from gseapy import dotplot
+    # to save your figure, make sure that ``ofname`` is not None
+    ax = dotplot(pre_res.res2d,
+                column="NOM p-val",
+                title='',
+                cmap=plt.cm.viridis,
+                size=6, # adjust dot size
+                top_term=20,
+                figsize=(4,7), cutoff=0.25, show_ring=False) 
+
+    return pre_res
 
 cuda_available = torch.cuda.is_available()
 
@@ -1746,319 +2313,211 @@ mean_grn_df = all_dicts[-1]
 
 ## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
 cutoff = 5025 # better a multiple of 75 due to formation of SEACells
-
-maitra_female_degs_df   = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData7', header=2)
-doruk_peaks_df          = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'combined', 'cluster_DAR_0.2.tsv'), sep='\t')
-#maitra_male_degs_df = pd.read_excel(os.path.join(datapath, 'Maitra_et_al_supp_tables.xlsx'), sheet_name='SupplementaryData5', header=2)
-
-deg_dict = maitra_female_degs_df.groupby('cluster_id.female')['gene'].unique().to_dict()
-
-deg_overlap_df = pd.DataFrame.from_dict({key: np.isin(deg_dict[key], significant_genes).sum() for key in deg_dict.keys()}, orient='index').rename(columns={0: 'Case'})
-deg_overlap_df = pd.concat([deg_overlap_df, deg_overlap_df.sum(axis=0).to_frame().T.rename(index={0: 'TOTAL'})], axis=0)
-
-for celltype in deg_overlap_df.index:
-    try:
-        unique_celltype = [unique_celltype for unique_celltype in unique_celltypes if unique_celltype in celltype][0]
-        deg_overlap_df.loc[celltype, 'unique_celltype'] = unique_celltype
-    except:
-        print(f"Could not find unique celltype for {celltype}")
-        continue
-
-deg_overlap_grouped_df = deg_overlap_df.groupby('unique_celltype').sum()
-display(deg_overlap_grouped_df.sort_values(by='Case', ascending=False).T)
-
 do_corrs_or_cosines = ''
 
-## get HVG features
-'''
-sc.pp.highly_variable_genes(mdd_rna)
-sc.pp.highly_variable_genes(mdd_atac, n_top_genes=10000)
+for celltype in unique_celltypes:
 
-## use all peaks and genes
-genes_indices_hvg = mdd_rna.var['highly_variable'].astype(bool)
-peaks_indices_hvg = mdd_atac.var['highly_variable'].astype(bool)
-'''
+    for condition in unique_conditions:
 
+        mdd_rna_aligned = []
+        mdd_atac_aligned = []
 
-if not os.path.exists(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl')):
+        all_rna_indices = []
+        all_atac_indices = []
 
-    for celltype in unique_celltypes:
+        for subject in subjects_by_condition_n_sex_df[condition, sex.lower()]:
 
-        celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
-        #celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id'].str.startswith(celltype)]
+            #print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {mdd_atac.n_vars} - DEG genes: {mdd_rna.n_vars}')
 
-        celltype_peaks_df = doruk_peaks_df[doruk_peaks_df['cluster'].str.startswith(celltype)]
+            ## select cell indices
+            rna_indices = pd.DataFrame({
+                'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype),
+                'is_condition': mdd_rna.obs[rna_condition_key].str.startswith(condition),
+                'is_sex': mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
+                'is_subject': mdd_rna.obs[rna_subject_key] == subject # do not use startswith to avoid multiple subjects
+            }).prod(axis=1).astype(bool).values.nonzero()[0]
 
-        #celltype_peaks = celltype_peaks_df['peakName'].str.split('-')
-        #celltype_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame({'chrom': celltype_peaks.str[0], 'start': celltype_peaks.str[1], 'end': celltype_peaks.str[2]}))
+            atac_indices = pd.DataFrame({
+                'is_celltype': mdd_atac.obs[atac_celltype_key].str.startswith(celltype),
+                'is_condition': mdd_atac.obs[atac_condition_key].str.startswith(condition),
+                'is_sex': mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower()),
+                'is_subject': mdd_atac.obs[atac_subject_key] == subject # do not use startswith to avoid multiple subjects
+            }).prod(axis=1).astype(bool).values.nonzero()[0]
 
-        celltype_peaks = celltype_peaks_df[['Chromosome', 'Start', 'End']].values
-        celltype_peaks_bed = pybedtools.BedTool.from_dataframe(pd.DataFrame({'chrom': celltype_peaks[:,0], 'start': celltype_peaks[:,1], 'end': celltype_peaks[:,2]}))
-        
-        ## select peaks indices using bedtools intersect
-        #peaks_indices_dar = mdd_peaks_bed.intersect(celltype_peaks_bed, c=True).to_dataframe()['name'].astype(bool)
-        genes_indices_deg = mdd_rna.var_names.isin(celltype_degs_df['gene'])
+            all_rna_indices.append(pd.DataFrame(np.vstack([rna_indices, [subject]*len(rna_indices), [celltype]*len(rna_indices), [condition]*len(rna_indices), [sex]*len(rna_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
+            all_atac_indices.append(pd.DataFrame(np.vstack([atac_indices, [subject]*len(atac_indices), [celltype]*len(atac_indices), [condition]*len(atac_indices), [sex]*len(atac_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
 
-        #peaks_indices = peaks_indices_hvg.values | peaks_indices_dar.values
-        #genes_indices = genes_indices_hvg.values | genes_indices_deg
-        #peaks_indices = peaks_indices_dar
-        #genes_indices = genes_indices_deg
-        #genes_indices = np.ones(len(mdd_rna.var_names), dtype=bool)
+            assert len(rna_indices) > 0 and len(atac_indices) > 0, f"No indices found for sex: {sex} - celltype: {celltype} - condition: {condition} - subject: {subject}"
 
-        for condition in unique_conditions:
-
-            mdd_rna_aligned = []
-            mdd_atac_aligned = []
-
-            all_rna_indices = []
-            all_atac_indices = []
-
-            for subject in subjects_by_condition_n_sex_df[condition, sex.lower()]:
-
-                #print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {mdd_atac.n_vars} - DEG genes: {mdd_rna.n_vars}')
-
-                ## select cell indices
-                rna_indices = pd.DataFrame({
-                    'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype),
-                    'is_condition': mdd_rna.obs[rna_condition_key].str.startswith(condition),
-                    'is_sex': mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
-                    'is_subject': mdd_rna.obs[rna_subject_key] == subject # do not use startswith to avoid multiple subjects
-                }).prod(axis=1).astype(bool).values.nonzero()[0]
-
-                atac_indices = pd.DataFrame({
-                    'is_celltype': mdd_atac.obs[atac_celltype_key].str.startswith(celltype),
-                    'is_condition': mdd_atac.obs[atac_condition_key].str.startswith(condition),
-                    'is_sex': mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower()),
-                    'is_subject': mdd_atac.obs[atac_subject_key] == subject # do not use startswith to avoid multiple subjects
-                }).prod(axis=1).astype(bool).values.nonzero()[0]
-
-                all_rna_indices.append(pd.DataFrame(np.vstack([rna_indices, [subject]*len(rna_indices), [celltype]*len(rna_indices), [condition]*len(rna_indices), [sex]*len(rna_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
-                all_atac_indices.append(pd.DataFrame(np.vstack([atac_indices, [subject]*len(atac_indices), [celltype]*len(atac_indices), [condition]*len(atac_indices), [sex]*len(atac_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
-
-                assert len(rna_indices) > 0 and len(atac_indices) > 0, f"No indices found for sex: {sex} - celltype: {celltype} - condition: {condition} - subject: {subject}"
-
-                ## sample indices
-                if len(rna_indices) > cutoff:
-                    sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
-                    _, sampled_indices = next(sss.split(rna_indices, mdd_rna.obs[rna_celltype_key].iloc[rna_indices]))
-                    rna_indices = rna_indices[sampled_indices]
-                if len(atac_indices) > cutoff:
-                    sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
-                    _, sampled_indices = next(sss.split(atac_indices, mdd_atac.obs[atac_celltype_key].iloc[atac_indices]))
-                    atac_indices = atac_indices[sampled_indices]
-
-                ## sample data
-                mdd_rna_sampled_group = mdd_rna[rna_indices]
-                mdd_atac_sampled_group = mdd_atac[atac_indices]
-
-                ## get latents
-                rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_sampled_group, mdd_atac_sampled_group, return_tensor=True)
-                rna_latents = rna_latents.cpu()
-                atac_latents = atac_latents.cpu()
-
-                ## get logits - already normalized during clip loss, but need to normalize before to be consistent with Concerto
-                rna_latents = torch.nn.functional.normalize(rna_latents, p=2, dim=1)
-                atac_latents = torch.nn.functional.normalize(atac_latents, p=2, dim=1)
-                student_logits = torch.matmul(atac_latents, rna_latents.T)
-
-                a, b = torch.ones((len(atac_latents),)) / len(atac_latents), torch.ones((len(rna_latents),)) / len(rna_latents)
-
-                cells_gap = np.abs(len(atac_latents) - len(rna_latents))
-
-                ## if imbalance, use partial wasserstein to find cells to reject and resample accordingly
-                if cells_gap > 0:
-                    print(f'cells_gap: {cells_gap}')
-                    mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits = \
-                        cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd')
-
-                ## compute optimal transport plan for alignment on remaining cells
-                res = ot_solve(1 - student_logits)
-                plan = res.plan
-                value = res.value_linear
-
-                ## re-order ATAC latents to match plan (can rerun OT analysis to ensure diagonal matching structure)
-                atac_latents = atac_latents[plan.argmax(axis=0)]
-                mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
-
-                ## append to list
-                mdd_rna_aligned.append(mdd_rna_sampled_group)
-                mdd_atac_aligned.append(mdd_atac_sampled_group)
-
-            ## concatenate aligned anndatas
-            mdd_rna_aligned = anndata.concat(mdd_rna_aligned, axis=0)
-            mdd_atac_aligned = anndata.concat(mdd_atac_aligned, axis=0)
-
-            assert np.equal(mdd_rna_aligned.obs[rna_subject_key].values, mdd_atac_aligned.obs[atac_subject_key].values).all()
-            assert (mdd_rna_aligned.obs_names.nunique() == mdd_rna_aligned.n_obs) & (mdd_atac_aligned.obs_names.nunique() == mdd_atac_aligned.n_obs)
-
-            mdd_rna_aligned.var = mdd_rna.var
-            mdd_atac_aligned.var = mdd_atac.var
-
-            ## plot UMAP of aligned RNA latents and ATAC latents
-            rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_aligned, mdd_atac_aligned, return_tensor=True)
-
-            umap_embeddings = UMAP(n_neighbors=50, min_dist=0.5, n_components=2, metric='cosine', random_state=42)
-            umap_embeddings.fit(np.concatenate([rna_latents, atac_latents], axis=0))
-            rna_umap = umap_embeddings.transform(rna_latents)
-            atac_umap = umap_embeddings.transform(atac_latents)
-
-            rna_df_umap = pd.DataFrame(data={'umap_1': rna_umap[:, 0], 'umap_2': rna_umap[:, 1],'modality': 'RNA'})
-            atac_df_umap = pd.DataFrame(data={'umap_1': atac_umap[:, 0], 'umap_2': atac_umap[:, 1], 'modality': 'ATAC'})
-            rna_atac_df_umap = pd.concat([rna_df_umap, atac_df_umap], axis=0)#.sample(frac=1) # shuffle            sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, ax=ax[2], legend=True, marker=marker)
-
-            fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-            sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, legend=True, marker='.', ax=ax[0])
-            sns.scatterplot(data=rna_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, legend=False, marker='.', ax=ax[1])
-            sns.scatterplot(data=atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, legend=False, marker='.', ax=ax[2])
-            ax[0].set_xticklabels([]); ax[0].set_yticklabels([]); ax[0].set_xlabel(''); ax[0].set_ylabel('')
-            ax[1].set_xticklabels([]); ax[1].set_yticklabels([]); ax[1].set_xlabel(''); ax[1].set_ylabel('')
-            ax[2].set_xticklabels([]); ax[2].set_yticklabels([]); ax[2].set_xlabel(''); ax[2].set_ylabel('')
-            plt.show()
-
-            ## get mean GRN from brainSCOPE
-            mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned)
-
-            overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
-            overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
-
-            ## remove excess cells beyond cutoff with stratified sampling - or else SEACells way too slow
-            if len(mdd_rna_sampled_group) > cutoff:
-                print(f'Removing {len(mdd_rna_sampled_group) - cutoff} cells')
-
+            ## sample indices
+            if len(rna_indices) > cutoff:
                 sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
-                _, sampled_indices = next(sss.split(mdd_rna_sampled_group.obs_names, mdd_rna_sampled_group.obs[rna_subject_key]))
+                _, sampled_indices = next(sss.split(rna_indices, mdd_rna.obs[rna_celltype_key].iloc[rna_indices]))
+                rna_indices = rna_indices[sampled_indices]
+            if len(atac_indices) > cutoff:
+                sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
+                _, sampled_indices = next(sss.split(atac_indices, mdd_atac.obs[atac_celltype_key].iloc[atac_indices]))
+                atac_indices = atac_indices[sampled_indices]
 
-                mdd_rna_sampled_group = mdd_rna_sampled_group[sampled_indices]
-                mdd_atac_sampled_group = mdd_atac_sampled_group[sampled_indices]
+            ## sample data
+            mdd_rna_sampled_group = mdd_rna[rna_indices]
+            mdd_atac_sampled_group = mdd_atac[atac_indices]
 
-            ## run SEACells to obtain pseudobulked counts
-            mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = \
-                run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_UMAP_pca')
+            ## get latents
+            rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_sampled_group, mdd_atac_sampled_group, return_tensor=True)
+            rna_latents = rna_latents.cpu()
+            atac_latents = atac_latents.cpu()
 
-            X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
-            X_atac = torch.from_numpy(mdd_atac_sampled_group_seacells.X.toarray())
+            ## get logits - already normalized during clip loss, but need to normalize before to be consistent with Concerto
+            rna_latents = torch.nn.functional.normalize(rna_latents, p=2, dim=1)
+            atac_latents = torch.nn.functional.normalize(atac_latents, p=2, dim=1)
+            student_logits = torch.matmul(atac_latents, rna_latents.T)
 
-            #X_rna = torch.from_numpy(mdd_rna_sampled_group.X.toarray())
-            #X_atac = torch.from_numpy(mdd_atac_sampled_group.X.toarray())
+            a, b = torch.ones((len(atac_latents),)) / len(atac_latents), torch.ones((len(rna_latents),)) / len(rna_latents)
 
-            ## select DEG genes and DAR peaks
-            #X_rna = X_rna[:,genes_indices]
-            #X_atac = X_atac[:,peaks_indices]
+            cells_gap = np.abs(len(atac_latents) - len(rna_latents))
 
-            ## detect cells with no gene expression and no chromatin accessibility
-            no_rna_cells = X_rna.sum(1) == 0
-            no_atac_cells = X_atac.sum(1) == 0
-            no_rna_atac_cells = no_rna_cells | no_atac_cells
+            ## if imbalance, use partial wasserstein to find cells to reject and resample accordingly
+            if cells_gap > 0:
+                print(f'cells_gap: {cells_gap}')
+                mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits = \
+                    cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd')
 
-            ## remove cells with no expression
-            X_rna = X_rna[~no_rna_atac_cells]
-            X_atac = X_atac[~no_rna_atac_cells]
+            ## compute optimal transport plan for alignment on remaining cells
+            res = ot_solve(1 - student_logits)
+            plan = res.plan
+            value = res.value_linear
 
-            #bulk_atac_abc = X_atac.mean(0, keepdim=True).detach().cpu().numpy()
-            #genes_to_peaks_binary_mask *= bulk_atac_abc
+            ## re-order ATAC latents to match plan (can rerun OT analysis to ensure diagonal matching structure)
+            atac_latents = atac_latents[plan.argmax(axis=0)]
+            mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
 
-            #genes_by_peaks_masks_dict[sex][celltype][condition] = genes_to_peaks_binary_mask
+            ## append to list
+            mdd_rna_aligned.append(mdd_rna_sampled_group)
+            mdd_atac_aligned.append(mdd_atac_sampled_group)
 
-            ## get tfrp
-            scompreg_loglikelihoods, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, std_errs, intercept_stderrs = \
-                get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
+        ## concatenate aligned anndatas
+        mdd_rna_aligned = anndata.concat(mdd_rna_aligned, axis=0)
+        mdd_atac_aligned = anndata.concat(mdd_atac_aligned, axis=0)
 
+        assert np.equal(mdd_rna_aligned.obs[rna_subject_key].values, mdd_atac_aligned.obs[atac_subject_key].values).all()
+        assert (mdd_rna_aligned.obs_names.nunique() == mdd_rna_aligned.n_obs) & (mdd_atac_aligned.obs_names.nunique() == mdd_atac_aligned.n_obs)
 
-            ## save to dicts
-            X_rna_dict[sex][celltype][condition if condition != '' else 'all'] = X_rna
-            X_atac_dict[sex][celltype][condition if condition != '' else 'all'] = X_atac
-            overlapping_target_genes_dict[sex][celltype][condition if condition != '' else 'all'] = overlapping_target_genes
-            overlapping_tfs_dict[sex][celltype][condition if condition != '' else 'all'] = overlapping_tfs
+        mdd_rna_aligned.var = mdd_rna.var
+        mdd_atac_aligned.var = mdd_atac.var
 
-            scompreg_loglikelihoods_dict[sex][celltype][condition if condition != '' else 'all'] = scompreg_loglikelihoods
-            std_errs_dict[sex][celltype][condition if condition != '' else 'all'] = std_errs
-            tg_expressions_dict[sex][celltype][condition if condition != '' else 'all'] = tg_expressions
-            tfrps_dict[sex][celltype][condition if condition != '' else 'all'] = tfrps
-            tfrp_predictions_dict[sex][celltype][condition if condition != '' else 'all'] = tfrp_predictions
-            slopes_dict[sex][celltype][condition if condition != '' else 'all'] = slopes
-            intercepts_dict[sex][celltype][condition if condition != '' else 'all'] = intercepts
-            intercept_stderrs_dict[sex][celltype][condition if condition != '' else 'all'] = intercept_stderrs
+        ## plot UMAP of aligned RNA latents and ATAC latents
+        rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_aligned, mdd_atac_aligned, return_tensor=True)
+        plot_umap_embeddings(rna_latents, atac_latents, [celltype]*len(rna_latents), [celltype]*len(atac_latents), [condition]*len(rna_latents), [condition]*len(atac_latents), color_map_ct={celltype: 'black'}, umap_embedding=None)
 
-            # tg_expressions_degs = tg_expressions.loc[:,tg_expressions.columns.isin(celltype_degs_df['gene'])]
-            # tfrps_degs = tfrps.loc[:,tfrps.columns.isin(celltype_degs_df['gene'])]
-            # x_degs = tg_expressions_degs.values.flatten()
-            # y_degs = tfrps_degs.values.flatten()
+        ## get mean GRN from brainSCOPE
+        mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned)
 
-            # tf_expressions = mdd_rna_sampled_group_seacells[:,mdd_rna_sampled_group.var['is_tf']].X.toarray()
-            # x_tfs = tf_expressions.flatten()
-            # y_tfs = tfrps.loc[:,mdd_rna_sampled_group.var['is_tf']].values.flatten()
+        overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
+        overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
 
-            if do_corrs_or_cosines is not None:
+        ## remove excess cells beyond cutoff with stratified sampling - or else SEACells way too slow
+        if len(mdd_rna_sampled_group) > cutoff:
+            print(f'Removing {len(mdd_rna_sampled_group) - cutoff} cells')
 
-                ## transpose
-                X_rna = X_rna.T
-                X_atac = X_atac.T
+            sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
+            _, sampled_indices = next(sss.split(mdd_rna_sampled_group.obs_names, mdd_rna_sampled_group.obs[rna_subject_key]))
 
-                if do_corrs_or_cosines == 'correlations':
-                    ## concatenate
-                    X_rna_atac = torch.cat([X_rna, X_atac], dim=0)
+            mdd_rna_sampled_group = mdd_rna_sampled_group[sampled_indices]
+            mdd_atac_sampled_group = mdd_atac_sampled_group[sampled_indices]
 
-                    corr = torch.corrcoef(X_rna_atac) #torch.corrcoef(X_rna_atac.cuda(9) if cuda_available else X_rna_atac)
-                    corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
+        ## run SEACells to obtain pseudobulked counts
+        mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = \
+            run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_UMAP_pca')
 
-                    if corr.isnan().any():
-                        print(f'NaN values in correlation matrix')
-                        corr[corr.isnan()] = 0
+        X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
+        X_atac = torch.from_numpy(mdd_atac_sampled_group_seacells.X.toarray())
 
-                    genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                    n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
+        ## detect cells with no gene expression and no chromatin accessibility
+        no_rna_cells = X_rna.sum(1) == 0
+        no_atac_cells = X_atac.sum(1) == 0
+        no_rna_atac_cells = no_rna_cells | no_atac_cells
 
-                elif do_corrs_or_cosines == 'spearman':
+        ## remove cells with no expression
+        X_rna = X_rna[~no_rna_atac_cells]
+        X_atac = X_atac[~no_rna_atac_cells]
 
-                    X_rna_argsort = torch.argsort(X_rna, dim=1) 
-                    X_atac_argsort = torch.argsort(X_atac, dim=1)
+        ## get tfrp
+        scompreg_loglikelihoods, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, std_errs, intercept_stderrs = \
+            get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
 
-                    X_rna_atac = torch.cat([X_rna_argsort, X_atac_argsort], dim=0)
-                    corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
-                    corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
+        ## assign to dicts
+        assign_to_dicts(sex, celltype, condition, X_rna, X_atac, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
 
-                    genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                    n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
-                        
-                elif do_corrs_or_cosines == 'kendall':
+        if do_corrs_or_cosines is not None:
 
-                    corr = torch.zeros(X_rna.shape[0], X_atac.shape[0])
-                    p_values = torch.zeros(X_rna.shape[0], X_atac.shape[0])
+            ## transpose
+            X_rna = X_rna.T
+            X_atac = X_atac.T
+
+            if do_corrs_or_cosines == 'correlations':
+                ## concatenate
+                X_rna_atac = torch.cat([X_rna, X_atac], dim=0)
+
+                corr = torch.corrcoef(X_rna_atac) #torch.corrcoef(X_rna_atac.cuda(9) if cuda_available else X_rna_atac)
+                corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
+
+                if corr.isnan().any():
+                    print(f'NaN values in correlation matrix')
+                    corr[corr.isnan()] = 0
+
+                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+                n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
+
+            elif do_corrs_or_cosines == 'spearman':
+
+                X_rna_argsort = torch.argsort(X_rna, dim=1) 
+                X_atac_argsort = torch.argsort(X_atac, dim=1)
+
+                X_rna_atac = torch.cat([X_rna_argsort, X_atac_argsort], dim=0)
+                corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
+                corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
+
+                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+                n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
                     
-                    for g, gene in tqdm(enumerate(mdd_rna_sampled_group.var_names), total=len(mdd_rna_sampled_group.var_names), desc="Computing Kendall correlations"):
-                        x_rna = X_rna[g,:]
-                        X_rna_g = x_rna.repeat(len(X_atac), 1)
-                        corrs_g, p_values_g = kendall_rank_corrcoef(X_rna_g.T.cuda(), X_atac.T.cuda(), variant='b', t_test=True, alternative='less')
-                        corr[g,:] = corrs_g.detach().cpu()
-                        p_values[g,:] = p_values_g.detach().cpu()
+            elif do_corrs_or_cosines == 'kendall':
 
-                    p_values[p_values==0] = 1e-5
-                    p_values[p_values==1] = 1-1e-5
+                corr = torch.zeros(X_rna.shape[0], X_atac.shape[0])
+                p_values = torch.zeros(X_rna.shape[0], X_atac.shape[0])
+                
+                for g, gene in tqdm(enumerate(mdd_rna_sampled_group.var_names), total=len(mdd_rna_sampled_group.var_names), desc="Computing Kendall correlations"):
+                    x_rna = X_rna[g,:]
+                    X_rna_g = x_rna.repeat(len(X_atac), 1)
+                    corrs_g, p_values_g = kendall_rank_corrcoef(X_rna_g.T.cuda(), X_atac.T.cuda(), variant='b', t_test=True, alternative='less')
+                    corr[g,:] = corrs_g.detach().cpu()
+                    p_values[g,:] = p_values_g.detach().cpu()
 
-                    z_scores = norm.ppf(p_values)
+                p_values[p_values==0] = 1e-5
+                p_values[p_values==1] = 1-1e-5
 
-                    genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                    n_dict[sex][celltype][condition] = X_rna.shape[1]
+                z_scores = norm.ppf(p_values)
 
-                elif do_corrs_or_cosines == 'cosines':
+                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
+                n_dict[sex][celltype][condition] = X_rna.shape[1]
 
-                    ## normalize gene expression and chromatin accessibility
-                    X_rna = torch.nn.functional.normalize(X_rna, p=2, dim=1)
-                    X_atac = torch.nn.functional.normalize(X_atac, p=2, dim=1)
+            elif do_corrs_or_cosines == 'cosines':
 
-                    ## correlate gene expression with chromatin accessibility
-                    cosine = torch.matmul(X_atac, X_rna.T)
-                    genes_by_peaks_corrs_dict[sex][celltype][condition] = cosine
+                ## normalize gene expression and chromatin accessibility
+                X_rna = torch.nn.functional.normalize(X_rna, p=2, dim=1)
+                X_atac = torch.nn.functional.normalize(X_atac, p=2, dim=1)
 
-else:
-    import pickle
-    with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
-        all_dicts = pickle.load(f)
-    genes_by_peaks_corrs_dict, tfrps_dict, tfrp_predictions_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, mean_grn_df = all_dicts
-
+                ## correlate gene expression with chromatin accessibility
+                cosine = torch.matmul(X_atac, X_rna.T)
+                genes_by_peaks_corrs_dict[sex][celltype][condition] = cosine
 
 
 '''
+import pickle
+with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
+    all_dicts = pickle.load(f)
+genes_by_peaks_corrs_dict, tfrps_dict, tfrp_predictions_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, mean_grn_df = all_dicts
+
 import pickle
 all_dicts = (genes_by_peaks_corrs_dict, tfrps_dict, tfrp_predictions_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, mean_grn_df)
 with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'wb') as f:
@@ -2066,587 +2525,26 @@ with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'wb') as 
 '''
 
 #%% get MDD-association gene scores
+LR, Z, LR_up, LR_down, Z_up, Z_down = compute_scompreg_loglikelihoods(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict)
 
-## pre-computed log likelihoods
-scompreg_loglikelihoods_case_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['Case']
-scompreg_loglikelihoods_control_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['Control']
-scompreg_loglikelihoods_all_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['all']
+## filter LR values with fitted null distribution (sc-compReg)
+lr_filtered, Z_filtered, lr_up_filtered, lr_down_filtered, lr_fitted_cdf = filter_LR_stats(LR, Z, LR_up, LR_down)
 
-scompreg_loglikelihoods_precomputed_df = pd.DataFrame({
-    'case': scompreg_loglikelihoods_case_precomputed,
-    'control': scompreg_loglikelihoods_control_precomputed,
-    'all': scompreg_loglikelihoods_all_precomputed
-})
-genes_names = scompreg_loglikelihoods_precomputed_df.index
+## Get gene sets that include DEG genes from pyDESeq2 analysis
+top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = get_deg_gene_sets(LR, lr_fitted_cdf, significant_genes)
 
-LR_precomputed = -2 * (scompreg_loglikelihoods_precomputed_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
-
-## re-computed log likelihoods and confirm that same as pre-computed
-for condition in ['Case', 'Control']:
-
-    tfrps               = tfrps_dict[sex][celltype][condition]
-    tg_expressions      = tg_expressions_dict[sex][celltype][condition]
-
-    for gene in tqdm(genes_names):
-
-        log_gaussian_likelihood_pre = scompreg_loglikelihoods_dict[sex][celltype][condition][gene]
-        if np.isnan(log_gaussian_likelihood_pre):
-            continue
-
-        tfrp                = tfrps.loc[:,gene].values.astype(float)
-        tg_expression       = tg_expressions.loc[:,gene].values.astype(float)
-
-        ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
-        slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
-        tfrp_prediction = slope * tg_expression + intercept
-
-        ## compute residuals and variance
-        n = len(tfrp)
-        sq_residuals = (tfrp - tfrp_prediction)**2
-        var = sq_residuals.sum() / n
-        log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
-
-        diff = np.abs(log_gaussian_likelihood - log_gaussian_likelihood_pre)
-        assert diff < 1e-6
-
-## re-compute log likelihoods for pooled conditions
-tfrps_all = pd.concat([ tfrps_dict[sex][celltype]['Case'], tfrps_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
-tg_expressions_all = pd.concat([ tg_expressions_dict[sex][celltype]['Case'], tg_expressions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
-tfrp_predictions_all = pd.concat([ tfrp_predictions_dict[sex][celltype]['Case'], tfrp_predictions_dict[sex][celltype]['Control'] ]).reset_index(drop=True)
-
-## compute correlation between tfrp predictions and tfrps - could potential use to filter genes
-tfrp_corrs = tfrp_predictions_all.corrwith(tfrps_all, method='kendall')
-tfrp_corrs = tfrp_corrs.dropna()
-
-diffs_all = []
-scompreg_loglikelihoods_all = {}
-
-for gene in tqdm(genes_names):
-
-    tfrp = tfrps_all.loc[:,gene].values.astype(float)
-    tg_expression = tg_expressions_all.loc[:,gene].values.astype(float)
-
-    try:
-        slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
-        tfrp_predictions = slope * tg_expression + intercept
-    except:
-        print(f'{gene} has no variance in tg_expression')
-        tfrp_predictions = np.ones_like(tg_expression) * np.nan
-        log_gaussian_likelihood = np.array([np.nan])
-    else:
-        n = len(tfrp)
-        sq_residuals = (tfrp - tfrp_predictions)**2
-        var = sq_residuals.sum() / n
-        log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
-    finally:
-        scompreg_loglikelihoods_all[gene] = log_gaussian_likelihood
-
-    #diff = np.abs(log_gaussian_likelihood - scompreg_loglikelihoods_dict[sex][celltype]['all'][gene])
-    #diffs_all.append(diff)
-
-## collect all log likelihoods
-scompreg_loglikelihoods_df = pd.DataFrame({
-    'case': scompreg_loglikelihoods_case_precomputed,
-    'control': scompreg_loglikelihoods_control_precomputed,
-    'all': scompreg_loglikelihoods_all
-}).dropna() # drop rows with nan
-
-## extract gene names from dataframe since some genes were dropped due to nan
-genes_names = scompreg_loglikelihoods_df.index
-
-## compute log likelihood ratio LR
-LR = -2 * (scompreg_loglikelihoods_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
-
-## apply Wilson-Hilferty cube-root transformation
-dof = 3
-Z = (9*dof/2)**(1/2) * ( (LR/dof)**(1/3) - (1 - 2/(9*dof)) )
-
-## Hawkins & Wixley 1986
-lambd = 0.2887  # optimal value for dof=3
-Z = (LR**lambd - 1) / lambd
-
-## Recenter Z distribution
-Z = Z - np.median(Z)
-
-if (LR < 0).any():
-    print(f'LR is negative for {celltype} {sex}')
-
-## Compute t-statistic between regression slopes
-slopes_case = slopes_dict[sex][celltype]['Case']
-slopes_control = slopes_dict[sex][celltype]['Control']
-
-std_errs_case = std_errs_dict[sex][celltype]['Case']
-std_errs_control = std_errs_dict[sex][celltype]['Control']
-
-t_df = pd.DataFrame({
-    'case': slopes_case,
-    'control': slopes_control,
-    'std_err_case': std_errs_case,
-    'std_err_control': std_errs_control
-}).dropna()
-
-t_slopes = (t_df['case'] - t_df['control']) / np.sqrt(t_df['std_err_case']**2 + t_df['std_err_control']**2)
-t_slopes = t_slopes.dropna() # might have residual nan due to std_err being 0
-
-## compute correlation between LR and absolute value of slopes t-statistic
-LR.name = 'LR'
-t_slopes.name = 't_slopes'
-LR_t_df = pd.merge(left=LR, right=t_slopes.abs(), left_index=True, right_index=True, how='inner')
-LR_t_corr = LR_t_df.corr(method='spearman')['LR']['t_slopes']
-print(f'Correlation between LR and absolute value of slopes t-statistic: {LR_t_corr:.2f}')
-
-## separate up and down LR and Z based on sign of t-statistic
-LR_up = LR[t_slopes > 0]
-LR_down = LR[t_slopes < 0]
-
-Z_up = Z[t_slopes > 0]
-Z_down = Z[t_slopes < 0]
-
-
-
-#%% filter LR values with fitted null distribution (sc-compReg)
-from scipy.stats import gamma
-from scipy.optimize import minimize
-
-# 1) Suppose `lr` is your 1-D array of empirical LR statistics:
-lr = np.array(LR)
-
-# 2) Compute subset of empirical quantiles:
-max_null_quantile = 0.5
-
-probs = np.linspace(0.05, max_null_quantile, 10)
-emp_q = np.quantile(lr, probs)
-
-# 3) Define the objective G(a, b) = sum_i [Gamma.ppf(probs[i], a, scale=b) - emp_q[i]]^2
-def G(params):
-    a, scale = params
-    # enforce positivity
-    if a <= 0 or scale <= 0:
-        return np.inf
-    theor_q = gamma.ppf(probs, a, scale=scale)
-    return np.sum((theor_q - emp_q)**2)
-
-# 4) Method-of-moments init on the lower half to get a reasonable starting point
-m1 = emp_q.mean()
-v1 = emp_q.var()
-init_a = m1**2 / v1
-init_scale = v1 / m1
-
-# 5) Minimize G(a, scale) over a>0, scale>0
-res = minimize(G,
-               x0=[init_a, init_scale],
-               bounds=[(1e-8, None), (1e-8, None)],
-               method='L-BFGS-B')
-
-
-# Plot empirical histogram and fitted gamma distribution
-plt.figure(figsize=(10, 6))
-plt.hist(lr, bins=100, density=True, alpha=0.6, label='Empirical LR distribution')
-
-# Generate points for fitted gamma distribution
-x = np.linspace(0, max(lr), 1000)
-fitted_pdf = gamma.pdf(x, a=res.x[0], scale=res.x[1])
-plt.plot(x, fitted_pdf, 'r-', linewidth=2, label='Fitted gamma distribution')
-
-# Add veritcal line at last null quantile
-plt.axvline(emp_q[-1], color='black', linestyle='--', label=f'Last null quantile of empirical distribution (q={probs[-1]:.2f})')
-
-# Add veritcal line at threshold
-p_threshold = 0.05
-lr_at_p = gamma.ppf(1-p_threshold, a=res.x[0], scale=res.x[1])
-plt.axvline(lr_at_p, color='green', linestyle='--', label=f'Threshold (p={p_threshold:.2f}) @ LR={lr_at_p:.2f}')
-
-plt.xlabel('LR statistic')
-plt.ylabel('Density')
-plt.title('Comparison of Empirical and Fitted LR Distributions')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.show()
-
-## filter LR values with fitted null distribution
-lr_fitted_cdf = gamma.cdf(lr, a=res.x[0], scale=res.x[1])
-where_filtered = lr_fitted_cdf > (1-p_threshold)
-
-lr_filtered = LR[where_filtered]
-Z_filtered = Z[where_filtered]
-genes_names_filtered = lr_filtered.index.to_list()
-
-## filter LR_up and LR_down, note that splits gene set in half, could use more leniant threshold to include more genes for up and down, or even create separate null distributions for each
-lr_up_filtered = LR_up[LR_up.index.isin(genes_names_filtered)]
-lr_down_filtered = LR_down[LR_down.index.isin(genes_names_filtered)]
-t_slopes_filtered = t_slopes[genes_names_filtered]
-
-#%% Get gene sets that include DEG genes...
-
-
-## ...from Maitra et al. 2023
-celltype_degs_df = maitra_female_degs_df[maitra_female_degs_df['cluster_id.female'].str.startswith(celltype)]
-
-## filtered LR values ex-DEG (replace with other non-DEG genes)
-lr_filtered_is_deg = lr_filtered.index.isin(celltype_degs_df.index)
-
-if lr_filtered_is_deg.any():
-    lr_filtered_woDeg = lr_filtered[~lr_filtered_is_deg]
-else:
-    print('No DEG genes in LR')
-
-## LR values for DEG genes (not all DEG genes are in LR)
-LR_deg = LR.loc[LR.index.isin(celltype_degs_df['gene'])]
-deg_not_in_lr = celltype_degs_df[~celltype_degs_df['gene'].isin(LR.index)]['gene'].drop_duplicates().to_list()
-deg_not_in_lr_series = pd.Series(np.nan, index=deg_not_in_lr)
-LR_deg = pd.concat([LR_deg, deg_not_in_lr_series])
-
-## DEG genes with top filtered LR genes
-#where_filtered_idxs = np.sort(np.flip(lr_fitted_cdf.argsort())[:len(lr_filtered)]); top_lr_filtered = LR[where_filtered_idxs]; assert top_lr_filtered.equals(lr_filtered)
-n_lr_deg = len(lr_filtered) + celltype_degs_df['gene'].nunique()
-n_lr_minus_deg = len(lr_filtered) - celltype_degs_df['gene'].nunique(); assert n_lr_minus_deg > 0, 'list of DEG genes is longer than list of filtered LR genes'
-
-where_filtered_with_excess = np.flip(lr_fitted_cdf.argsort())[:n_lr_deg]
-where_filtered_with_excess_top = where_filtered_with_excess[:n_lr_minus_deg]
-where_filtered_with_excess_bottom = where_filtered_with_excess[-n_lr_minus_deg:]
-
-top_lr_filtered = LR[where_filtered_with_excess_top]
-top_lr_filtered_wDeg = pd.concat([top_lr_filtered, LR_deg])
-
-bottom_lr_filtered = LR[where_filtered_with_excess_bottom]
-bottom_lr_filtered_wDeg = pd.concat([bottom_lr_filtered, LR_deg])
-
-n_genes = np.unique([len(lr_filtered), len(top_lr_filtered_wDeg), len(bottom_lr_filtered_wDeg)]); assert len(n_genes) == 1, 'number of genes in each list must be the same'
-n_genes = n_genes[0]
-
-## ...from scanpy pyDESeq2 analysis
-'''
-mdd_rna_female_celltype = mdd_rna_female[mdd_rna_female.obs[rna_celltype_key].str.startswith(celltype)]
-sc.tl.rank_genes_groups(mdd_rna_female_celltype, rna_condition_key, reference='Control', method=deg_method, key_added=deg_method, pts=True)
-sc_deg_df = sc.get.rank_genes_groups_df(mdd_rna_female_celltype, group='Case', key=deg_method)
-sc_deg_df = sc_deg_df[sc_deg_df['pvals_adj'] < 0.05]
-'''
-
-sc_deg_df = pd.DataFrame(significant_genes, columns=['names'], index=significant_genes)
-
-## LR values for DEG genes (not all DEG genes are in LR)
-sc_LR_deg = LR.loc[LR.index.isin(sc_deg_df['names'])]
-sc_deg_not_in_lr = sc_deg_df[~sc_deg_df['names'].isin(LR.index)]['names'].drop_duplicates().to_list()
-sc_deg_not_in_lr_series = pd.Series(np.nan, index=sc_deg_not_in_lr)
-sc_LR_deg = pd.concat([sc_LR_deg, sc_deg_not_in_lr_series])
-
-## DEG genes with top filtered LR genes
-#where_filtered_idxs = np.sort(np.flip(lr_fitted_cdf.argsort())[:len(lr_filtered)]); top_lr_filtered = LR[where_filtered_idxs]; assert top_lr_filtered.equals(lr_filtered)
-sc_n_lr_deg = len(lr_filtered) + sc_deg_df['names'].nunique()
-sc_n_lr_minus_deg = len(lr_filtered) - sc_deg_df['names'].nunique(); assert sc_n_lr_minus_deg > 0, 'list of DEG genes is longer than list of filtered LR genes'
-
-where_filtered_with_excess = np.flip(lr_fitted_cdf.argsort())[:sc_n_lr_deg]
-where_filtered_with_excess_top = where_filtered_with_excess[:sc_n_lr_minus_deg]
-where_filtered_with_excess_bottom = where_filtered_with_excess[-sc_n_lr_minus_deg:]
-
-sc_top_lr_filtered = LR[where_filtered_with_excess_top]
-sc_bottom_lr_filtered = LR[where_filtered_with_excess_bottom]
-
-sc_top_lr_filtered_wDeg = pd.concat([sc_top_lr_filtered, sc_LR_deg])
-sc_bottom_lr_filtered_wDeg = pd.concat([sc_bottom_lr_filtered, sc_LR_deg])
-
-sc_n_genes = np.unique([len(lr_filtered), len(top_lr_filtered_wDeg), len(bottom_lr_filtered_wDeg)]); assert len(sc_n_genes) == 1, 'number of genes in each list must be the same'
-sc_n_genes = sc_n_genes[0]
-
-## filtered LR values ex-DEG (replace with other non-DEG genes)
-sc_lr_filtered_is_deg = lr_filtered.index.isin(sc_deg_df['names'])
-
-if sc_lr_filtered_is_deg.any():
-    sc_lr_filtered_woDeg_short = lr_filtered[~sc_lr_filtered_is_deg]
-    sc_deg_woLR = lr_filtered[sc_lr_filtered_is_deg]
-    print(f'{sc_lr_filtered_is_deg.sum()} DEG genes removed from LR')
-
-    replace_degs_with_non_degs = where_filtered_with_excess[ len(lr_filtered) : (len(lr_filtered) + sc_lr_filtered_is_deg.sum()) ]
-    sc_lr_filtered_woDeg = pd.concat([sc_lr_filtered_woDeg_short, LR[replace_degs_with_non_degs]])
-
-else:
-    print('No scanpy DEG genes in LR')
-
-
-#%% Merge lr_filtered into mean_grn_df
-
-mean_grn_df_filtered = mean_grn_df.merge(lr_filtered, left_on='TG', right_index=True, how='right')
-#mean_grn_df_filtered['Correlation'].fillna(mean_grn_df_filtered['Correlation'].mean(), inplace=True)
-mean_grn_df_filtered['lrCorr'] = mean_grn_df_filtered[['Correlation','LR']].product(axis=1, skipna=True).abs()
-
-## create graph from mean_grn_df_filtered with lrCorr as edge weight
-mean_grn_filtered_graph = nx.from_pandas_edgelist(
-    mean_grn_df_filtered,
-    source='TG',
-    target='enhancer',
-    edge_attr='lrCorr',
-    create_using=nx.DiGraph())
-
-peaks = scglue.genomics.Bed(mean_grn_df_filtered.assign(name=mean_grn_df_filtered['enhancer']))
-
-gene_ad = anndata.AnnData(var=pd.DataFrame(index=mean_grn_df_filtered['TG'].to_list()))
-scglue.data.get_gene_annotation(gene_ad, gtf=os.path.join(os.environ['DATAPATH'], 'gencode.v48.annotation.gtf.gz'), gtf_by='gene_name')
-genes = scglue.genomics.Bed(gene_ad.var)
-
-#genes = scglue.genomics.Bed(mdd_rna[:, mdd_rna.var['chrom'].notna()].var.assign(name=mdd_rna[:, mdd_rna.var['chrom'].notna()].var_names))
-#genes = genes[genes['name'].isin(mean_grn_df_filtered['TG'])]
-tss = genes.strand_specific_start_site()
-
-peaks.write_bed(os.path.join(os.environ['OUTPATH'], 'peaks.bed'))
-scglue.genomics.write_links(
-    mean_grn_filtered_graph,
-    tss,
-    peaks,
-    os.path.join(os.environ['OUTPATH'], 'gene2peak_lrCorr.links'),
-    keep_attrs=["lrCorr"]
-    )
-
-tg_dist_counts_sorted = mean_grn_df_filtered.groupby('TG')[['dist']].mean().merge(mean_grn_df_filtered['TG'].value_counts(), left_index=True, right_on='TG').sort_values('dist').head(20)
-display(tg_dist_counts_sorted)
-
-gene = tg_dist_counts_sorted.iloc[10].name
-tg_grn = mean_grn_df_filtered[mean_grn_df_filtered['TG']==gene].sort_values('dist')[['enhancer','dist','lrCorr']].groupby('enhancer').mean()
-tg_grn_bounds = np.stack(tg_grn.index.str.split(':|-')).flatten()
-tg_grn_bounds = [int(bound) for bound in tg_grn_bounds if bound.isdigit()] + [genes.loc[gene, 'chromStart'].drop_duplicates().values[0]] + [genes.loc[gene, 'chromEnd'].drop_duplicates().values[0]]
-display(tg_grn)
-print(f'{genes.loc[gene, "chrom"].drop_duplicates().values[0]}:{min(tg_grn_bounds)}-{max(tg_grn_bounds)}')
-print(genes.loc[gene,['chrom','chromStart','chromEnd','name']].drop_duplicates())
+## Merge lr_filtered into mean_grn_df
+mean_grn_df_filtered = merge_grn_lr_filtered(mean_grn_df, lr_filtered)
 
 #!pyGenomeTracks --tracks tracks.ini --region chr2:157304654-157336585 -o tracks.png
 
-#%% Get BrainGMT and filter for cortical genes
+#%% Gene set enrichment analyses
 
-brain_gmt = gp.parser.read_gmt(os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_HumanOrthologs.gmt'))
-brain_gmt_names = pd.Series(list(brain_gmt.keys()))
-brain_gmt_prefix_unique = np.unique([name.split('_')[0] for name in brain_gmt_names])
+## Get BrainGMT and filter for cortical genes
+brain_gmt_cortical, brain_gmt_cortical_wGO = get_brain_gmt()
 
-brain_gmt_wGO = gp.parser.read_gmt(os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_wGO_HumanOrthologs.gmt'))
-brain_gmt_wGO_names = pd.Series(list(brain_gmt_wGO.keys()))
-brain_gmt_wGO_prefix_unique = np.unique([name.split('_')[0] for name in brain_gmt_wGO_names])
-
-non_cortical_blacklist = [
-    'DropViz',
-    'HippoSeq',
-    'Coexpression_Hippocampus',
-    'Birt_Hagenauer_2020',
-    'Gray_2014',
-    'Bagot_2016',
-    'Bagot_2017',
-    'Pena_2019',
-    'GeneWeaver',
-    'GenWeaver', # probably same as GeneWeaver
-    'Gemma'
-]
-
-#gset_by_blacklist_df = pd.DataFrame([brain_gmt_names.str.contains(ncbl) for ncbl in non_cortical_blacklist], index=non_cortical_blacklist, columns=brain_gmt_names)
-gset_by_blacklist_df = pd.DataFrame([brain_gmt_names.str.contains(ncbl) for ncbl in non_cortical_blacklist])
-gset_by_blacklist_df.index = non_cortical_blacklist
-gset_by_blacklist_df.columns = brain_gmt_names
-
-keep_cortical_gmt = gset_by_blacklist_df.loc[:,~gset_by_blacklist_df.any(axis=0).values].columns.tolist()
-brain_gmt_cortical = {k:v for k,v in brain_gmt.items() if k in keep_cortical_gmt}
-
-gset_by_blacklist_df_wGO = pd.DataFrame([brain_gmt_wGO_names.str.contains(ncbl) for ncbl in non_cortical_blacklist])
-gset_by_blacklist_df_wGO.index = non_cortical_blacklist
-gset_by_blacklist_df_wGO.columns = brain_gmt_wGO_names
-
-keep_cortical_gmt_wGO = gset_by_blacklist_df_wGO.loc[:,~gset_by_blacklist_df_wGO.any(axis=0).values].columns.tolist()
-brain_gmt_cortical_wGO = {k:v for k,v in brain_gmt_wGO.items() if k in keep_cortical_gmt_wGO}
-
-#%% MAGMA
-
-## get entrez IDs or Ensembl IDs for significant genes
-import mygene
-mg = mygene.MyGeneInfo()
-
-## paths for MAGMA
-MAGMAPATH = glob(os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10*'))[0]
-magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job604461', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
-magma_out_path = os.path.join(os.environ['OUTPATH'], 'sc-compReg_significant_genes')
-
-## read "genes.raw" file and see if IDs start with "ENSG" or is integer
-genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
-genes_raw_ids = genes_raw_df[0].apply(lambda x: x.split(' ')[0])
-
-genes_out_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job604461', 'magma.genes.out'), sep='\t')
-genes_magma_control = genes_out_df.loc[genes_out_df['ZSTAT'].argsort()][-len(significant_genes):]['GENE'].to_list()
-
-lr_filtered_top = lr_filtered[lr_filtered.argsort().values][-len(significant_genes):]
-lr_filtered_union = pd.concat([lr_filtered, pd.Series(significant_genes, index=significant_genes)]).drop_duplicates()
-
-gene_sets = {
-    'sc-compReg': lr_filtered.index.to_list(),
-    'pyDESeq2': significant_genes.to_list(),
-    'magma-control': genes_magma_control,
-    'sc-compReg-top': lr_filtered_top.index.to_list(),
-    'Z_IGNORE': Z.index.to_list()}
-
-set_file_dict = {}
-sig_ensembl_ids_all_dict = {}
-
-for gene_set_name, gene_set in gene_sets.items():
-
-    if pd.Series(gene_set).str.startswith('ENSG').all():
-        print(f"IDs are already Ensembl IDs")
-        set_file_dict[gene_set_name] = gene_set
-
-    else:
-        print(f"IDs are not Ensembl IDs, converting to Ensembl IDs")
-
-        if genes_raw_ids.str.startswith('ENSG').all():
-
-            print(f"IDs are Ensembl IDs")
-
-            significant_genes_mg_df = mg.querymany(
-                gene_set,
-                scopes="symbol",
-                fields="ensembl.gene",
-                species="human",
-                size=1,
-                as_dataframe=True,
-                )
-            
-            sig_ensembl_ids = significant_genes_mg_df['ensembl.gene'].dropna()
-            sig_ensembl_ids_exploded = (significant_genes_mg_df['ensembl'].dropna().apply(lambda gene: [ensembl['gene'] for ensembl in gene]).explode() if ('ensembl' in significant_genes_mg_df.columns) else pd.Series(dtype=str))
-            sig_ensembl_ids_all = pd.concat([sig_ensembl_ids, sig_ensembl_ids_exploded])
-
-            significant_genes_ensembl_ids = list(set(sig_ensembl_ids_all.to_list()))
-
-            set_file_dict[gene_set_name] = significant_genes_ensembl_ids
-            sig_ensembl_ids_all_dict[gene_set_name] = sig_ensembl_ids_all
-
-        else:
-
-            print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
-
-            significant_genes_entrez_ids = []
-            for gene in tqdm(gene_set, total=len(gene_set), desc='Getting entrez IDs for significant genes'):
-                entrez_id_res = mg.query(gene, species='human', scopes='entrezgenes', size=1)
-                entrez_id = entrez_id_res['hits'][0]['_id']
-                significant_genes_entrez_ids.append(entrez_id)
-
-            set_file_dict[gene_set_name] = significant_genes_entrez_ids
-
-## write gene set file
-magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'significant_gene_sets.gmt')
-
-with open(magma_set_file_path, 'w') as f:
-    for gene_set_name, gene_set in set_file_dict.items():
-        if not gene_set_name.endswith('IGNORE'):
-            f.write(f"{gene_set_name} {' '.join(gene_set)}\n")
-
-## write gene covariate file
-Z_IGNORE_ensembl = sig_ensembl_ids_all_dict['Z_IGNORE']
-Z_IGNORE_ensembl.name = 'ensembl'
-
-Z.name = 'ZSTAT'
-Z.index.name = 'gene'
-
-Z_ensembl = pd.merge(Z, Z_IGNORE_ensembl, left_index=True, right_index=True, how='right')
-Z_ensembl = Z_ensembl.set_index('ensembl', drop=True)
-
-magma_genecovar_path = os.path.join(os.environ['OUTPATH'], 'Z.covariates.txt')
-Z_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
-
-'''
-sc_compReg_ensembl = sig_ensembl_ids_all_dict['sc-compReg']
-sc_compReg_ensembl.name = 'ensembl'
-
-Z_filtered.name = 'ZSTAT'
-Z_filtered.index.name = 'gene'
-
-Z_filtered_ensembl = pd.merge(Z_filtered, sc_compReg_ensembl, left_index=True, right_index=True, how='right')
-Z_filtered_ensembl = Z_filtered_ensembl.set_index('ensembl', drop=True)
-
-magma_genecovar_path = os.path.join(os.environ['OUTPATH'], 'Z_filtered.covariates.txt')
-Z_filtered_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
-'''
-
-
-## write list file for interaction analysis
-magma_list_file_path = os.path.join(os.environ['OUTPATH'], 'significant_genes.list')
-list_file_dict = {'condition-interaction': ['sc-compReg', 'ZSTAT']}
-pd.DataFrame.from_dict(list_file_dict, orient='index').to_csv(magma_list_file_path, sep='\t', header=False, index=False)
-
-## run MAGMA (a terminal command)
-magma_gs_cmd = f"""{MAGMAPATH}/magma \
-    --gene-results {magma_genes_raw_path} \
-    --set-annot {magma_set_file_path} \
-    --model self-contained correct=all\
-    --out {magma_out_path}"""
-
-magma_cvar_cmd = f"""{MAGMAPATH}/magma \
-    --gene-results {magma_genes_raw_path} \
-    --gene-covar {magma_genecovar_path} \
-    --model correct=all\
-    --out {magma_out_path}"""
-
-magma_gs_cvar_interaction_cmd = f"""{MAGMAPATH}/magma \
-    --gene-results {magma_genes_raw_path} \
-    --set-annot {magma_set_file_path} \
-    --gene-covar {magma_genecovar_path} \
-    --model interaction={magma_list_file_path}\
-    --out {magma_out_path}"""
-
-os.system(magma_gs_cmd)
-os.system(magma_cvar_cmd)
-os.system(magma_gs_cvar_interaction_cmd)
-
-## check content of output file and log file
-logfile = magma_out_path + '.log'
-outfile = magma_out_path + '.gsa.out'
-outfile_self = magma_out_path + '.gsa.self.out'
-
-with open(logfile, 'r') as f:
-    for line in f:
-        print(line)
-with open(outfile, 'r') as f:
-    for line in f:
-        print(line)
-with open(outfile_self, 'r') as f:
-    for line in f:
-        print(line)
-
-#%% GSEApy
-
-rank = Z.copy()
-
-ranked_list = pd.DataFrame({'gene': rank.index.to_list(), 'score': rank.values})
-ranked_list = ranked_list.sort_values(by='score', ascending=False)
-
-pre_res = gp.prerank(rnk=ranked_list,
-                     gene_sets=brain_gmt_cortical,
-                     outdir=os.path.join(os.environ['OUTPATH'], 'gseapy_results'),
-                     min_size=2,
-                     max_size=len(ranked_list),
-                     permutation_num=1000)
-
-'''
-gene sets of interest:
-- GO_Biological_Process_2021/2023/2025
-- Human_Phenotype_Ontology
-- DisGeNET
-
-- Reactome_2022
-- KEGG_2021_Human
-
-- ENCODE_and_ChEA_Consensus_TFs_from_ChIP-X
-- ENCODE_TF_ChIP-seq_2014/2015
-- ChEA_2013/2015/2016/2022
-- TRRUST_Transcription_Factors_2019
-'''
-
-pre_res.res2d.sort_values('FWER p-val', ascending=True).head(20)
-
-## plot enrichment map
-term2 = pre_res.res2d.Term
-axes = pre_res.plot(terms=term2[5])
-
-## dotplot
-from gseapy import dotplot
-# to save your figure, make sure that ``ofname`` is not None
-ax = dotplot(pre_res.res2d,
-             column="NOM p-val",
-             title='',
-             cmap=plt.cm.viridis,
-             size=6, # adjust dot size
-             top_term=20,
-             figsize=(4,7), cutoff=0.25, show_ring=False)
+## MAGMA
+run_magma(lr_filtered, Z, significant_genes)
 
 #%% EnrichR
 from IPython.display import display
@@ -2660,13 +2558,14 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
     display(enr.res2d.sort_values('Adjusted P-value', ascending=True).head(20)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
 
     # dotplot
+    max_pval = enr.res2d['Adjusted P-value'].max()
     gp.dotplot(enr.res2d,
             column='Adjusted P-value',
             figsize=(3,7),
             title='',
             cmap=plt.cm.viridis,
             size=12, # adjust dot size
-            cutoff=0.25,
+            cutoff=max_pval,
             top_term=15,
             show_ring=False)
     plt.show()
@@ -2676,59 +2575,34 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
     return enr, enr_sig_pathways
 
 pathways = brain_gmt_cortical
+deg_df = pd.DataFrame(index=significant_genes)
+
 enr, enr_sig_pathways = do_enrichr(lr_filtered, pathways)
+enr_deg, enr_sig_pathways_deg = do_enrichr(deg_df, pathways)
+enr_woDeg, enr_sig_pathways_woDeg = do_enrichr(lr_filtered_woDeg, pathways)
 
-enr_woDeg, enr_sig_pathways_woDeg = do_enrichr(sc_lr_filtered_woDeg, pathways)
-enr_woDeg_short, enr_sig_pathways_woDeg_short = do_enrichr(sc_lr_filtered_woDeg_short, pathways)
-enr_deg_woLR, enr_sig_pathways_deg_woLR = do_enrichr(sc_deg_woLR, pathways)
-
-enr_deg, enr_sig_pathways_deg = do_enrichr(LR_deg, pathways)
 enr_top_wDeg, enr_sig_pathways_top_wDeg = do_enrichr(top_lr_filtered_wDeg, pathways)
 enr_bottom_wDeg, enr_sig_pathways_bottom_wDeg = do_enrichr(bottom_lr_filtered_wDeg, pathways)
 
-sc_enr_deg, sc_enr_sig_pathways_deg = do_enrichr(sc_LR_deg, pathways)
-sc_enr_top_wDeg, sc_enr_sig_pathways_top_wDeg = do_enrichr(sc_top_lr_filtered_wDeg, pathways)
-sc_enr_bottom_wDeg, sc_enr_sig_pathways_bottom_wDeg = do_enrichr(sc_bottom_lr_filtered_wDeg, pathways)
-
 # Create sets of significant pathways for each case
-set1 = set(enr_sig_pathways)
-
-set2 = set(enr_sig_pathways_deg)
-set3 = set(enr_sig_pathways_top_wDeg)
-set4 = set(enr_sig_pathways_bottom_wDeg)
-
-set5 = set(sc_enr_sig_pathways_deg)
-set6 = set(sc_enr_sig_pathways_top_wDeg)
-set7 = set(sc_enr_sig_pathways_bottom_wDeg)
-
-set8 = set(enr_sig_pathways_woDeg)
-set9 = set(enr_sig_pathways_woDeg_short)
-set10 = set(enr_sig_pathways_deg_woLR)
+enr_sig_pathways_set = set(enr_sig_pathways)
+enr_sig_pathways_deg_set = set(enr_sig_pathways_deg)
+enr_sig_pathways_top_wDeg_set = set(enr_sig_pathways_top_wDeg)
+enr_sig_pathways_bottom_wDeg_set = set(enr_sig_pathways_bottom_wDeg)
+enr_sig_pathways_woDeg_set = set(enr_sig_pathways_woDeg)
 
 from venn import venn
 enrs_dict = {
-    'All LR': set1,
-    'DEG + Top LR': set3,
-    'DEG + Bottom LR': set4,
-    'DEG': set2,
+    'All LR': enr_sig_pathways_set,
+    'DEG + Top LR': enr_sig_pathways_top_wDeg_set,
+    'DEG + Bottom LR': enr_sig_pathways_bottom_wDeg_set,
 }
+if len(enr_sig_pathways_deg_set) > 0:
+    enrs_dict.update({'DEG': enr_sig_pathways_deg_set})
+else:
+    print('No gene set enrichment for DEG genes')
+
 venn(enrs_dict)
-
-sc_enrs_dict = {
-    'All LR': set1,
-    'DEG + Top LR': set6,
-    'DEG + Bottom LR': set7,
-    'DEG': set5,
-}
-venn(sc_enrs_dict)
-
-sc_enrs_dict_woDeg = {
-    'All LR': set1,
-    'All LR - ex sc DEG': set8,
-    'All LR - ex sc DEG (short)': set9,
-    'DEG - ex LR': set10,
-}
-venn(sc_enrs_dict_woDeg)
 
 
 #%% check ranks of pre-defined pathways
@@ -2738,18 +2612,12 @@ enr_sorted = enr.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_
 enr_sorted_deg = enr_deg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
 enr_sorted_top_wDeg = enr_top_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
 enr_sorted_bottom_wDeg = enr_bottom_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
-sc_enr_sorted_deg = sc_enr_deg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
-sc_enr_sorted_top_wDeg = sc_enr_top_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
-sc_enr_sorted_bottom_wDeg = sc_enr_bottom_wDeg.res2d.sort_values('Adjusted P-value', ignore_index=True).reset_index(names='rank')
 
 ## compute normalized ranks
 enr_sorted['normalized_rank'] = enr_sorted['rank'] / len(enr_sorted)
 enr_sorted_deg['normalized_rank'] = enr_sorted_deg['rank'] / len(enr_sorted_deg)
 enr_sorted_top_wDeg['normalized_rank'] = enr_sorted_top_wDeg['rank'] / len(enr_sorted_top_wDeg)
 enr_sorted_bottom_wDeg['normalized_rank'] = enr_sorted_bottom_wDeg['rank'] / len(enr_sorted_bottom_wDeg)
-sc_enr_sorted_deg['normalized_rank'] = sc_enr_sorted_deg['rank'] / len(sc_enr_sorted_deg)
-sc_enr_sorted_top_wDeg['normalized_rank'] = sc_enr_sorted_top_wDeg['rank'] / len(sc_enr_sorted_top_wDeg)
-sc_enr_sorted_bottom_wDeg['normalized_rank'] = sc_enr_sorted_bottom_wDeg['rank'] / len(sc_enr_sorted_bottom_wDeg)
 
 pathways = [
     'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN',
@@ -2762,9 +2630,10 @@ pathways = [
     'Gandal_2018_BipolarDisorder_Upregulated_Cortex',
     ]
 
-rank_type = 'Adjusted P-value'
+rank_type = 'rank'
+
 pathway_ranks = pd.DataFrame(index=pathways, \
-    columns=['ALL LR', 'DEG + Top LR', 'DEG + Bottom LR', 'DEG', 'sc DEG + Top LR', 'sc DEG + Bottom LR', 'sc DEG'])
+    columns=['ALL LR', 'DEG + Top LR', 'DEG + Bottom LR', 'DEG'])
 pathway_ranks.attrs['rank_type'] = rank_type
 
 
@@ -2784,10 +2653,6 @@ for pathway in pathways:
     pathway_ranks.loc[pathway, 'DEG + Top LR'] = get_pathway_rank(enr_sorted_top_wDeg, pathway, rank_type)
     pathway_ranks.loc[pathway, 'DEG + Bottom LR'] = get_pathway_rank(enr_sorted_bottom_wDeg, pathway, rank_type)
     pathway_ranks.loc[pathway, 'DEG'] = get_pathway_rank(enr_sorted_deg, pathway, rank_type)
-
-    pathway_ranks.loc[pathway, 'sc DEG + Top LR'] = get_pathway_rank(sc_enr_sorted_top_wDeg, pathway, rank_type)
-    pathway_ranks.loc[pathway, 'sc DEG + Bottom LR'] = get_pathway_rank(sc_enr_sorted_bottom_wDeg, pathway, rank_type)
-    pathway_ranks.loc[pathway, 'sc DEG'] = get_pathway_rank(sc_enr_sorted_deg, pathway, rank_type)
 
 #%% plot ranks across methods and pathways
 
