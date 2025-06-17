@@ -36,14 +36,17 @@ from types import SimpleNamespace
 from tqdm import tqdm
 from glob import glob
 from datetime import datetime
+from IPython.display import display
 import pickle
+import anndata
+from venn import venn
 
 from mlflow.tracking import MlflowClient
 import mlflow.pytorch
 from mlflow.models import Model
 
 from eclare.post_hoc_utils import get_latents, sample_proportional_celltypes_and_condition, plot_umap_embeddings, create_celltype_palette
-from eclare.data_utils import get_unified_grns, filter_mean_grn, get_scompreg_loglikelihood
+from eclare.data_utils import filter_mean_grn, get_scompreg_loglikelihood
 
 from ot import solve as ot_solve
 import SEACells
@@ -54,14 +57,14 @@ import networkx as nx
 import gseapy as gp
 import mygene
 from sklearn.model_selection import StratifiedShuffleSplit
-from umap import UMAP
-from torchmetrics.functional import kendall_rank_corrcoef
 from scipy.stats import norm, linregress, gamma
 from scipy.optimize import minimize
 
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.default_inference import DefaultInference
 from pydeseq2.ds import DeseqStats
+from multiprocessing import cpu_count
+from joblib import Parallel, delayed
 
 def cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd'):
 
@@ -917,6 +920,38 @@ def project_mdd_nuclei_into_latent_space(mdd_rna, mdd_atac, rna_sex_key, atac_se
     _, fig, rna_atac_df_umap = plot_umap_embeddings(eclare_rna_latents, eclare_atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=color_map_ct, umap_embedding=None)
     #plot_umap_embeddings(kd_clip_rna_latents, kd_clip_atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=color_map_ct, umap_embedding=None)
 
+def load_model_and_metadata(student_job_id, best_model_idx, target_dataset='MDD'):
+
+    ## replace 'multiome' by '10x'
+    best_model_idx = best_model_idx.replace('multiome', '10x')
+ 
+    paths_root = os.path.join(os.environ['OUTPATH'], student_job_id)
+    student_model_path = os.path.join(paths_root, target_dataset, best_model_idx, 'model_uri.txt')
+
+    ## Load the model and metadata
+    with open(student_model_path, 'r') as f:
+        model_uris = f.read().strip().splitlines()
+        model_uri = model_uris[0]
+
+    ## Set tracking URI to ECLARE_ROOT/mlruns and load model & metadata
+    mlflow.set_tracking_uri(os.path.join(os.environ['ECLARE_ROOT'], 'mlruns'))
+
+    run_id = model_uri.split('/')[1]
+    print(f'run_id: {run_id}')
+
+    model_dir = os.path.join(os.environ['ECLARE_ROOT'], "mlruns", '*', run_id, "artifacts", "trained_model")
+    model_dir = glob(model_dir)[0]
+    print(f'model_dir: {model_dir}')
+
+    model_uri = f"file://{model_dir}"
+    student_model = mlflow.pytorch.load_model(model_uri, map_location=device)
+    student_model_metadata = Model.load(model_dir)
+
+    #student_model = mlflow.pytorch.load_model(model_uri)
+    #student_model_metadata = Model.load(model_uri)
+
+    return student_model, student_model_metadata
+
 ## functions for pyDESeq2 on counts data
 def get_pseudo_replicates_counts(sex, celltype, rna_scaled_with_counts, mdd_rna_var, rna_celltype_key, rna_condition_key, rna_sex_key, pseudo_replicates='Subjects', overlapping_only=False):
 
@@ -972,7 +1007,7 @@ def get_pseudo_replicates_counts(sex, celltype, rna_scaled_with_counts, mdd_rna_
 
     elif pseudo_replicates == 'Subjects':
 
-        subjects_from_sex = rna_scaled_with_counts.obs[rna_scaled_with_counts.obs[rna_sex_key] == sex][rna_subject_key].unique()
+        subjects_from_sex = rna_scaled_with_counts.obs[rna_scaled_with_counts.obs[rna_sex_key].str.lower() == sex.lower()][rna_subject_key].unique()
         if overlapping_only:
             subjects_from_sex = subjects_from_sex[np.isin(subjects_from_sex, [os.split('_')[-1] for os in overlapping_subjects])]
 
@@ -1013,7 +1048,7 @@ def get_pseudo_replicates_counts(sex, celltype, rna_scaled_with_counts, mdd_rna_
 
     return mdd_subjects_counts_adata, counts, metadata
 
-def run_pyDESeq2(counts, metadata, rna_condition_key):
+def run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key):
 
     inference = DefaultInference(n_cpus=8)
     dds = DeseqDataSet(
@@ -2214,38 +2249,6 @@ device = 'cuda' if cuda_available else 'cpu'
 best_eclare_mdd     = str(ECLARE_mdd_metrics_df['multimodal_ilisi'].argmax())
 best_kd_clip_mdd    = KD_CLIP_mdd_metrics_df['source'].iloc[KD_CLIP_mdd_metrics_df['multimodal_ilisi'].argmax()]
 
-def load_model_and_metadata(student_job_id, best_model_idx, target_dataset='MDD'):
-
-    ## replace 'multiome' by '10x'
-    best_model_idx = best_model_idx.replace('multiome', '10x')
- 
-    paths_root = os.path.join(os.environ['OUTPATH'], student_job_id)
-    student_model_path = os.path.join(paths_root, target_dataset, best_model_idx, 'model_uri.txt')
-
-    ## Load the model and metadata
-    with open(student_model_path, 'r') as f:
-        model_uris = f.read().strip().splitlines()
-        model_uri = model_uris[0]
-
-    ## Set tracking URI to ECLARE_ROOT/mlruns and load model & metadata
-    mlflow.set_tracking_uri(os.path.join(os.environ['ECLARE_ROOT'], 'mlruns'))
-
-    run_id = model_uri.split('/')[1]
-    print(f'run_id: {run_id}')
-
-    model_dir = os.path.join(os.environ['ECLARE_ROOT'], "mlruns", '*', run_id, "artifacts", "trained_model")
-    model_dir = glob(model_dir)[0]
-    print(f'model_dir: {model_dir}')
-
-    model_uri = f"file://{model_dir}"
-    student_model = mlflow.pytorch.load_model(model_uri, map_location=device)
-    student_model_metadata = Model.load(model_dir)
-
-    #student_model = mlflow.pytorch.load_model(model_uri)
-    #student_model_metadata = Model.load(model_uri)
-
-    return student_model, student_model_metadata
-
 #eclare_student_model, eclare_student_model_metadata     = load_model_and_metadata(f'eclare_mdd_{methods_id_dict["eclare_mdd"]}', best_eclare_mdd)
 eclare_student_model, eclare_student_model_metadata     = load_model_and_metadata(f'eclare_mdd_{methods_id_dict["eclare_mdd"][0]}', best_eclare_mdd)
 kd_clip_student_model, kd_clip_student_model_metadata   = load_model_and_metadata(f'kd_clip_mdd_{methods_id_dict["kd_clip_mdd"]}', os.path.join(best_kd_clip_mdd, '0'))
@@ -2265,12 +2268,6 @@ args = SimpleNamespace(
     genes_by_peaks_str='17563_by_100000'
 )
 
-'''
-mdd_rna, mdd_atac, mdd_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, _, _ = \
-    mdd_setup(args, return_raw_data=True, return_type='data',\
-    overlapping_subjects_only=False)
-'''
-import anndata
 rna_datapath = atac_datapath = os.path.join(os.environ['DATAPATH'], 'mdd_data')
 
 RNA_file = f"rna_{args.genes_by_peaks_str}.h5ad"
@@ -2344,17 +2341,34 @@ subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condit
 
 #%% differential expression analysis
 
-## shows that unique Batch and Chemistry per Sample
-confound_vars = ["Batch", "Sample", "Chemistry", "percent.mt", "nCount_RNA"]
-display(mdd_rna.obs.groupby('Sample')[confound_vars].nunique())
+def process_celltype(sex, celltype, rna_scaled_with_counts, mdd_rna_var, rna_celltype_key, rna_condition_key, rna_sex_key):
+    # Run pyDESeq2 on subject-level pseudo-replicates
+    mdd_subjects_counts_adata, counts, metadata = get_pseudo_replicates_counts(
+        sex, celltype, rna_scaled_with_counts, mdd_rna_var, 
+        rna_celltype_key, rna_condition_key, rna_sex_key, 
+        pseudo_replicates='Subjects', overlapping_only=False
+    )
+    return run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key)
 
-## define sex and celltype
-sex = 'Female'
-celltype = 'Mic'
+## initialize dicts
+pydeseq2_results_dict = tree()
+significant_genes_dict = tree()
 
-## run pyDESeq2 on subject-level pseudo-replicates
-mdd_subjects_counts_adata, counts, metadata = get_pseudo_replicates_counts(sex, celltype, rna_scaled_with_counts, mdd_rna.var, rna_celltype_key, rna_condition_key, rna_sex_key, pseudo_replicates='Subjects', overlapping_only=False)
-mdd_subjects_counts_adata, results, significant_genes = run_pyDESeq2(counts, metadata, rna_condition_key)
+## loop through sex and celltype
+for sex in unique_sexes:
+    # Use joblib for parallel processing
+    results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
+        delayed(process_celltype)(
+            sex, celltype, rna_scaled_with_counts, mdd_rna.var,
+            rna_celltype_key, rna_condition_key, rna_sex_key
+        )
+        for celltype in unique_celltypes
+    )
+    
+    # Process results
+    for celltype, (mdd_subjects_counts_adata, pydeseq2_results, significant_genes) in zip(unique_celltypes, results):
+        pydeseq2_results_dict[sex][celltype] = pydeseq2_results
+        significant_genes_dict[sex][celltype] = significant_genes
 
 
 #%% get peak-gene correlations
@@ -2587,68 +2601,6 @@ for celltype in unique_celltypes:
         ## assign to dicts
         assign_to_dicts(sex, celltype, condition, X_rna, X_atac, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
 
-        if do_corrs_or_cosines is not None:
-
-            ## transpose
-            X_rna = X_rna.T
-            X_atac = X_atac.T
-
-            if do_corrs_or_cosines == 'correlations':
-                ## concatenate
-                X_rna_atac = torch.cat([X_rna, X_atac], dim=0)
-
-                corr = torch.corrcoef(X_rna_atac) #torch.corrcoef(X_rna_atac.cuda(9) if cuda_available else X_rna_atac)
-                corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
-
-                if corr.isnan().any():
-                    print(f'NaN values in correlation matrix')
-                    corr[corr.isnan()] = 0
-
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
-
-            elif do_corrs_or_cosines == 'spearman':
-
-                X_rna_argsort = torch.argsort(X_rna, dim=1) 
-                X_atac_argsort = torch.argsort(X_atac, dim=1)
-
-                X_rna_atac = torch.cat([X_rna_argsort, X_atac_argsort], dim=0)
-                corr = torch.corrcoef(X_rna_atac.cuda() if cuda_available else X_rna_atac)
-                corr = corr[:X_rna.shape[0], X_rna.shape[0]:]
-
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                n_dict[sex][celltype][condition] = X_rna_atac.shape[1]
-                    
-            elif do_corrs_or_cosines == 'kendall':
-
-                corr = torch.zeros(X_rna.shape[0], X_atac.shape[0])
-                p_values = torch.zeros(X_rna.shape[0], X_atac.shape[0])
-                
-                for g, gene in tqdm(enumerate(mdd_rna_sampled_group.var_names), total=len(mdd_rna_sampled_group.var_names), desc="Computing Kendall correlations"):
-                    x_rna = X_rna[g,:]
-                    X_rna_g = x_rna.repeat(len(X_atac), 1)
-                    corrs_g, p_values_g = kendall_rank_corrcoef(X_rna_g.T.cuda(), X_atac.T.cuda(), variant='b', t_test=True, alternative='less')
-                    corr[g,:] = corrs_g.detach().cpu()
-                    p_values[g,:] = p_values_g.detach().cpu()
-
-                p_values[p_values==0] = 1e-5
-                p_values[p_values==1] = 1-1e-5
-
-                z_scores = norm.ppf(p_values)
-
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = corr.detach().cpu()
-                n_dict[sex][celltype][condition] = X_rna.shape[1]
-
-            elif do_corrs_or_cosines == 'cosines':
-
-                ## normalize gene expression and chromatin accessibility
-                X_rna = torch.nn.functional.normalize(X_rna, p=2, dim=1)
-                X_atac = torch.nn.functional.normalize(X_atac, p=2, dim=1)
-
-                ## correlate gene expression with chromatin accessibility
-                cosine = torch.matmul(X_atac, X_rna.T)
-                genes_by_peaks_corrs_dict[sex][celltype][condition] = cosine
-
 
 '''
 import pickle
@@ -2685,7 +2637,6 @@ brain_gmt_cortical, brain_gmt_cortical_wGO = get_brain_gmt()
 run_magma(lr_filtered, Z, significant_genes)
 
 #%% EnrichR
-from IPython.display import display
 
 ## Perform EnrichR on different gene sets
 pathways = brain_gmt_cortical
@@ -2705,7 +2656,6 @@ enr_sig_pathways_top_wDeg_set = set(enr_sig_pathways_top_wDeg)
 enr_sig_pathways_bottom_wDeg_set = set(enr_sig_pathways_bottom_wDeg)
 enr_sig_pathways_woDeg_set = set(enr_sig_pathways_woDeg)
 
-from venn import venn
 enrs_dict = {
     'All LR': enr_sig_pathways_set,
     'DEG + Top LR': enr_sig_pathways_top_wDeg_set,
