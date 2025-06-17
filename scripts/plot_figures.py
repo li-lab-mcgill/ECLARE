@@ -127,13 +127,15 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
     n_waypoint_eigs = 15 # Number of eigenvalues to consider when initializing metacells
 
     ## Initialize SEACells model
-    model = SEACells.core.SEACells(adata_train, 
-                    build_kernel_on=build_kernel_on, 
-                    n_SEACells=n_SEACells, 
-                    n_waypoint_eigs=n_waypoint_eigs,
-                    convergence_epsilon = 1e-5,
-                    max_franke_wolfe_iters=100,
-                    use_gpu=True if torch.cuda.is_available() else False)
+    model = SEACells.core.SEACells(
+        adata_train, 
+        build_kernel_on=build_kernel_on, 
+        n_SEACells=n_SEACells, 
+        n_waypoint_eigs=n_waypoint_eigs,
+        convergence_epsilon = 1e-5,
+        max_franke_wolfe_iters=100,
+        use_gpu=True if torch.cuda.is_available() else False
+        )
 
     model.construct_kernel_matrix()
     M = model.kernel_matrix
@@ -1069,7 +1071,10 @@ def run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key)
     results['signif_lfc'] = results['log2FoldChange'].abs() > 1.5
     results['signif'] = results['signif_padj'] & results['signif_lfc']
     results['-log10(padj)'] = -np.log10(results['padj'])
+
+    fig, ax = plt.subplots(figsize=(14, 5))
     sns.scatterplot(data=results, x='log2FoldChange', y='-log10(padj)', hue='signif_padj', marker='o', alpha=0.5)
+    fig.show()
 
     ## extract significant genes
     significant_genes = mdd_subjects_counts_adata.var_names[results['signif_padj']]
@@ -2259,7 +2264,7 @@ kd_clip_student_model = kd_clip_student_model.train().to('cpu')
 #%% load data
 
 ## define decimation factor
-decimate_factor = 10
+decimate_factor = 1
 
 ## define args for mdd_setup
 args = SimpleNamespace(
@@ -2354,6 +2359,9 @@ def process_celltype(sex, celltype, rna_scaled_with_counts, mdd_rna_var, rna_cel
 pydeseq2_results_dict = tree()
 significant_genes_dict = tree()
 
+## TEMPORARY - restrict unique celltypes
+unique_celltypes = ['OPC','Mix','End','Mic']
+
 ## loop through sex and celltype
 for sex in unique_sexes:
     # Use joblib for parallel processing
@@ -2381,117 +2389,44 @@ with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as 
 mean_grn_df = all_dicts[-1]
 
 ## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
-cutoff = 5025 # better a multiple of 75 due to formation of SEACells
-do_corrs_or_cosines = ''
-ot_alignment_type = 'all'
+def differential_grn_analysis(
+        condition, sex, celltype,
+        mdd_rna, mdd_atac,
+        rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key,
+        eclare_student_model, mean_grn_df, cutoff=5025, ot_alignment_type='all'
+        ):
 
-for celltype in unique_celltypes:
+    mdd_rna_aligned = []
+    mdd_atac_aligned = []
 
-    for condition in unique_conditions:
+    all_rna_indices = []
+    all_atac_indices = []
 
-        mdd_rna_aligned = []
-        mdd_atac_aligned = []
+    if ot_alignment_type == 'subjects':
 
-        all_rna_indices = []
-        all_atac_indices = []
+        for subject in subjects_by_condition_n_sex_df[condition, sex.lower()]:
 
-        if ot_alignment_type == 'subjects':
-
-            for subject in subjects_by_condition_n_sex_df[condition, sex.lower()]:
-
-                #print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {mdd_atac.n_vars} - DEG genes: {mdd_rna.n_vars}')
-
-                ## select cell indices
-                rna_indices = pd.DataFrame({
-                    'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype),
-                    'is_condition': mdd_rna.obs[rna_condition_key].str.startswith(condition),
-                    'is_sex': mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
-                    'is_subject': mdd_rna.obs[rna_subject_key] == subject # do not use startswith to avoid multiple subjects
-                }).prod(axis=1).astype(bool).values.nonzero()[0]
-
-                atac_indices = pd.DataFrame({
-                    'is_celltype': mdd_atac.obs[atac_celltype_key].str.startswith(celltype),
-                    'is_condition': mdd_atac.obs[atac_condition_key].str.startswith(condition),
-                    'is_sex': mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower()),
-                    'is_subject': mdd_atac.obs[atac_subject_key] == subject # do not use startswith to avoid multiple subjects
-                }).prod(axis=1).astype(bool).values.nonzero()[0]
-
-                all_rna_indices.append(pd.DataFrame(np.vstack([rna_indices, [subject]*len(rna_indices), [celltype]*len(rna_indices), [condition]*len(rna_indices), [sex]*len(rna_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
-                all_atac_indices.append(pd.DataFrame(np.vstack([atac_indices, [subject]*len(atac_indices), [celltype]*len(atac_indices), [condition]*len(atac_indices), [sex]*len(atac_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
-
-                assert len(rna_indices) > 0 and len(atac_indices) > 0, f"No indices found for sex: {sex} - celltype: {celltype} - condition: {condition} - subject: {subject}"
-
-                ## sample indices
-                if len(rna_indices) > cutoff:
-                    sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
-                    _, sampled_indices = next(sss.split(rna_indices, mdd_rna.obs[rna_celltype_key].iloc[rna_indices]))
-                    rna_indices = rna_indices[sampled_indices]
-                if len(atac_indices) > cutoff:
-                    sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
-                    _, sampled_indices = next(sss.split(atac_indices, mdd_atac.obs[atac_celltype_key].iloc[atac_indices]))
-                    atac_indices = atac_indices[sampled_indices]
-
-                ## sample data
-                mdd_rna_sampled_group = mdd_rna[rna_indices]
-                mdd_atac_sampled_group = mdd_atac[atac_indices]
-
-                ## get latents
-                rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_sampled_group, mdd_atac_sampled_group, return_tensor=True)
-                rna_latents = rna_latents.cpu()
-                atac_latents = atac_latents.cpu()
-
-                ## get logits - already normalized during clip loss, but need to normalize before to be consistent with Concerto
-                rna_latents = torch.nn.functional.normalize(rna_latents, p=2, dim=1)
-                atac_latents = torch.nn.functional.normalize(atac_latents, p=2, dim=1)
-                student_logits = torch.matmul(atac_latents, rna_latents.T)
-
-                a, b = torch.ones((len(atac_latents),)) / len(atac_latents), torch.ones((len(rna_latents),)) / len(rna_latents)
-
-                cells_gap = np.abs(len(atac_latents) - len(rna_latents))
-
-                ## if imbalance, use partial wasserstein to find cells to reject and resample accordingly
-                if cells_gap > 0:
-                    print(f'cells_gap: {cells_gap} (atac: {len(atac_latents)} - rna: {len(rna_latents)})')
-                    mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits = \
-                        cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd')
-
-                ## compute optimal transport plan for alignment on remaining cells
-                res = ot_solve(1 - student_logits)
-                plan = res.plan
-                value = res.value_linear
-
-                ## re-order ATAC latents to match plan (can rerun OT analysis to ensure diagonal matching structure)
-                atac_latents = atac_latents[plan.argmax(axis=0)]
-                mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
-
-                ## append to list
-                mdd_rna_aligned.append(mdd_rna_sampled_group)
-                mdd_atac_aligned.append(mdd_atac_sampled_group)
-
-            ## concatenate aligned anndatas
-            mdd_rna_aligned = anndata.concat(mdd_rna_aligned, axis=0)
-            mdd_atac_aligned = anndata.concat(mdd_atac_aligned, axis=0)
-
-            assert np.equal(mdd_rna_aligned.obs[rna_subject_key].values, mdd_atac_aligned.obs[atac_subject_key].values).all()
-            assert (mdd_rna_aligned.obs_names.nunique() == mdd_rna_aligned.n_obs) & (mdd_atac_aligned.obs_names.nunique() == mdd_atac_aligned.n_obs)
-
-
-        elif ot_alignment_type == 'all':
+            #print(f'sex: {sex} - celltype: {celltype} - condition: {condition} - DAR peaks: {mdd_atac.n_vars} - DEG genes: {mdd_rna.n_vars}')
 
             ## select cell indices
             rna_indices = pd.DataFrame({
                 'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype),
                 'is_condition': mdd_rna.obs[rna_condition_key].str.startswith(condition),
                 'is_sex': mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
-                'is_subject': mdd_rna.obs[rna_subject_key].isin(overlapping_subjects)
+                'is_subject': mdd_rna.obs[rna_subject_key] == subject # do not use startswith to avoid multiple subjects
             }).prod(axis=1).astype(bool).values.nonzero()[0]
 
             atac_indices = pd.DataFrame({
                 'is_celltype': mdd_atac.obs[atac_celltype_key].str.startswith(celltype),
                 'is_condition': mdd_atac.obs[atac_condition_key].str.startswith(condition),
                 'is_sex': mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower()),
-                'is_subject': mdd_atac.obs[atac_subject_key].isin(overlapping_subjects)
+                'is_subject': mdd_atac.obs[atac_subject_key] == subject # do not use startswith to avoid multiple subjects
             }).prod(axis=1).astype(bool).values.nonzero()[0]
+
+            all_rna_indices.append(pd.DataFrame(np.vstack([rna_indices, [subject]*len(rna_indices), [celltype]*len(rna_indices), [condition]*len(rna_indices), [sex]*len(rna_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
+            all_atac_indices.append(pd.DataFrame(np.vstack([atac_indices, [subject]*len(atac_indices), [celltype]*len(atac_indices), [condition]*len(atac_indices), [sex]*len(atac_indices)]).T, columns=['index', 'subject', 'celltype', 'condition', 'sex']))
+
+            assert len(rna_indices) > 0 and len(atac_indices) > 0, f"No indices found for sex: {sex} - celltype: {celltype} - condition: {condition} - subject: {subject}"
 
             ## sample indices
             if len(rna_indices) > cutoff:
@@ -2537,70 +2472,155 @@ for celltype in unique_celltypes:
             mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
 
             ## append to list
-            mdd_rna_aligned = mdd_rna_sampled_group
-            mdd_atac_aligned = mdd_atac_sampled_group
+            mdd_rna_aligned.append(mdd_rna_sampled_group)
+            mdd_atac_aligned.append(mdd_atac_sampled_group)
 
-        ## add var to aligned anndatas
-        mdd_rna_aligned.var = mdd_rna.var
-        mdd_atac_aligned.var = mdd_atac.var
+        ## concatenate aligned anndatas
+        mdd_rna_aligned = anndata.concat(mdd_rna_aligned, axis=0)
+        mdd_atac_aligned = anndata.concat(mdd_atac_aligned, axis=0)
 
-        ## plot UMAP of aligned RNA latents and ATAC latents
-        rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_aligned, mdd_atac_aligned, return_tensor=True)
-        umap_embedder, _, _ = plot_umap_embeddings(rna_latents, atac_latents, [celltype]*len(rna_latents), [celltype]*len(atac_latents), [condition]*len(rna_latents), [condition]*len(atac_latents), color_map_ct={celltype: 'black'}, umap_embedding=None)
+        assert np.equal(mdd_rna_aligned.obs[rna_subject_key].values, mdd_atac_aligned.obs[atac_subject_key].values).all()
+        assert (mdd_rna_aligned.obs_names.nunique() == mdd_rna_aligned.n_obs) & (mdd_atac_aligned.obs_names.nunique() == mdd_atac_aligned.n_obs)
 
-        ## get mean GRN from brainSCOPE
-        mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned)
 
-        overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
-        overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
+    elif ot_alignment_type == 'all':
 
-        ## remove excess cells beyond cutoff with stratified sampling - or else SEACells way too slow
-        if len(mdd_rna_sampled_group) > cutoff:
-            print(f'Removing {len(mdd_rna_sampled_group) - cutoff} cells')
+        ## select cell indices
+        rna_indices = pd.DataFrame({
+            'is_celltype': mdd_rna.obs[rna_celltype_key].str.startswith(celltype),
+            'is_condition': mdd_rna.obs[rna_condition_key].str.startswith(condition),
+            'is_sex': mdd_rna.obs[rna_sex_key].str.lower().str.contains(sex.lower()),
+            'is_subject': mdd_rna.obs[rna_subject_key].isin(overlapping_subjects)
+        }).prod(axis=1).astype(bool).values.nonzero()[0]
 
+        atac_indices = pd.DataFrame({
+            'is_celltype': mdd_atac.obs[atac_celltype_key].str.startswith(celltype),
+            'is_condition': mdd_atac.obs[atac_condition_key].str.startswith(condition),
+            'is_sex': mdd_atac.obs[atac_sex_key].str.lower().str.contains(sex.lower()),
+            'is_subject': mdd_atac.obs[atac_subject_key].isin(overlapping_subjects)
+        }).prod(axis=1).astype(bool).values.nonzero()[0]
+
+        ## sample indices
+        if len(rna_indices) > cutoff:
             sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
-            _, sampled_indices = next(sss.split(mdd_rna_sampled_group.obs_names, mdd_rna_sampled_group.obs[rna_subject_key]))
+            _, sampled_indices = next(sss.split(rna_indices, mdd_rna.obs[rna_celltype_key].iloc[rna_indices]))
+            rna_indices = rna_indices[sampled_indices]
+        if len(atac_indices) > cutoff:
+            sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
+            _, sampled_indices = next(sss.split(atac_indices, mdd_atac.obs[atac_celltype_key].iloc[atac_indices]))
+            atac_indices = atac_indices[sampled_indices]
 
-            mdd_rna_sampled_group = mdd_rna_sampled_group[sampled_indices]
-            mdd_atac_sampled_group = mdd_atac_sampled_group[sampled_indices]
+        ## sample data
+        mdd_rna_sampled_group = mdd_rna[rna_indices]
+        mdd_atac_sampled_group = mdd_atac[atac_indices]
 
-        ## save original PCA and UMAP
-        mdd_rna_sampled_group.obsm['X_pca_orig'] = mdd_rna_sampled_group.obsm['X_pca']
-        mdd_rna_sampled_group.obsm['X_umap_orig'] = mdd_rna_sampled_group.obsm['X_umap']
-        mdd_atac_sampled_group.obsm['X_pca_orig'] = mdd_atac_sampled_group.obsm['X_pca']
+        ## get latents
+        rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_sampled_group, mdd_atac_sampled_group, return_tensor=True)
+        rna_latents = rna_latents.cpu()
+        atac_latents = atac_latents.cpu()
 
-        ## PCA and UMAP
-        sc.pp.pca(mdd_rna_sampled_group, n_comps=50)
-        sc.pp.neighbors(mdd_rna_sampled_group, n_neighbors=15)
-        sc.tl.umap(mdd_rna_sampled_group)
+        ## get logits - already normalized during clip loss, but need to normalize before to be consistent with Concerto
+        rna_latents = torch.nn.functional.normalize(rna_latents, p=2, dim=1)
+        atac_latents = torch.nn.functional.normalize(atac_latents, p=2, dim=1)
+        student_logits = torch.matmul(atac_latents, rna_latents.T)
 
-        sc.pp.pca(mdd_atac_sampled_group, n_comps=50)
-        #sc.pp.neighbors(mdd_atac_sampled_group, n_neighbors=15)
-        #sc.tl.umap(mdd_atac_sampled_group)
+        a, b = torch.ones((len(atac_latents),)) / len(atac_latents), torch.ones((len(rna_latents),)) / len(rna_latents)
 
-        ## run SEACells to obtain pseudobulked counts
-        mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = \
-            run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_umap')
+        cells_gap = np.abs(len(atac_latents) - len(rna_latents))
 
-        X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
-        X_atac = torch.from_numpy(mdd_atac_sampled_group_seacells.X.toarray())
+        ## if imbalance, use partial wasserstein to find cells to reject and resample accordingly
+        if cells_gap > 0:
+            print(f'cells_gap: {cells_gap} (atac: {len(atac_latents)} - rna: {len(rna_latents)})')
+            mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits = \
+                cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_group, mdd_rna_sampled_group, cells_gap, type='emd')
 
-        ## detect cells with no gene expression and no chromatin accessibility
-        no_rna_cells = X_rna.sum(1) == 0
-        no_atac_cells = X_atac.sum(1) == 0
-        no_rna_atac_cells = no_rna_cells | no_atac_cells
+        ## compute optimal transport plan for alignment on remaining cells
+        res = ot_solve(1 - student_logits)
+        plan = res.plan
+        value = res.value_linear
 
-        ## remove cells with no expression
-        X_rna = X_rna[~no_rna_atac_cells]
-        X_atac = X_atac[~no_rna_atac_cells]
+        ## re-order ATAC latents to match plan (can rerun OT analysis to ensure diagonal matching structure)
+        print((f'dimensions of plan: {plan.shape}'))
+        atac_latents = atac_latents[plan.argmax(axis=0)]
+        mdd_atac_sampled_group = mdd_atac_sampled_group[plan.argmax(axis=0).numpy()]
 
-        ## get tfrp
-        scompreg_loglikelihoods, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, std_errs, intercept_stderrs = \
-            get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
+        ## append to list
+        mdd_rna_aligned = mdd_rna_sampled_group
+        mdd_atac_aligned = mdd_atac_sampled_group
 
-        ## assign to dicts
-        assign_to_dicts(sex, celltype, condition, X_rna, X_atac, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
+    ## add var to aligned anndatas
+    mdd_rna_aligned.var = mdd_rna.var
+    mdd_atac_aligned.var = mdd_atac.var
 
+    ## plot UMAP of aligned RNA latents and ATAC latents
+    rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_aligned, mdd_atac_aligned, return_tensor=True)
+    umap_embedder, _, _ = plot_umap_embeddings(rna_latents, atac_latents, [celltype]*len(rna_latents), [celltype]*len(atac_latents), [condition]*len(rna_latents), [condition]*len(atac_latents), color_map_ct={celltype: 'black'}, umap_embedding=None)
+
+    ## get mean GRN from brainSCOPE
+    mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned)
+
+    overlapping_target_genes = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_target_gene']].index.values
+    overlapping_tfs = mdd_rna_sampled_group.var[mdd_rna_sampled_group.var['is_tf']].index.values
+
+    ## remove excess cells beyond cutoff with stratified sampling - or else SEACells way too slow
+    if len(mdd_rna_sampled_group) > cutoff:
+        print(f'Removing {len(mdd_rna_sampled_group) - cutoff} cells')
+
+        sss = StratifiedShuffleSplit(n_splits=1, test_size=cutoff, random_state=42)
+        _, sampled_indices = next(sss.split(mdd_rna_sampled_group.obs_names, mdd_rna_sampled_group.obs[rna_subject_key]))
+
+        mdd_rna_sampled_group = mdd_rna_sampled_group[sampled_indices]
+        mdd_atac_sampled_group = mdd_atac_sampled_group[sampled_indices]
+
+    ## save original PCA and UMAP
+    mdd_rna_sampled_group.obsm['X_pca_orig'] = mdd_rna_sampled_group.obsm['X_pca']
+    mdd_rna_sampled_group.obsm['X_umap_orig'] = mdd_rna_sampled_group.obsm['X_UMAP_pca']
+
+    ## PCA and UMAP
+    sc.pp.pca(mdd_rna_sampled_group, n_comps=50)
+    sc.pp.neighbors(mdd_rna_sampled_group, n_neighbors=15)
+    sc.tl.umap(mdd_rna_sampled_group)
+
+    sc.pp.pca(mdd_atac_sampled_group, n_comps=50)
+
+
+    ## run SEACells to obtain pseudobulked counts
+    mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = \
+        run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_umap')
+
+    X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
+    X_atac = torch.from_numpy(mdd_atac_sampled_group_seacells.X.toarray())
+
+    ## detect cells with no gene expression and no chromatin accessibility
+    no_rna_cells = X_rna.sum(1) == 0
+    no_atac_cells = X_atac.sum(1) == 0
+    no_rna_atac_cells = no_rna_cells | no_atac_cells
+
+    ## remove cells with no expression
+    X_rna = X_rna[~no_rna_atac_cells]
+    X_atac = X_atac[~no_rna_atac_cells]
+
+    ## get tfrp
+    scompreg_loglikelihoods, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, std_errs, intercept_stderrs = \
+        get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
+
+    ## assign to dicts
+    return_tuple = (sex, celltype, condition, X_rna, X_atac, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
+    return return_tuple
+
+
+for sex in unique_sexes:
+    for condition in unique_conditions:
+
+        results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
+                delayed(differential_grn_analysis)(
+                    condition, sex, celltype, mdd_rna, mdd_atac, rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key, eclare_student_model, mean_grn_df, cutoff=5025, ot_alignment_type='all'
+                )
+            for celltype in unique_celltypes
+        )
+
+        for celltype, result in zip(unique_celltypes, results):
+            assign_to_dicts(*result)
 
 '''
 import pickle
