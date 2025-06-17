@@ -3,6 +3,15 @@ import pandas as pd
 import numpy as np
 import networkx as nx
 import scglue
+import anndata
+from tqdm import tqdm
+
+from pyjaspar import jaspardb
+import pyranges as pr
+from Bio.motifs.jaspar import calculate_pseudocounts
+
+from src.eclare.data_utils import get_unified_grns
+
 
 # Get mean GRN from brainSCOPE & scglue preprocessing
 
@@ -10,10 +19,10 @@ grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
 mean_grn_df = get_unified_grns(grn_path)
 
 ## get gene annotation and position
-scglue.data.get_gene_annotation(
-    mdd_rna, gtf=os.path.join(os.environ['DATAPATH'], 'gencode.v48.annotation.gtf.gz'),
-    gtf_by="gene_name"
-)
+#scglue.data.get_gene_annotation(
+#    mdd_rna, gtf=os.path.join(os.environ['DATAPATH'], 'gencode.v48.annotation.gtf.gz'),#
+#    gtf_by="gene_name"
+#)
 
 ## get peak position
 split = mean_grn_df['enhancer'].str.split(r"[:-]")
@@ -67,7 +76,7 @@ print(df_dist.head())
 ## merge distance graph with mean_grn_df
 mean_grn_df = mean_grn_df.merge(df_dist, left_on=['TG', 'enhancer'], right_on=['source', 'target'], how='left')
 
-## get JASPAR2018 TFs db
+## get JASPAR TFs db
 jaspar_db_2020 = jaspardb(release='JASPAR2020')
 jaspar_db_2024 = jaspardb(release='JASPAR2024')
 
@@ -117,3 +126,5 @@ assert (motif_score_norm.index.sort_values() == np.arange(len(motif_score_norm))
 
 ## merge motif scores with mean_grn_df
 mean_grn_df = mean_grn_df.merge(motif_score_norm, left_index=True, right_index=True, how='left', suffixes=('', '_motifs'))
+
+mean_grn_df.to_pickle(os.path.join(os.environ['OUTPATH'], 'mean_grn_df.pkl'))

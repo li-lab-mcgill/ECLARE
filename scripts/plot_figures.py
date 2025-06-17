@@ -50,10 +50,8 @@ import SEACells
 import scanpy as sc
 import scglue
 import networkx as nx
-from pyjaspar import jaspardb
-import pyranges as pr
+
 import gseapy as gp
-from Bio.motifs.jaspar import calculate_pseudocounts
 import mygene
 from sklearn.model_selection import StratifiedShuffleSplit
 from umap import UMAP
@@ -2257,6 +2255,10 @@ kd_clip_student_model = kd_clip_student_model.train().to('cpu')
 
 #%% load data
 
+## define decimation factor
+decimate_factor = 10
+
+## define args for mdd_setup
 args = SimpleNamespace(
     source_dataset='MDD',
     target_dataset=None,
@@ -2293,9 +2295,6 @@ atac_subject_key='BrainID'
 rna_sex_key = 'Sex'
 atac_sex_key = 'sex'
 
-## get data after decimation
-decimate_factor = 1
-
 mdd_atac = atac[::decimate_factor].to_memory()
 mdd_rna = rna[::decimate_factor].to_memory()
 
@@ -2311,7 +2310,8 @@ rna_scaled_with_counts.obs[rna_celltype_key] = rna_scaled_with_counts.obs['Broad
 
 rna_counts_X = rna_scaled_with_counts.raw.X.astype(int).toarray()
 rna_counts_obs = rna_scaled_with_counts.obs
-rna_counts_var = rna_full[::decimate_factor].var
+rna_counts_var = rna_full.var
+rna_counts_var['in_mdd'] = rna_counts_var.index.isin(mdd_rna.var_names)
 
 mdd_rna_counts = anndata.AnnData(
     X=rna_counts_X,
