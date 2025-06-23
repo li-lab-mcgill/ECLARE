@@ -712,7 +712,7 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
                 ## compute slope and intercept of linear regression - tg_expression is sparse (so is tfrp)
                 linregress_res = linregress(tg_expression, tfrp) # if unpack directly, returns only 5 of the 6 outputs..
             except:
-                print(f'{gene} has no variance in tg_expression')
+                #print(f'{gene} has no variance in tg_expression')
                 tfrp_predictions = np.ones_like(tg_expression) * np.nan
                 log_gaussian_likelihood = np.array([np.nan])
                 slope = np.nan

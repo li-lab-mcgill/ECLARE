@@ -1119,6 +1119,8 @@ def initialize_dicts():
 
     return X_rna_dict, X_atac_dict, overlapping_target_genes_dict, overlapping_tfs_dict, genes_by_peaks_corrs_dict, genes_by_peaks_masks_dict, n_dict, scompreg_loglikelihoods_dict, std_errs_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, tfrps_dict, tfrp_predictions_dict
 def assign_to_dicts(sex, celltype, condition, X_rna, X_atac, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs):
+    global X_rna_dict, X_atac_dict, overlapping_target_genes_dict, overlapping_tfs_dict, scompreg_loglikelihoods_dict, std_errs_dict, tg_expressions_dict, tfrps_dict, tfrp_predictions_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict
+    
     X_rna_dict[sex][celltype][condition if condition != '' else 'all'] = X_rna
     X_atac_dict[sex][celltype][condition if condition != '' else 'all'] = X_atac
     overlapping_target_genes_dict[sex][celltype][condition if condition != '' else 'all'] = overlapping_target_genes
@@ -1224,7 +1226,7 @@ def compute_scompreg_loglikelihoods(sex, celltype, scompreg_loglikelihoods_dict,
             slope, intercept, r_value, p_value, std_err = linregress(tg_expression, tfrp)
             tfrp_predictions = slope * tg_expression + intercept
         except:
-            print(f'{gene} has no variance in tg_expression')
+            #print(f'{gene} has no variance in tg_expression')
             tfrp_predictions = np.ones_like(tg_expression) * np.nan
             log_gaussian_likelihood = np.array([np.nan])
         else:
@@ -1370,49 +1372,56 @@ def filter_LR_stats(LR, Z, LR_up, LR_down):
 
     return lr_filtered, Z_filtered, lr_up_filtered, lr_down_filtered, lr_fitted_cdf
 
-def get_deg_gene_sets(LR, lr_fitted_cdf, significant_genes):
+def get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes):
     
-    sc_deg_df = pd.DataFrame(significant_genes, columns=['names'], index=significant_genes)
+    deg_df = pd.DataFrame(significant_genes, columns=['names'], index=significant_genes)
 
     ## LR values for DEG genes (not all DEG genes are in LR)
-    sc_LR_deg = LR.loc[LR.index.isin(sc_deg_df['names'])]
-    sc_deg_not_in_lr = sc_deg_df[~sc_deg_df['names'].isin(LR.index)]['names'].drop_duplicates().to_list()
-    sc_deg_not_in_lr_series = pd.Series(np.nan, index=sc_deg_not_in_lr)
-    sc_LR_deg = pd.concat([sc_LR_deg, sc_deg_not_in_lr_series])
+    LR_deg = LR.loc[LR.index.isin(deg_df['names'])]
+    deg_not_in_lr = deg_df[~deg_df['names'].isin(LR.index)]['names'].drop_duplicates().to_list()
+    deg_not_in_lr_series = pd.Series(np.nan, index=deg_not_in_lr)
+    LR_deg = pd.concat([LR_deg, deg_not_in_lr_series])
 
     ## DEG genes with top filtered LR genes
     #where_filtered_idxs = np.sort(np.flip(lr_fitted_cdf.argsort())[:len(lr_filtered)]); top_lr_filtered = LR[where_filtered_idxs]; assert top_lr_filtered.equals(lr_filtered)
-    sc_n_lr_deg = len(lr_filtered) + sc_deg_df['names'].nunique()
-    sc_n_lr_minus_deg = len(lr_filtered) - sc_deg_df['names'].nunique(); assert sc_n_lr_minus_deg > 0, 'list of DEG genes is longer than list of filtered LR genes'
+    try:
+        n_lr_deg = len(lr_filtered) + deg_df['names'].nunique()
+        n_lr_minus_deg = len(lr_filtered) - deg_df['names'].nunique(); assert n_lr_minus_deg > 0, 'list of DEG genes is longer than list of filtered LR genes'
 
-    where_filtered_with_excess = np.flip(lr_fitted_cdf.argsort())[:sc_n_lr_deg]
-    where_filtered_with_excess_top = where_filtered_with_excess[:sc_n_lr_minus_deg]
-    where_filtered_with_excess_bottom = where_filtered_with_excess[-sc_n_lr_minus_deg:]
+        where_filtered_with_excess = np.flip(lr_fitted_cdf.argsort())[:n_lr_deg]
+        where_filtered_with_excess_top = where_filtered_with_excess[:n_lr_minus_deg]
+        where_filtered_with_excess_bottom = where_filtered_with_excess[-n_lr_minus_deg:]
 
-    sc_top_lr_filtered = LR[where_filtered_with_excess_top]
-    sc_bottom_lr_filtered = LR[where_filtered_with_excess_bottom]
+        top_lr_filtered = LR[where_filtered_with_excess_top]
+        bottom_lr_filtered = LR[where_filtered_with_excess_bottom]
 
-    sc_top_lr_filtered_wDeg = pd.concat([sc_top_lr_filtered, sc_LR_deg])
-    sc_bottom_lr_filtered_wDeg = pd.concat([sc_bottom_lr_filtered, sc_LR_deg])
+        top_lr_filtered_wDeg = pd.concat([top_lr_filtered, LR_deg])
+        bottom_lr_filtered_wDeg = pd.concat([bottom_lr_filtered, LR_deg])
 
-    sc_n_genes = np.unique([len(lr_filtered), len(sc_top_lr_filtered_wDeg), len(sc_bottom_lr_filtered_wDeg)]); assert len(sc_n_genes) == 1, 'number of genes in each list must be the same'
-    sc_n_genes = sc_n_genes[0]
+        n_genes = np.unique([len(lr_filtered), len(top_lr_filtered_wDeg), len(bottom_lr_filtered_wDeg)]); assert len(n_genes) == 1, 'number of genes in each list must be the same'
+        n_genes = n_genes[0]
+    except:
+        print('Skipping DEG + LR gene set')
+        top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     ## filtered LR values ex-DEG (replace with other non-DEG genes)
-    sc_lr_filtered_is_deg = lr_filtered.index.isin(sc_deg_df['names'])
+    lr_filtered_is_deg = lr_filtered.index.isin(deg_df['names'])
 
-    if sc_lr_filtered_is_deg.any():
-        sc_lr_filtered_woDeg_short = lr_filtered[~sc_lr_filtered_is_deg]
-        sc_deg_woLR = lr_filtered[sc_lr_filtered_is_deg]
-        print(f'{sc_lr_filtered_is_deg.sum()} DEG genes removed from LR')
+    if lr_filtered_is_deg.any() and (n_lr_minus_deg > 0):
 
-        replace_degs_with_non_degs = where_filtered_with_excess[ len(lr_filtered) : (len(lr_filtered) + sc_lr_filtered_is_deg.sum()) ]
-        sc_lr_filtered_woDeg = pd.concat([sc_lr_filtered_woDeg_short, LR[replace_degs_with_non_degs]])
+        lr_filtered_woDeg_short = lr_filtered[~lr_filtered_is_deg]
+        deg_woLR = lr_filtered[lr_filtered_is_deg]
+        print(f'{lr_filtered_is_deg.sum()} DEG genes removed from LR')
+
+        replace_degs_with_non_degs = where_filtered_with_excess[ len(lr_filtered) : (len(lr_filtered) + lr_filtered_is_deg.sum()) ]
+        lr_filtered_woDeg = pd.concat([lr_filtered_woDeg_short, LR[replace_degs_with_non_degs]])
 
     else:
-        print('No scanpy DEG genes in LR')
+        print('No DEG genes in LR')
+        lr_filtered_woDeg = pd.DataFrame()
 
-    return sc_top_lr_filtered_wDeg, sc_bottom_lr_filtered_wDeg, sc_lr_filtered_woDeg
+    return top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg
+
 
 def merge_grn_lr_filtered(mean_grn_df, lr_filtered):
 
@@ -1522,10 +1531,12 @@ def run_magma(lr_filtered, Z, significant_genes):
 
     gene_sets = {
         'sc-compReg': lr_filtered.index.to_list(),
-        'pyDESeq2': significant_genes.to_list(),
         'magma-control': genes_magma_control,
         'sc-compReg-top': lr_filtered_top.index.to_list(),
         'Z_IGNORE': Z.index.to_list()}
+    
+    if not significant_genes.empty:
+        gene_sets['pyDESeq2'] = significant_genes.to_list()
 
     ## get entrez IDs or Ensembl IDs for significant genes
     set_file_dict = {}
@@ -1654,7 +1665,17 @@ def run_magma(lr_filtered, Z, significant_genes):
         for line in f:
             print(line)
 
-    return
+    ## check number of lines in outfile to establish skiprows - depends on whether first line is # TOTAL_GENES or # MEAN_SAMPLE_SIZE
+    with open(outfile, 'r') as f:
+        n_lines = sum(1 for _ in f)
+    skiprows = n_lines - (3 + 1)
+
+    ## read in MAGMA results
+    magma_results_path = magma_out_path + '.gsa.out'
+    magma_results = pd.read_csv(magma_results_path, sep=r'\s+', skiprows=skiprows)
+    magma_results_series = magma_results.set_index('VARIABLE').iloc[:,-1]
+
+    return magma_results_series, magma_results
 
 def run_gseapy(rank, brain_gmt_cortical):
 
@@ -1738,7 +1759,7 @@ def get_pathway_ranks(enr, enr_deg, enr_top_wDeg, enr_bottom_wDeg, rank_type='Ad
 
 def plot_pathway_ranks(pathway_ranks, stem=True):
 
-    # ─── 3. Sort pathways by “ALL LR” (optional) ───
+    # ─── 3. Sort pathways by "ALL LR" (optional) ───
     order = pathway_ranks["ALL LR"].sort_values().index.tolist()
 
     pathway_ranks = pathway_ranks.loc[order]
@@ -1798,10 +1819,10 @@ def plot_pathway_ranks(pathway_ranks, stem=True):
                         color=stem_color,
                         linewidth=0.6,
                         alpha=0.7,
-                        zorder=0  # put stems “underneath” the markers
+                        zorder=0  # put stems "underneath" the markers
                     )
 
-            # 3) Re‐enforce the original x‐limits so the stems don’t stretch the view
+            # 3) Re‐enforce the original x‐limits so the stems don't stretch the view
             subax.set_xlim(x_min, x_max)
 
     # ─── 5. Add horizontal dividing lines ───
@@ -1817,7 +1838,7 @@ def plot_pathway_ranks(pathway_ranks, stem=True):
     ax[1].set_xlabel(f"{pathway_ranks.attrs['rank_type']} (log scale)")
     ax[0].set_title("Per‐Pathway Ranks Across Methods")
 
-    # Place legend outside so it doesn’t overlap
+    # Place legend outside so it doesn't overlap
     #ax[0].legend(bbox_to_anchor=(1.02, 1), borderaxespad=0)
 
     plt.tight_layout()
@@ -1836,7 +1857,7 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
     gp.dotplot(enr.res2d,
             column='Adjusted P-value',
             figsize=(3,7),
-            title='',
+            title=f'{lr_filtered_type.attrs["sex"]} - {lr_filtered_type.attrs["celltype"]} ({lr_filtered_type.attrs["type"]})',
             cmap=plt.cm.viridis,
             size=12, # adjust dot size
             cutoff=max_pval,
@@ -1844,9 +1865,12 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
             show_ring=False)
     plt.show()
 
-    enr_sig_pathways = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]['Term'].to_list()
+    enr_sig_pathways_df = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]
+    enr_sig_pathways_padj = enr_sig_pathways_df['Adjusted P-value'].to_list()
+    enr_sig_pathways = enr_sig_pathways_df['Term'].to_list()
+    enr_sig_pathways_set = set(enr_sig_pathways) if enr_sig_pathways is not None else set()
 
-    return enr, enr_sig_pathways
+    return enr, enr_sig_pathways_set, enr_sig_pathways_padj
 
 cuda_available = torch.cuda.is_available()
 
@@ -2360,8 +2384,8 @@ pydeseq2_results_dict = tree()
 significant_genes_dict = tree()
 
 ## TEMPORARY - restrict unique celltypes
-unique_celltypes = ['OPC','Mix','End','Mic']
-
+unique_celltypes = ['Ast', 'End', 'InN', 'Mic', 'OPC', 'Oli']
+     
 ## loop through sex and celltype
 for sex in unique_sexes:
     # Use joblib for parallel processing
@@ -2608,7 +2632,6 @@ def differential_grn_analysis(
     return_tuple = (sex, celltype, condition, X_rna, X_atac, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
     return return_tuple
 
-
 for sex in unique_sexes:
     for condition in unique_conditions:
 
@@ -2634,59 +2657,119 @@ with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'wb') as 
     pickle.dump(all_dicts, f)
 '''
 
-#%% get MDD-association gene scores
-LR, Z, LR_up, LR_down, Z_up, Z_down = compute_scompreg_loglikelihoods(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict)
-
-## filter LR values with fitted null distribution (sc-compReg)
-lr_filtered, Z_filtered, lr_up_filtered, lr_down_filtered, lr_fitted_cdf = filter_LR_stats(LR, Z, LR_up, LR_down)
-
-## Get gene sets that include DEG genes from pyDESeq2 analysis
-top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = get_deg_gene_sets(LR, lr_fitted_cdf, significant_genes)
-
-## Merge lr_filtered into mean_grn_df
-mean_grn_df_filtered = merge_grn_lr_filtered(mean_grn_df, lr_filtered)
 
 #!pyGenomeTracks --tracks tracks.ini --region chr2:157304654-157336585 -o tracks.png
 
-#%% Gene set enrichment analyses
+/#%% Gene set enrichment analyses
 
 ## Get BrainGMT and filter for cortical genes
 brain_gmt_cortical, brain_gmt_cortical_wGO = get_brain_gmt()
 
-## MAGMA
-run_magma(lr_filtered, Z, significant_genes)
 
 #%% EnrichR
 
-## Perform EnrichR on different gene sets
-pathways = brain_gmt_cortical
-deg_df = pd.DataFrame(index=significant_genes)
+def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna_var_names, significant_genes):
 
-enr, enr_sig_pathways = do_enrichr(lr_filtered, pathways)
-enr_deg, enr_sig_pathways_deg = do_enrichr(deg_df, pathways)
-enr_woDeg, enr_sig_pathways_woDeg = do_enrichr(lr_filtered_woDeg, pathways)
+    ## Perform EnrichR on different gene sets
+    pathways = brain_gmt_cortical
+    deg_df = pd.DataFrame(index=significant_genes)
 
-enr_top_wDeg, enr_sig_pathways_top_wDeg = do_enrichr(top_lr_filtered_wDeg, pathways)
-enr_bottom_wDeg, enr_sig_pathways_bottom_wDeg = do_enrichr(bottom_lr_filtered_wDeg, pathways)
+    results_match_length = pydeseq2_results_dict[sex][celltype].sort_values('padj')[:len(lr_filtered)]
+    deg_match_length_df = pd.DataFrame(index=mdd_rna_var_names[results_match_length.index.astype(int)])
 
-# Create sets of significant pathways for each case
-enr_sig_pathways_set = set(enr_sig_pathways)
-enr_sig_pathways_deg_set = set(enr_sig_pathways_deg)
-enr_sig_pathways_top_wDeg_set = set(enr_sig_pathways_top_wDeg)
-enr_sig_pathways_bottom_wDeg_set = set(enr_sig_pathways_bottom_wDeg)
-enr_sig_pathways_woDeg_set = set(enr_sig_pathways_woDeg)
+    lr_filtered.attrs.update({'sex': sex, 'celltype': celltype, 'type': 'lr_filtered'})
+    lr_filtered_woDeg.attrs.update({'sex': sex, 'celltype': celltype, 'type': 'lr_filtered_woDeg'})
+    top_lr_filtered_wDeg.attrs.update({'sex': sex, 'celltype': celltype, 'type': 'top_lr_filtered_wDeg'})
+    bottom_lr_filtered_wDeg.attrs.update({'sex': sex, 'celltype': celltype, 'type': 'bottom_lr_filtered_wDeg'})
+    deg_df.attrs.update({'sex': sex, 'celltype': celltype, 'type': 'deg_df'})
+    deg_match_length_df.attrs.update({'sex': sex, 'celltype': celltype, 'type': 'deg_match_length_df'})
 
-enrs_dict = {
-    'All LR': enr_sig_pathways_set,
-    'DEG + Top LR': enr_sig_pathways_top_wDeg_set,
-    'DEG + Bottom LR': enr_sig_pathways_bottom_wDeg_set,
-}
-if len(enr_sig_pathways_deg_set) > 0:
-    enrs_dict.update({'DEG': enr_sig_pathways_deg_set})
-else:
-    print('No gene set enrichment for DEG genes')
+    enr, enr_sig_pathways_set, enr_sig_pathways_padj = do_enrichr(lr_filtered, pathways)
+    enr_deg_match_length, enr_sig_pathways_deg_match_length_set, enr_sig_pathways_deg_match_length_padj = do_enrichr(deg_match_length_df, pathways)
+    enr_deg, enr_sig_pathways_deg_set, enr_sig_pathways_deg_padj = do_enrichr(deg_df, pathways) if deg_df.empty is False else (None, None, None)
 
-venn(enrs_dict)
+    enr_woDeg, enr_sig_pathways_woDeg_set, enr_sig_pathways_woDeg_padj = do_enrichr(lr_filtered_woDeg, pathways) if lr_filtered_woDeg.empty is False else (None, None, None)
+    enr_top_wDeg, enr_sig_pathways_top_wDeg_set, enr_sig_pathways_top_wDeg_padj = do_enrichr(top_lr_filtered_wDeg, pathways) if top_lr_filtered_wDeg.empty is False else (None, None, None)
+    enr_bottom_wDeg, enr_sig_pathways_bottom_wDeg_set, enr_sig_pathways_bottom_wDeg_padj = do_enrichr(bottom_lr_filtered_wDeg, pathways) if bottom_lr_filtered_wDeg.empty is False else (None, None, None)
+
+
+    enrs_dict = {
+        'All LR': enr_sig_pathways_set,
+        'DEG (matched length)': enr_sig_pathways_deg_match_length_set,
+    }
+    if enr_sig_pathways_deg_set is not None:
+        enrs_dict.update({'DEG': enr_sig_pathways_deg_set})
+    else:
+        print('No gene set enrichment for DEG genes')
+
+    venn(enrs_dict)
+
+    p_dict = {
+        'All LR': enr_sig_pathways_padj,
+        'DEG (matched length)': enr_sig_pathways_deg_match_length_padj,
+    }
+    if enr_sig_pathways_deg_set is not None:
+        p_dict.update({'DEG': enr_sig_pathways_deg_padj})
+    else:
+        print('No gene set enrichment for DEG genes')
+
+    # Merge enrs_dict and p_dict into one dictionary with structure: lr_filtered_type -> pathway_name -> p_adjusted
+    merged_dict = {}
+    for key in enrs_dict.keys():
+        merged_dict[key] = {}
+        if enrs_dict[key] is not None and p_dict[key] is not None:
+            for pathway, p_value in zip(enrs_dict[key], p_dict[key]):
+                merged_dict[key][pathway] = p_value
+
+    return merged_dict
+
+def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna_var_names):
+
+        ## get MDD-association gene scores
+        LR, Z, LR_up, LR_down, Z_up, Z_down = compute_scompreg_loglikelihoods(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict)
+
+        ## filter LR values with fitted null distribution (sc-compReg)
+        lr_filtered, Z_filtered, lr_up_filtered, lr_down_filtered, lr_fitted_cdf = filter_LR_stats(LR, Z, LR_up, LR_down)
+
+        ## Merge lr_filtered into mean_grn_df
+        mean_grn_df_filtered = merge_grn_lr_filtered(mean_grn_df, lr_filtered)
+
+        ## Get gene sets that include DEG genes from pyDESeq2 analysis
+        top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes_dict[sex][celltype])
+
+        ## run MAGMA
+        magma_results_series, magma_results = run_magma(lr_filtered, Z, significant_genes_dict[sex][celltype])
+
+        ## run EnrichR
+        merged_dict = perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna.var_names, significant_genes_dict[sex][celltype])
+
+        return merged_dict, magma_results_series
+
+enrs_dict = tree()
+magma_results_dict = tree()
+
+for sex in unique_sexes:
+    for celltype in unique_celltypes:
+        print(f'\n --- {sex} - {celltype} --- \n')
+
+        results = perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna.var_names)
+
+        enrs_dict[sex][celltype] = results[0]
+        magma_results_dict[sex][celltype] = results[1]
+
+
+#%%
+    results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
+        delayed(perform_gene_set_enrichment)(
+            sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna.var_names
+        )
+        for celltype in unique_celltypes
+    )
+
+    for celltype, result in zip(unique_celltypes, results):
+        enrs_dict[sex][celltype] = result[0]
+        magma_results_dict[sex][celltype] = result[1]
+
 
 
 #%% check ranks of pre-defined pathways
@@ -3091,7 +3174,7 @@ nodes = []
 edges = []
 for elem in elements:
     d = elem.get("data", {})
-    # If “data” has both “source” and “target”, it’s an edge; otherwise it’s a node.
+    # If "data" has both "source" and "target", it's an edge; otherwise it's a node.
     if "source" in d and "target" in d:
         edges.append(elem)
     else:
