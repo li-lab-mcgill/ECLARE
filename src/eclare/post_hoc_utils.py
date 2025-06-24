@@ -33,10 +33,10 @@ import mygene
 from venn import venn
 from datetime import datetime
 
-
 from eclare import load_CLIP_model
 from eclare import return_setup_func_from_dataset
 from eclare import mdd_setup
+from eclare.data_utils import get_scompreg_loglikelihood, filter_mean_grn
 
 
 def get_model_and_data(model_path, load_mdd=False):
@@ -1692,6 +1692,7 @@ def run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key)
 ## functions for dicts
 def tree(): return defaultdict(tree)
 def initialize_dicts():
+    global X_rna_dict, X_atac_dict, overlapping_target_genes_dict, overlapping_tfs_dict, scompreg_loglikelihoods_dict, std_errs_dict, tg_expressions_dict, tfrps_dict, tfrp_predictions_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict
 
     X_rna_dict = tree()
     X_atac_dict = tree()
@@ -1714,7 +1715,6 @@ def initialize_dicts():
 
     return X_rna_dict, X_atac_dict, overlapping_target_genes_dict, overlapping_tfs_dict, genes_by_peaks_corrs_dict, genes_by_peaks_masks_dict, n_dict, scompreg_loglikelihoods_dict, std_errs_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, tfrps_dict, tfrp_predictions_dict
 def assign_to_dicts(sex, celltype, condition, X_rna, X_atac, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs):
-    global X_rna_dict, X_atac_dict, overlapping_target_genes_dict, overlapping_tfs_dict, scompreg_loglikelihoods_dict, std_errs_dict, tg_expressions_dict, tfrps_dict, tfrp_predictions_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict
     
     X_rna_dict[sex][celltype][condition if condition != '' else 'all'] = X_rna
     X_atac_dict[sex][celltype][condition if condition != '' else 'all'] = X_atac
@@ -1754,7 +1754,9 @@ def check_overlap_of_degs_and_dars(significant_genes):
     display(deg_overlap_grouped_df.sort_values(by='Case', ascending=False).T)
 
 ## sc-compReg functions
-def compute_scompreg_loglikelihoods(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, Z_type='hawkins-wixley'):
+def compute_scompreg_loglikelihoods(sex, celltype, 
+    scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict,
+    Z_type='hawkins-wixley'):
     
     ## pre-computed log likelihoods
     scompreg_loglikelihoods_case_precomputed = scompreg_loglikelihoods_dict[sex][celltype]['Case']
@@ -2018,7 +2020,7 @@ def get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes):
     return top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg
 
 
-def merge_grn_lr_filtered(mean_grn_df, lr_filtered):
+def merge_grn_lr_filtered(mean_grn_df, lr_filtered, output_dir):
 
     mean_grn_df_filtered = mean_grn_df.merge(lr_filtered, left_on='TG', right_index=True, how='right')
     mean_grn_df_filtered['lrCorr'] = mean_grn_df_filtered[['Correlation','LR']].product(axis=1, skipna=True).abs()
@@ -2041,12 +2043,12 @@ def merge_grn_lr_filtered(mean_grn_df, lr_filtered):
     #genes = genes[genes['name'].isin(mean_grn_df_filtered['TG'])]
     tss = genes.strand_specific_start_site()
 
-    peaks.write_bed(os.path.join(os.environ['OUTPATH'], 'peaks.bed'))
+    peaks.write_bed(os.path.join(output_dir, 'peaks.bed'))
     scglue.genomics.write_links(
         mean_grn_filtered_graph,
         tss,
         peaks,
-        os.path.join(os.environ['OUTPATH'], 'gene2peak_lrCorr.links'),
+        os.path.join(output_dir, 'gene2peak_lrCorr.links'),
         keep_attrs=["lrCorr"]
         )
 
@@ -2105,14 +2107,14 @@ def get_brain_gmt():
 
     return brain_gmt_cortical, brain_gmt_cortical_wGO
 
-def run_magma(lr_filtered, Z, significant_genes):
+def run_magma(lr_filtered, Z, significant_genes, output_dir):
     
     mg = mygene.MyGeneInfo()
 
     ## paths for MAGMA
     MAGMAPATH = glob(os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10*'))[0]
     magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job604461', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
-    magma_out_path = os.path.join(os.environ['OUTPATH'], 'sc-compReg_significant_genes')
+    magma_out_path = os.path.join(output_dir, 'sc-compReg_significant_genes')
 
     ## read "genes.raw" file and see if IDs start with "ENSG" or is integer
     genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
@@ -2121,13 +2123,12 @@ def run_magma(lr_filtered, Z, significant_genes):
     genes_out_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job604461', 'magma.genes.out'), sep='\t')
     genes_magma_control = genes_out_df.loc[genes_out_df['ZSTAT'].argsort()][-len(significant_genes):]['GENE'].to_list()
 
-    lr_filtered_top = lr_filtered[lr_filtered.argsort().values][-len(significant_genes):]
-    lr_filtered_union = pd.concat([lr_filtered, pd.Series(significant_genes, index=significant_genes)]).drop_duplicates()
+    #lr_filtered_top = lr_filtered[lr_filtered.argsort().values][-len(significant_genes):]
+    #lr_filtered_union = pd.concat([lr_filtered, pd.Series(significant_genes, index=significant_genes)]).drop_duplicates()
 
     gene_sets = {
         'sc-compReg': lr_filtered.index.to_list(),
         'magma-control': genes_magma_control,
-        'sc-compReg-top': lr_filtered_top.index.to_list(),
         'Z_IGNORE': Z.index.to_list()}
     
     if not significant_genes.empty:
@@ -2181,7 +2182,7 @@ def run_magma(lr_filtered, Z, significant_genes):
                 set_file_dict[gene_set_name] = significant_genes_entrez_ids
 
     ## write gene set file
-    magma_set_file_path = os.path.join(os.environ['OUTPATH'], 'significant_gene_sets.gmt')
+    magma_set_file_path = os.path.join(os.path.dirname(output_dir), 'significant_gene_sets.gmt')
 
     with open(magma_set_file_path, 'w') as f:
         for gene_set_name, gene_set in set_file_dict.items():
@@ -2198,26 +2199,11 @@ def run_magma(lr_filtered, Z, significant_genes):
     Z_ensembl = pd.merge(Z, Z_IGNORE_ensembl, left_index=True, right_index=True, how='right')
     Z_ensembl = Z_ensembl.set_index('ensembl', drop=True)
 
-    magma_genecovar_path = os.path.join(os.environ['OUTPATH'], 'Z.covariates.txt')
+    magma_genecovar_path = os.path.join(output_dir, 'Z.covariates.txt')
     Z_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
 
-    '''
-    sc_compReg_ensembl = sig_ensembl_ids_all_dict['sc-compReg']
-    sc_compReg_ensembl.name = 'ensembl'
-
-    Z_filtered.name = 'ZSTAT'
-    Z_filtered.index.name = 'gene'
-
-    Z_filtered_ensembl = pd.merge(Z_filtered, sc_compReg_ensembl, left_index=True, right_index=True, how='right')
-    Z_filtered_ensembl = Z_filtered_ensembl.set_index('ensembl', drop=True)
-
-    magma_genecovar_path = os.path.join(os.environ['OUTPATH'], 'Z_filtered.covariates.txt')
-    Z_filtered_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
-    '''
-
-
     ## write list file for interaction analysis
-    magma_list_file_path = os.path.join(os.environ['OUTPATH'], 'significant_genes.list')
+    magma_list_file_path = os.path.join(output_dir, 'significant_genes.list')
     list_file_dict = {'condition-interaction': ['sc-compReg', 'ZSTAT']}
     pd.DataFrame.from_dict(list_file_dict, orient='index').to_csv(magma_list_file_path, sep='\t', header=False, index=False)
 
@@ -2471,7 +2457,7 @@ def differential_grn_analysis(
         condition, sex, celltype,
         mdd_rna, mdd_atac,
         rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key,
-        eclare_student_model, mean_grn_df, cutoff=5025, ot_alignment_type='all'
+        eclare_student_model, mean_grn_df, overlapping_subjects, subjects_by_condition_n_sex_df, cutoff=5025, ot_alignment_type='all'
         ):
 
     mdd_rna_aligned = []
@@ -2686,10 +2672,9 @@ def differential_grn_analysis(
     return_tuple = (sex, celltype, condition, X_rna, X_atac, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
     return return_tuple
 
-def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna_var_names, significant_genes):
+def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna_var_names, significant_genes, pathways):
 
     ## Perform EnrichR on different gene sets
-    pathways = brain_gmt_cortical
     deg_df = pd.DataFrame(index=significant_genes)
 
     results_match_length = pydeseq2_results_dict[sex][celltype].sort_values('padj')[:len(lr_filtered)]
@@ -2742,25 +2727,29 @@ def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, to
 
     return merged_dict
 
-def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna_var_names):
+def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna_var_names, pydeseq2_results_dict, pathways, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, output_dir):
 
         ## get MDD-association gene scores
-        LR, Z, LR_up, LR_down, Z_up, Z_down = compute_scompreg_loglikelihoods(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict)
+        LR, Z, LR_up, LR_down, Z_up, Z_down = compute_scompreg_loglikelihoods(sex, celltype,\
+            scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict,\
+            slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict)
 
         ## filter LR values with fitted null distribution (sc-compReg)
         lr_filtered, Z_filtered, lr_up_filtered, lr_down_filtered, lr_fitted_cdf = filter_LR_stats(LR, Z, LR_up, LR_down)
 
         ## Merge lr_filtered into mean_grn_df
-        mean_grn_df_filtered = merge_grn_lr_filtered(mean_grn_df, lr_filtered)
+        mean_grn_df_filtered = merge_grn_lr_filtered(mean_grn_df, lr_filtered, output_dir)
 
         ## Get gene sets that include DEG genes from pyDESeq2 analysis
         top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes_dict[sex][celltype])
 
         ## run MAGMA
-        magma_results_series, magma_results = run_magma(lr_filtered, Z, significant_genes_dict[sex][celltype])
+        magma_dir = os.path.join(output_dir, f'magma_{sex}_{celltype}')
+        os.makedirs(magma_dir, exist_ok=True) 
+        magma_results_series, magma_results = run_magma(lr_filtered, Z, significant_genes_dict[sex][celltype], magma_dir)
 
         ## run EnrichR
-        merged_dict = perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna.var_names, significant_genes_dict[sex][celltype])
+        merged_dict = perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna_var_names, significant_genes_dict[sex][celltype], pathways)
 
         return merged_dict, magma_results_series
 
@@ -2833,7 +2822,7 @@ def download_mlflow_runs(experiment_name):
     
     return output_path
 
-def process_celltype(sex, celltype, rna_scaled_with_counts, mdd_rna_var, rna_celltype_key, rna_condition_key, rna_sex_key):
+def process_celltype(sex, celltype, rna_scaled_with_counts, mdd_rna_var, rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key):
     # Run pyDESeq2 on subject-level pseudo-replicates
     mdd_subjects_counts_adata, counts, metadata = get_pseudo_replicates_counts(
         sex, celltype, rna_scaled_with_counts, mdd_rna_var, 
@@ -2841,3 +2830,20 @@ def process_celltype(sex, celltype, rna_scaled_with_counts, mdd_rna_var, rna_cel
         pseudo_replicates='Subjects', overlapping_only=False
     )
     return run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key)
+
+def magma_dicts_to_df(magma_results_dict):
+    sex_dfs = {
+        sex: pd.concat(cell_dict, axis=1).T
+        for sex, cell_dict in magma_results_dict.items()
+    }
+    df = pd.concat(sex_dfs, names=['sex', 'celltype'])
+    return df
+
+def get_next_version_dir(base_dir):
+    """Find the next available version number for the output directory"""
+    version = 0
+    while True:
+        version_dir = f"{base_dir}_{version}"
+        if not os.path.exists(version_dir):
+            return version_dir
+        version += 1

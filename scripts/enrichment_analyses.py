@@ -5,13 +5,14 @@ import pandas as pd
 import pybedtools
 import anndata
 import torch
+import seaborn as sns
 
 from types import SimpleNamespace
 from joblib import Parallel, delayed
 from multiprocessing import cpu_count
 
 from eclare.post_hoc_utils import \
-    extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, metric_boxplots, \
+    extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, \
     set_env_variables, download_mlflow_runs,\
     tree
 
@@ -31,6 +32,11 @@ search_strings = {
     'clip_mdd': 'CLIP' + '_' + methods_id_dict['clip_mdd'],
     'eclare_mdd': ['ECLARE' + '_' + job_id for job_id in methods_id_dict['eclare_mdd']]
 }
+
+## Create output directory with version counter
+base_output_dir = os.path.join(os.environ['OUTPATH'], f"enrichment_analyses_{methods_id_dict['eclare_mdd'][0]}")
+output_dir = get_next_version_dir(base_output_dir)
+os.makedirs(output_dir, exist_ok=True)
 
 #%% unpaired MDD data
 experiment_name = f"clip_mdd_{methods_id_dict['clip_mdd']}"
@@ -139,7 +145,7 @@ overlapping_subjects = np.intersect1d(mdd_rna.obs[rna_subject_key], mdd_atac.obs
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df[subjects_by_condition_n_sex_df['subject'].isin(overlapping_subjects)]
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condition', 'sex'])['subject'].unique()
 
-#%% differential expression analysis
+#%% setup before pyDESeq2 and sc-compReg
 
 X_rna_dict, X_atac_dict, overlapping_target_genes_dict, overlapping_tfs_dict, genes_by_peaks_corrs_dict, genes_by_peaks_masks_dict, n_dict, scompreg_loglikelihoods_dict, std_errs_dict, slopes_dict, intercepts_dict, intercept_stderrs_dict, tg_expressions_dict, tfrps_dict, tfrp_predictions_dict \
     = initialize_dicts()
@@ -161,13 +167,14 @@ with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as 
     all_dicts = pickle.load(f)
 mean_grn_df = all_dicts[-1]
      
-## loop through sex and celltype
+#%% pyDESeq2
 for sex in unique_sexes:
-    # Use joblib for parallel processing
+    sex = sex.lower()
+    
     results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
         delayed(process_celltype)(
             sex, celltype, rna_scaled_with_counts, mdd_rna.var,
-            rna_celltype_key, rna_condition_key, rna_sex_key
+            rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key
         )
         for celltype in unique_celltypes
     )
@@ -177,26 +184,56 @@ for sex in unique_sexes:
         pydeseq2_results_dict[sex][celltype] = pydeseq2_results
         significant_genes_dict[sex][celltype] = significant_genes
 
-## set cutoff for number of cells to keep for SEACells representation. see Bilous et al. 2024, Liu & Li 2024 (mcRigor) or Li et al. 2025 (MetaQ) for benchmarking experiments
+dicts_to_save = {
+    'pydeseq2_results_dict': pydeseq2_results_dict,
+    'significant_genes_dict': significant_genes_dict,
+}
+for dict_name, dict_obj in dicts_to_save.items():
+    with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
+        pickle.dump(dict_obj, f)
+
+#%% sc-compReg analysis
 for sex in unique_sexes:
+    sex = sex.lower()
+    
     for condition in unique_conditions:
 
         results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
                 delayed(differential_grn_analysis)(
-                    condition, sex, celltype, mdd_rna, mdd_atac, rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key, eclare_student_model, mean_grn_df, cutoff=5025, ot_alignment_type='all'
+                    condition, sex, celltype, mdd_rna, mdd_atac, rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key, eclare_student_model, mean_grn_df, \
+                    overlapping_subjects, subjects_by_condition_n_sex_df, cutoff=5025, ot_alignment_type='all'
                 )
             for celltype in unique_celltypes
         )
-
         for celltype, result in zip(unique_celltypes, results):
             assign_to_dicts(*result)
 
+dicts_to_save = {
+    'X_rna_dict': X_rna_dict,
+    'X_atac_dict': X_atac_dict,
+    'overlapping_target_genes_dict': overlapping_target_genes_dict,
+    'overlapping_tfs_dict': overlapping_tfs_dict,
+    'scompreg_loglikelihoods_dict': scompreg_loglikelihoods_dict,
+    'std_errs_dict': std_errs_dict,
+    'tg_expressions_dict': tg_expressions_dict,
+    'tfrps_dict': tfrps_dict,
+    'tfrp_predictions_dict': tfrp_predictions_dict,
+    'slopes_dict': slopes_dict,
+    'intercepts_dict': intercepts_dict,
+    'intercept_stderrs_dict': intercept_stderrs_dict,
+}
 
+for dict_name, dict_obj in dicts_to_save.items():
+    with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
+        pickle.dump(dict_obj, f)
+
+#%% gene set enrichment analyses
 for sex in unique_sexes:
+    sex = sex.lower()
     
     results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
         delayed(perform_gene_set_enrichment)(
-            sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna.var_names
+            sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna.var_names, pydeseq2_results_dict, brain_gmt_cortical, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, output_dir
         )
         for celltype in unique_celltypes
     )
@@ -204,3 +241,63 @@ for sex in unique_sexes:
     for celltype, result in zip(unique_celltypes, results):
         enrs_dict[sex][celltype] = result[0]
         magma_results_dict[sex][celltype] = result[1]
+
+dicts_to_save = {
+    'enrs_dict': enrs_dict,
+    'magma_results_dict': magma_results_dict,
+}
+for dict_name, dict_obj in dicts_to_save.items():
+    with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
+        pickle.dump(dict_obj, f)
+
+## transform magma_results_dict to df
+magma_results_df = magma_dicts_to_df(magma_results_dict)
+sns.heatmap(magma_results_df.apply(lambda x: -np.log10(x)))
+
+#%%
+# Load all saved dictionaries
+dicts_to_load = [
+    'pydeseq2_results_dict',
+    'significant_genes_dict',
+    'overlapping_target_genes_dict',
+    'overlapping_tfs_dict',
+    'scompreg_loglikelihoods_dict',
+    'std_errs_dict',
+    'tg_expressions_dict',
+    'tfrps_dict',
+    'tfrp_predictions_dict',
+    'slopes_dict',
+    'intercepts_dict',
+    'intercept_stderrs_dict',
+    'enrs_dict',
+    'magma_results_dict'
+]
+
+loaded_dicts = {}
+for dict_name in dicts_to_load:
+    dict_path = os.path.join(output_dir, f"{dict_name}.pkl")
+    if os.path.exists(dict_path):
+        with open(dict_path, "rb") as f:
+            loaded_dicts[dict_name] = pickle.load(f)
+        print(f"Loaded {dict_name}")
+    else:
+        print(f"Warning: {dict_path} not found")
+
+# Unpack loaded dictionaries into individual variables
+pydeseq2_results_dict = loaded_dicts.get('pydeseq2_results_dict', {})
+significant_genes_dict = loaded_dicts.get('significant_genes_dict', {})
+overlapping_target_genes_dict = loaded_dicts.get('overlapping_target_genes_dict', {})
+overlapping_tfs_dict = loaded_dicts.get('overlapping_tfs_dict', {})
+scompreg_loglikelihoods_dict = loaded_dicts.get('scompreg_loglikelihoods_dict', {})
+std_errs_dict = loaded_dicts.get('std_errs_dict', {})
+tg_expressions_dict = loaded_dicts.get('tg_expressions_dict', {})
+tfrps_dict = loaded_dicts.get('tfrps_dict', {})
+tfrp_predictions_dict = loaded_dicts.get('tfrp_predictions_dict', {})
+slopes_dict = loaded_dicts.get('slopes_dict', {})
+intercepts_dict = loaded_dicts.get('intercepts_dict', {})
+intercept_stderrs_dict = loaded_dicts.get('intercept_stderrs_dict', {})
+enrs_dict = loaded_dicts.get('enrs_dict', {})
+magma_results_dict = loaded_dicts.get('magma_results_dict', {})
+
+# %%
+print ('Done!')
