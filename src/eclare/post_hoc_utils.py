@@ -2114,7 +2114,11 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
     ## paths for MAGMA
     MAGMAPATH = glob(os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10*'))[0]
     magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', f'FUMA_public_job{fuma_job_id}', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
-    magma_out_path = os.path.join(output_dir, 'sc-compReg_significant_genes')
+    
+    # Create unique output path to avoid race conditions
+    import threading
+    thread_id = threading.current_thread().ident
+    magma_out_path = os.path.join(output_dir, f'sc-compReg_significant_genes_thread_{thread_id}')
 
     ## read "genes.raw" file and see if IDs start with "ENSG" or is integer
     genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
@@ -2181,8 +2185,8 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
 
                 set_file_dict[gene_set_name] = significant_genes_entrez_ids
 
-    ## write gene set file
-    magma_set_file_path = os.path.join(os.path.dirname(output_dir), 'significant_gene_sets.gmt')
+    ## write gene set file with unique path
+    magma_set_file_path = os.path.join(os.path.dirname(output_dir), f'significant_gene_sets_thread_{thread_id}.gmt')
 
     with open(magma_set_file_path, 'w') as f:
         for gene_set_name, gene_set in set_file_dict.items():
@@ -2199,15 +2203,17 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
     Z_ensembl = pd.merge(Z, Z_IGNORE_ensembl, left_index=True, right_index=True, how='right')
     Z_ensembl = Z_ensembl.set_index('ensembl', drop=True)
 
-    magma_genecovar_path = os.path.join(output_dir, 'Z.covariates.txt')
+    magma_genecovar_path = os.path.join(output_dir, f'Z.covariates_thread_{thread_id}.txt')
     Z_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
 
     ## write list file for interaction analysis
-    magma_list_file_path = os.path.join(output_dir, 'significant_genes.list')
+    magma_list_file_path = os.path.join(output_dir, f'significant_genes_thread_{thread_id}.list')
     list_file_dict = {'condition-interaction': ['sc-compReg', 'ZSTAT']}
     pd.DataFrame.from_dict(list_file_dict, orient='index').to_csv(magma_list_file_path, sep='\t', header=False, index=False)
 
-    ## run MAGMA (a terminal command)
+    ## run MAGMA using subprocess instead of os.system for better thread safety
+    import subprocess
+    
     magma_gs_cmd = f"""{MAGMAPATH}/magma \
         --gene-results {magma_genes_raw_path} \
         --set-annot {magma_set_file_path} \
@@ -2227,9 +2233,10 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
         --model interaction={magma_list_file_path}\
         --out {magma_out_path}"""
 
-    os.system(magma_gs_cmd)
-    os.system(magma_cvar_cmd)
-    os.system(magma_gs_cvar_interaction_cmd)
+    # Use subprocess.run instead of os.system for better thread safety
+    subprocess.run(magma_gs_cmd, shell=True, check=True)
+    subprocess.run(magma_cvar_cmd, shell=True, check=True)
+    subprocess.run(magma_gs_cvar_interaction_cmd, shell=True, check=True)
 
     ## check content of output file and log file
     logfile = magma_out_path + '.log'
@@ -2445,7 +2452,8 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None):
             top_term=15,
             show_ring=False,
             ofname=os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs["type"]}.png'))
-    plt.show()
+    # Remove plt.show() - it's not thread-safe
+    plt.close(fig)  # Close the figure to free memory
 
     enr_sig_pathways_df = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]
     enr_sig_pathways_padj = enr_sig_pathways_df['Adjusted P-value'].to_list()

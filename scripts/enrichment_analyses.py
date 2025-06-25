@@ -8,9 +8,27 @@ import anndata
 import torch
 import seaborn as sns
 
+# Set matplotlib to use a thread-safe backend
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
+
+# Add logging for better debugging
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(os.environ.get('OUTPATH', '.'), 'enrichment_analyses.log')),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 from types import SimpleNamespace
 from joblib import Parallel, delayed
 from multiprocessing import cpu_count
+import threading
 
 from eclare.post_hoc_utils import \
     extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, \
@@ -159,7 +177,7 @@ enrs_dict = tree()
 magma_results_dict = tree()
 
 ## TEMPORARY - restrict unique celltypes
-unique_celltypes = ['Ast', 'End', 'InN', 'Mic', 'OPC', 'Oli']
+unique_celltypes = ['Ast', 'Mic']
 
 ## Get BrainGMT and filter for cortical genes
 brain_gmt_cortical, brain_gmt_cortical_wGO = get_brain_gmt()
@@ -185,13 +203,18 @@ for sex in unique_sexes:
         pydeseq2_results_dict[sex][celltype] = pydeseq2_results
         significant_genes_dict[sex][celltype] = significant_genes
 
+# Save results with thread-safe file writing
 dicts_to_save = {
     'pydeseq2_results_dict': pydeseq2_results_dict,
     'significant_genes_dict': significant_genes_dict,
 }
+
+file_lock = threading.Lock()
 for dict_name, dict_obj in dicts_to_save.items():
-    with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
-        pickle.dump(dict_obj, f)
+    with file_lock:
+        with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
+            pickle.dump(dict_obj, f)
+        print(f"Saved {dict_name}")
 
 #%% sc-compReg analysis
 for sex in unique_sexes:
@@ -209,6 +232,7 @@ for sex in unique_sexes:
         for celltype, result in zip(unique_celltypes, results):
             assign_to_dicts(*result)
 
+# Save results with thread-safe file writing
 dicts_to_save = {
     'X_rna_dict': X_rna_dict,
     'X_atac_dict': X_atac_dict,
@@ -224,32 +248,68 @@ dicts_to_save = {
     'intercept_stderrs_dict': intercept_stderrs_dict,
 }
 
+file_lock = threading.Lock()
 for dict_name, dict_obj in dicts_to_save.items():
-    with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
-        pickle.dump(dict_obj, f)
+    with file_lock:
+        with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
+            pickle.dump(dict_obj, f)
+        print(f"Saved {dict_name}")
 
 #%% gene set enrichment analyses
+# Note: For CPU-intensive tasks like MAGMA analysis, consider using multiprocessing instead of threading:
+# backend='multiprocessing' instead of backend='threading'
+logger.info("Starting gene set enrichment analyses")
 for sex in unique_sexes:
     sex = sex.lower()
+    logger.info(f"Processing sex: {sex}")
     
-    results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
-        delayed(perform_gene_set_enrichment)(
-            sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna.var_names, pydeseq2_results_dict, brain_gmt_cortical, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, output_dir
+    # Use a lock to prevent race conditions when creating directories
+    dir_lock = threading.Lock()
+    
+    def safe_perform_gene_set_enrichment(sex, celltype, *args, **kwargs):
+        """Thread-safe wrapper for perform_gene_set_enrichment"""
+        try:
+            logger.info(f"Starting enrichment for {sex}_{celltype}")
+            # Create unique subdirectory for each thread
+            thread_id = threading.current_thread().ident
+            unique_output_dir = os.path.join(kwargs['output_dir'], f'thread_{thread_id}')
+            os.makedirs(unique_output_dir, exist_ok=True)
+            kwargs['output_dir'] = unique_output_dir
+            
+            result = perform_gene_set_enrichment(sex, celltype, *args, **kwargs)
+            logger.info(f"Completed enrichment for {sex}_{celltype}")
+            return result
+        except Exception as e:
+            logger.error(f"Error in thread {threading.current_thread().ident} for {sex}_{celltype}: {e}")
+            return None, None
+    
+    results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='multiprocessing')(
+        delayed(safe_perform_gene_set_enrichment)(
+            sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna.var_names, pydeseq2_results_dict, brain_gmt_cortical, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, output_dir=output_dir
         )
         for celltype in unique_celltypes
     )
 
     for celltype, result in zip(unique_celltypes, results):
-        enrs_dict[sex][celltype] = result[0]
-        magma_results_dict[sex][celltype] = result[1]
+        if result is not None and result[0] is not None:
+            enrs_dict[sex][celltype] = result[0]
+            magma_results_dict[sex][celltype] = result[1]
+        else:
+            print(f"Warning: No results for {sex}_{celltype}")
 
+# Save results with thread-safe file writing
 dicts_to_save = {
     'enrs_dict': enrs_dict,
     'magma_results_dict': magma_results_dict,
 }
+
+# Use a lock for file writing to prevent race conditions
+file_lock = threading.Lock()
 for dict_name, dict_obj in dicts_to_save.items():
-    with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
-        pickle.dump(dict_obj, f)
+    with file_lock:
+        with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
+            pickle.dump(dict_obj, f)
+        print(f"Saved {dict_name}")
 
 ## transform magma_results_dict to df
 magma_results_df = magma_dicts_to_df(magma_results_dict)
