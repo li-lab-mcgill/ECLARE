@@ -1,3 +1,4 @@
+#%%
 import os
 import pickle
 import numpy as np
@@ -284,20 +285,20 @@ for dict_name in dicts_to_load:
         print(f"Warning: {dict_path} not found")
 
 # Unpack loaded dictionaries into individual variables
-pydeseq2_results_dict = loaded_dicts.get('pydeseq2_results_dict', {})
-significant_genes_dict = loaded_dicts.get('significant_genes_dict', {})
-overlapping_target_genes_dict = loaded_dicts.get('overlapping_target_genes_dict', {})
-overlapping_tfs_dict = loaded_dicts.get('overlapping_tfs_dict', {})
-scompreg_loglikelihoods_dict = loaded_dicts.get('scompreg_loglikelihoods_dict', {})
-std_errs_dict = loaded_dicts.get('std_errs_dict', {})
-tg_expressions_dict = loaded_dicts.get('tg_expressions_dict', {})
-tfrps_dict = loaded_dicts.get('tfrps_dict', {})
-tfrp_predictions_dict = loaded_dicts.get('tfrp_predictions_dict', {})
-slopes_dict = loaded_dicts.get('slopes_dict', {})
-intercepts_dict = loaded_dicts.get('intercepts_dict', {})
-intercept_stderrs_dict = loaded_dicts.get('intercept_stderrs_dict', {})
-enrs_dict = loaded_dicts.get('enrs_dict', {})
-magma_results_dict = loaded_dicts.get('magma_results_dict', {})
+pydeseq2_results_dict = loaded_dicts.get('pydeseq2_results_dict', tree())
+significant_genes_dict = loaded_dicts.get('significant_genes_dict', tree())
+overlapping_target_genes_dict = loaded_dicts.get('overlapping_target_genes_dict', tree())
+overlapping_tfs_dict = loaded_dicts.get('overlapping_tfs_dict', tree())
+scompreg_loglikelihoods_dict = loaded_dicts.get('scompreg_loglikelihoods_dict', tree())
+std_errs_dict = loaded_dicts.get('std_errs_dict', tree())
+tg_expressions_dict = loaded_dicts.get('tg_expressions_dict', tree())
+tfrps_dict = loaded_dicts.get('tfrps_dict', tree())
+tfrp_predictions_dict = loaded_dicts.get('tfrp_predictions_dict', tree())
+slopes_dict = loaded_dicts.get('slopes_dict', tree())
+intercepts_dict = loaded_dicts.get('intercepts_dict', tree())
+intercept_stderrs_dict = loaded_dicts.get('intercept_stderrs_dict', tree())
+enrs_dict = loaded_dicts.get('enrs_dict', tree())
+magma_results_dict = loaded_dicts.get('magma_results_dict', tree())
 
 # %%
 print ('Done!')

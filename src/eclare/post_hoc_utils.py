@@ -2107,20 +2107,20 @@ def get_brain_gmt():
 
     return brain_gmt_cortical, brain_gmt_cortical_wGO
 
-def run_magma(lr_filtered, Z, significant_genes, output_dir):
+def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461'):
     
     mg = mygene.MyGeneInfo()
 
     ## paths for MAGMA
     MAGMAPATH = glob(os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10*'))[0]
-    magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job604461', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
+    magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', f'FUMA_public_job{fuma_job_id}', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
     magma_out_path = os.path.join(output_dir, 'sc-compReg_significant_genes')
 
     ## read "genes.raw" file and see if IDs start with "ENSG" or is integer
     genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
     genes_raw_ids = genes_raw_df[0].apply(lambda x: x.split(' ')[0])
 
-    genes_out_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', 'FUMA_public_job604461', 'magma.genes.out'), sep='\t')
+    genes_out_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', f'FUMA_public_job{fuma_job_id}', 'magma.genes.out'), sep='\t')
     genes_magma_control = genes_out_df.loc[genes_out_df['ZSTAT'].argsort()][-len(significant_genes):]['GENE'].to_list()
 
     #lr_filtered_top = lr_filtered[lr_filtered.argsort().values][-len(significant_genes):]
@@ -2425,7 +2425,7 @@ def plot_pathway_ranks(pathway_ranks, stem=True):
     plt.tight_layout()
     plt.show()
 
-def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
+def do_enrichr(lr_filtered_type, pathways, outdir=None):
 
     enr = gp.enrichr(lr_filtered_type.index.to_list(),
                         gene_sets=pathways,
@@ -2435,7 +2435,7 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
 
     # dotplot
     max_pval = enr.res2d['Adjusted P-value'].max()
-    gp.dotplot(enr.res2d,
+    fig = gp.dotplot(enr.res2d,
             column='Adjusted P-value',
             figsize=(3,7),
             title=f'{lr_filtered_type.attrs["sex"]} - {lr_filtered_type.attrs["celltype"]} ({lr_filtered_type.attrs["type"]})',
@@ -2443,7 +2443,8 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None, gene_sets=None):
             size=12, # adjust dot size
             cutoff=max_pval,
             top_term=15,
-            show_ring=False)
+            show_ring=False,
+            ofname=os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs["type"]}.png'))
     plt.show()
 
     enr_sig_pathways_df = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]
@@ -2672,7 +2673,7 @@ def differential_grn_analysis(
     return_tuple = (sex, celltype, condition, X_rna, X_atac, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
     return return_tuple
 
-def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna_var_names, significant_genes, pathways):
+def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna_var_names, significant_genes, pathways, output_dir=os.environ['OUTPATH']):
 
     ## Perform EnrichR on different gene sets
     deg_df = pd.DataFrame(index=significant_genes)
@@ -2687,9 +2688,9 @@ def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, to
     deg_df.attrs.update({'sex': sex, 'celltype': celltype, 'type': 'deg_df'})
     deg_match_length_df.attrs.update({'sex': sex, 'celltype': celltype, 'type': 'deg_match_length_df'})
 
-    enr, enr_sig_pathways_set, enr_sig_pathways_padj = do_enrichr(lr_filtered, pathways)
-    enr_deg_match_length, enr_sig_pathways_deg_match_length_set, enr_sig_pathways_deg_match_length_padj = do_enrichr(deg_match_length_df, pathways)
-    enr_deg, enr_sig_pathways_deg_set, enr_sig_pathways_deg_padj = do_enrichr(deg_df, pathways) if deg_df.empty is False else (None, None, None)
+    enr, enr_sig_pathways_set, enr_sig_pathways_padj = do_enrichr(lr_filtered, pathways, outdir=output_dir)
+    enr_deg_match_length, enr_sig_pathways_deg_match_length_set, enr_sig_pathways_deg_match_length_padj = do_enrichr(deg_match_length_df, pathways, outdir=output_dir)
+    enr_deg, enr_sig_pathways_deg_set, enr_sig_pathways_deg_padj = do_enrichr(deg_df, pathways, outdir=output_dir) if deg_df.empty is False else (None, None, None)
 
     #enr_woDeg, enr_sig_pathways_woDeg_set, enr_sig_pathways_woDeg_padj = do_enrichr(lr_filtered_woDeg, pathways) if lr_filtered_woDeg.empty is False else (None, None, None)
     #enr_top_wDeg, enr_sig_pathways_top_wDeg_set, enr_sig_pathways_top_wDeg_padj = do_enrichr(top_lr_filtered_wDeg, pathways) if top_lr_filtered_wDeg.empty is False else (None, None, None)
@@ -2729,6 +2730,10 @@ def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, to
 
 def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna_var_names, pydeseq2_results_dict, pathways, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, output_dir):
 
+        # create subdirectory to save sex & celltype results
+        subdir = os.path.join(output_dir, f'magma_{sex}_{celltype}')
+        os.makedirs(subdir, exist_ok=True)
+
         ## get MDD-association gene scores
         LR, Z, LR_up, LR_down, Z_up, Z_down = compute_scompreg_loglikelihoods(sex, celltype,\
             scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict,\
@@ -2744,12 +2749,10 @@ def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfr
         top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes_dict[sex][celltype])
 
         ## run MAGMA
-        magma_dir = os.path.join(output_dir, f'magma_{sex}_{celltype}')
-        os.makedirs(magma_dir, exist_ok=True) 
-        magma_results_series, magma_results = run_magma(lr_filtered, Z, significant_genes_dict[sex][celltype], magma_dir)
+        magma_results_series, magma_results = run_magma(lr_filtered, Z, significant_genes_dict[sex][celltype], subdir, fuma_job_id='563797')
 
         ## run EnrichR
-        merged_dict = perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna_var_names, significant_genes_dict[sex][celltype], pathways)
+        merged_dict = perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna_var_names, significant_genes_dict[sex][celltype], pathways, output_dir=subdir)
 
         return merged_dict, magma_results_series
 
