@@ -84,7 +84,7 @@ eclare_student_model = eclare_student_model.train().to('cpu')
 #%% load data
 
 ## define decimation factor
-decimate_factor = 1
+decimate_factor = 10
 
 ## define args for mdd_setup
 args = SimpleNamespace(
@@ -177,7 +177,7 @@ enrs_dict = tree()
 magma_results_dict = tree()
 
 ## TEMPORARY - restrict unique celltypes
-unique_celltypes = ['Ast', 'Mic']
+unique_celltypes = ['Mic', 'OPC']#['Ast', 'Mic', 'Oli', 'End', 'InN', 'OPC']
 
 ## Get BrainGMT and filter for cortical genes
 brain_gmt_cortical, brain_gmt_cortical_wGO = get_brain_gmt()
@@ -185,6 +185,7 @@ brain_gmt_cortical, brain_gmt_cortical_wGO = get_brain_gmt()
 with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
     all_dicts = pickle.load(f)
 mean_grn_df = all_dicts[-1]
+
      
 #%% pyDESeq2
 for sex in unique_sexes:
@@ -217,15 +218,33 @@ for dict_name, dict_obj in dicts_to_save.items():
         print(f"Saved {dict_name}")
 
 #%% sc-compReg analysis
+
+def safe_differential_grn_analysis(condition, sex, celltype, *args, **kwargs):
+    """Thread-safe wrapper for differential_grn_analysis"""
+    try:
+        logger.info(f"Starting differential GRN analysis for {condition}_{sex}_{celltype}")
+        # Create unique subdirectory for each thread
+        thread_id = threading.current_thread().ident
+        unique_subdir = os.path.join(kwargs['subdir'], f'thread_{thread_id}')
+        os.makedirs(unique_subdir, exist_ok=True)
+        kwargs['subdir'] = unique_subdir
+
+        result = differential_grn_analysis(condition, sex, celltype, *args, **kwargs)
+        logger.info(f"Completed differential GRN analysis for {condition}_{sex}_{celltype}")
+        return result
+    except Exception as e:
+        logger.error(f"Error in thread {threading.current_thread().ident} for {condition}_{sex}_{celltype}: {e}")
+        return None, None
+
 for sex in unique_sexes:
     sex = sex.lower()
     
     for condition in unique_conditions:
 
         results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
-                delayed(differential_grn_analysis)(
+                delayed(safe_differential_grn_analysis)(
                     condition, sex, celltype, mdd_rna, mdd_atac, rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key, eclare_student_model, mean_grn_df, \
-                    overlapping_subjects, subjects_by_condition_n_sex_df, cutoff=5025, ot_alignment_type='all'
+                    overlapping_subjects, subjects_by_condition_n_sex_df, cutoff=5025, ot_alignment_type='all', subdir=os.path.join(output_dir, f'{condition}_{sex}_{celltype}')
                 )
             for celltype in unique_celltypes
         )
@@ -256,8 +275,23 @@ for dict_name, dict_obj in dicts_to_save.items():
         print(f"Saved {dict_name}")
 
 #%% gene set enrichment analyses
-# Note: For CPU-intensive tasks like MAGMA analysis, consider using multiprocessing instead of threading:
-# backend='multiprocessing' instead of backend='threading'
+def safe_perform_gene_set_enrichment(sex, celltype, *args, **kwargs):
+    """Thread-safe wrapper for perform_gene_set_enrichment"""
+    try:
+        logger.info(f"Starting enrichment for {sex}_{celltype}")
+        # Create unique subdirectory for each thread
+        thread_id = threading.current_thread().ident
+        unique_subdir = os.path.join(kwargs['subdir'], f'thread_{thread_id}')
+        os.makedirs(unique_subdir, exist_ok=True)
+        kwargs['subdir'] = unique_subdir
+        
+        result = perform_gene_set_enrichment(sex, celltype, *args, **kwargs)
+        logger.info(f"Completed enrichment for {sex}_{celltype}")
+        return result
+    except Exception as e:
+        logger.error(f"Error in thread {threading.current_thread().ident} for {sex}_{celltype}: {e}")
+        return None, None
+
 logger.info("Starting gene set enrichment analyses")
 for sex in unique_sexes:
     sex = sex.lower()
@@ -265,27 +299,9 @@ for sex in unique_sexes:
     
     # Use a lock to prevent race conditions when creating directories
     dir_lock = threading.Lock()
-    
-    def safe_perform_gene_set_enrichment(sex, celltype, *args, **kwargs):
-        """Thread-safe wrapper for perform_gene_set_enrichment"""
-        try:
-            logger.info(f"Starting enrichment for {sex}_{celltype}")
-            # Create unique subdirectory for each thread
-            thread_id = threading.current_thread().ident
-            unique_output_dir = os.path.join(kwargs['output_dir'], f'thread_{thread_id}')
-            os.makedirs(unique_output_dir, exist_ok=True)
-            kwargs['output_dir'] = unique_output_dir
-            
-            result = perform_gene_set_enrichment(sex, celltype, *args, **kwargs)
-            logger.info(f"Completed enrichment for {sex}_{celltype}")
-            return result
-        except Exception as e:
-            logger.error(f"Error in thread {threading.current_thread().ident} for {sex}_{celltype}: {e}")
-            return None, None
-    
     results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='multiprocessing')(
         delayed(safe_perform_gene_set_enrichment)(
-            sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna.var_names, pydeseq2_results_dict, brain_gmt_cortical, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, output_dir=output_dir
+            sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna.var_names, pydeseq2_results_dict, brain_gmt_cortical, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, subdir=os.path.join(output_dir, f'{condition}_{sex}_{celltype}')
         )
         for celltype in unique_celltypes
     )
@@ -313,52 +329,10 @@ for dict_name, dict_obj in dicts_to_save.items():
 
 ## transform magma_results_dict to df
 magma_results_df = magma_dicts_to_df(magma_results_dict)
+plt.figure(figsize=(10, 8))
 sns.heatmap(magma_results_df.apply(lambda x: -np.log10(x)))
-
-#%%
-# Load all saved dictionaries
-dicts_to_load = [
-    'pydeseq2_results_dict',
-    'significant_genes_dict',
-    'overlapping_target_genes_dict',
-    'overlapping_tfs_dict',
-    'scompreg_loglikelihoods_dict',
-    'std_errs_dict',
-    'tg_expressions_dict',
-    'tfrps_dict',
-    'tfrp_predictions_dict',
-    'slopes_dict',
-    'intercepts_dict',
-    'intercept_stderrs_dict',
-    'enrs_dict',
-    'magma_results_dict'
-]
-
-loaded_dicts = {}
-for dict_name in dicts_to_load:
-    dict_path = os.path.join(output_dir, f"{dict_name}.pkl")
-    if os.path.exists(dict_path):
-        with open(dict_path, "rb") as f:
-            loaded_dicts[dict_name] = pickle.load(f)
-        print(f"Loaded {dict_name}")
-    else:
-        print(f"Warning: {dict_path} not found")
-
-# Unpack loaded dictionaries into individual variables
-pydeseq2_results_dict = loaded_dicts.get('pydeseq2_results_dict', tree())
-significant_genes_dict = loaded_dicts.get('significant_genes_dict', tree())
-overlapping_target_genes_dict = loaded_dicts.get('overlapping_target_genes_dict', tree())
-overlapping_tfs_dict = loaded_dicts.get('overlapping_tfs_dict', tree())
-scompreg_loglikelihoods_dict = loaded_dicts.get('scompreg_loglikelihoods_dict', tree())
-std_errs_dict = loaded_dicts.get('std_errs_dict', tree())
-tg_expressions_dict = loaded_dicts.get('tg_expressions_dict', tree())
-tfrps_dict = loaded_dicts.get('tfrps_dict', tree())
-tfrp_predictions_dict = loaded_dicts.get('tfrp_predictions_dict', tree())
-slopes_dict = loaded_dicts.get('slopes_dict', tree())
-intercepts_dict = loaded_dicts.get('intercepts_dict', tree())
-intercept_stderrs_dict = loaded_dicts.get('intercept_stderrs_dict', tree())
-enrs_dict = loaded_dicts.get('enrs_dict', tree())
-magma_results_dict = loaded_dicts.get('magma_results_dict', tree())
+plt.savefig(os.path.join(output_dir, "magma_heatmap.png"), bbox_inches='tight', dpi=150)
+plt.close()
 
 # %%
 print ('Done!')
