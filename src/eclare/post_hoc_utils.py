@@ -156,7 +156,7 @@ def create_celltype_palette(all_rna_celltypes, all_atac_celltypes, plot_color_pa
     return color_map
 
 
-def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None):
+def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None, save_path=None):
 
     if umap_embedding is None:
         rna_atac_latents = np.concatenate([rna_latents, atac_latents], axis=0)
@@ -203,7 +203,9 @@ def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltype
     ax[2].set_title('labelled by modality')
 
     fig.tight_layout()
-
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches='tight', dpi=150)
+        plt.close(fig)
     return umap_embedding, fig, rna_atac_df_umap
 
 
@@ -697,7 +699,7 @@ def cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_grou
 
     return mdd_atac_sampled_group, mdd_rna_sampled_group, student_logits
 
-def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key='X_umap', n_SEACells=None):
+def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key='X_umap', n_SEACells=None, save_dir=None):
 
     # Copy the counts to ".raw" attribute of the anndata since it is necessary for downstream analysis
     # This step should be performed after filtering 
@@ -762,11 +764,11 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
         sc.tl.umap(adata_train)
 
         SEACells.plot.plot_2D(adata_train, key='X_umap', colour_metacells=False)
-        SEACells.plot.plot_2D(adata_train, key='X_umap', colour_metacells=True)
+        SEACells.plot.plot_2D(adata_train, key='X_umap', colour_metacells=True, save_as=os.path.join(save_dir, f'seacells_umap.png'))
 
     else:
         SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=False)
-        SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=True)
+        SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=True, save_as=os.path.join(save_dir, f'seacells_umap.png'))
 
     return SEACell_ad_train, SEACell_ad_apply
 
@@ -1490,16 +1492,6 @@ def project_mdd_nuclei_into_latent_space(mdd_rna, mdd_atac, rna_sex_key, atac_se
     mdd_rna_sex = mdd_rna_sampled.obs[rna_sex_key].str.lower()
     mdd_atac_sex = mdd_atac_sampled.obs[atac_sex_key].str.lower()
 
-    # subset to 'Mic' celltype right away
-    '''
-    mdd_rna_sampled = mdd_rna[mdd_rna.obs[rna_celltype_key] == 'Mic']
-    mdd_atac_sampled = mdd_atac[mdd_atac.obs[atac_celltype_key] == 'Mic']
-    mdd_rna_condition = mdd_rna.obs[rna_condition_key][mdd_rna.obs[rna_celltype_key] == 'Mic']
-    mdd_atac_condition = mdd_atac.obs[atac_condition_key][mdd_atac.obs[atac_celltype_key] == 'Mic']
-    mdd_rna_celltypes = mdd_rna.obs[rna_celltype_key][mdd_rna.obs[rna_celltype_key] == 'Mic']
-    mdd_atac_celltypes = mdd_atac.obs[atac_celltype_key][mdd_atac.obs[atac_celltype_key] == 'Mic']
-    '''
-
     ## get latents
     eclare_rna_latents, eclare_atac_latents = get_latents(eclare_student_model, mdd_rna_sampled, mdd_atac_sampled, return_tensor=False)
     kd_clip_rna_latents, kd_clip_atac_latents = get_latents(kd_clip_student_model, mdd_rna_sampled, mdd_atac_sampled, return_tensor=False)
@@ -1645,7 +1637,7 @@ def get_pseudo_replicates_counts(sex, celltype, rna_scaled_with_counts, mdd_rna_
 
     return mdd_subjects_counts_adata, counts, metadata
 
-def run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key):
+def run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key, save_dir=None):
 
     inference = DefaultInference(n_cpus=8)
     dds = DeseqDataSet(
@@ -1669,7 +1661,9 @@ def run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key)
 
     fig, ax = plt.subplots(figsize=(14, 5))
     sns.scatterplot(data=results, x='log2FoldChange', y='-log10(padj)', hue='signif_padj', marker='o', alpha=0.5)
-    fig.show()
+    if save_dir is not None:
+        fig.savefig(os.path.join(save_dir, 'volcano_plot.png'), bbox_inches='tight', dpi=150)
+    plt.close(fig)
 
     ## extract significant genes
     significant_genes = mdd_subjects_counts_adata.var_names[results['signif_padj']]
@@ -1685,7 +1679,9 @@ def run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key)
 
     fig, ax = plt.subplots(figsize=(14, 5))
     sns.violinplot(data=df, x='gene', y='expression', hue=rna_condition_key, split=True, inner=None, cut=0, ax=ax)
-    fig.show()
+    if save_dir is not None:
+        fig.savefig(os.path.join(save_dir, 'violin_plot.png'), bbox_inches='tight', dpi=150)
+    plt.close(fig)
 
     return mdd_subjects_counts_adata, results, significant_genes
 
@@ -1898,7 +1894,7 @@ def compute_scompreg_loglikelihoods(sex, celltype,
 
     return LR, Z, LR_up, LR_down, Z_up, Z_down
 
-def filter_LR_stats(LR, Z, LR_up, LR_down):
+def filter_LR_stats(LR, Z, LR_up, LR_down, save_dir=None):
 
     # 1) Suppose `lr` is your 1-D array of empirical LR statistics:
     lr = np.array(LR)
@@ -1953,7 +1949,9 @@ def filter_LR_stats(LR, Z, LR_up, LR_down):
     plt.title('Comparison of Empirical and Fitted LR Distributions')
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.show()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, 'lr_gamma_fit.png'), bbox_inches='tight', dpi=150)
+    plt.close()
 
     ## filter LR values with fitted null distribution
     lr_fitted_cdf = gamma.cdf(lr, a=res.x[0], scale=res.x[1])
@@ -2345,7 +2343,7 @@ def get_pathway_ranks(enr, enr_deg, enr_top_wDeg, enr_bottom_wDeg, rank_type='Ad
 
     return pathway_ranks
 
-def plot_pathway_ranks(pathway_ranks, stem=True):
+def plot_pathway_ranks(pathway_ranks, stem=True, save_path=None):
 
     # ─── 3. Sort pathways by "ALL LR" (optional) ───
     order = pathway_ranks["ALL LR"].sort_values().index.tolist()
@@ -2430,7 +2428,9 @@ def plot_pathway_ranks(pathway_ranks, stem=True):
     #ax[0].legend(bbox_to_anchor=(1.02, 1), borderaxespad=0)
 
     plt.tight_layout()
-    plt.show()
+    if save_path is not None:
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+    plt.close()
 
 def do_enrichr(lr_filtered_type, pathways, outdir=None):
 
@@ -2456,17 +2456,18 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None):
     plt.close(fig)  # Close the figure to free memory
 
     enr_sig_pathways_df = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]
-    enr_sig_pathways_padj = enr_sig_pathways_df['Adjusted P-value'].to_list()
-    enr_sig_pathways = enr_sig_pathways_df['Term'].to_list()
-    enr_sig_pathways_set = set(enr_sig_pathways) if enr_sig_pathways is not None else set()
+    #enr_sig_pathways_padj = enr_sig_pathways_df['Adjusted P-value'].to_list()
+    #enr_sig_pathways = enr_sig_pathways_df['Term'].to_list()
+    #enr_sig_pathways_set = set(enr_sig_pathways) if enr_sig_pathways is not None else set()
+    #enr_sig_pathways_genes = enr_sig_pathways_df['Genes'].str.split(';').to_list()
 
-    return enr, enr_sig_pathways_set, enr_sig_pathways_padj
+    return enr_sig_pathways_df
 
 def differential_grn_analysis(
         condition, sex, celltype,
         mdd_rna, mdd_atac,
         rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key,
-        eclare_student_model, mean_grn_df, overlapping_subjects, subjects_by_condition_n_sex_df, cutoff=5025, ot_alignment_type='all'
+        eclare_student_model, mean_grn_df, overlapping_subjects, subjects_by_condition_n_sex_df, cutoff=5025, ot_alignment_type='all', subdir=None
         ):
 
     mdd_rna_aligned = []
@@ -2627,7 +2628,7 @@ def differential_grn_analysis(
 
     ## plot UMAP of aligned RNA latents and ATAC latents
     rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_aligned, mdd_atac_aligned, return_tensor=True)
-    umap_embedder, _, _ = plot_umap_embeddings(rna_latents, atac_latents, [celltype]*len(rna_latents), [celltype]*len(atac_latents), [condition]*len(rna_latents), [condition]*len(atac_latents), color_map_ct={celltype: 'black'}, umap_embedding=None)
+    umap_embedder, _, _ = plot_umap_embeddings(rna_latents, atac_latents, [celltype]*len(rna_latents), [celltype]*len(atac_latents), [condition]*len(rna_latents), [condition]*len(atac_latents), color_map_ct={celltype: 'black'}, umap_embedding=None, save_path=os.path.join(subdir, f'umap_rna_atac.png'))
 
     ## get mean GRN from brainSCOPE
     mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned)
@@ -2659,7 +2660,7 @@ def differential_grn_analysis(
 
     ## run SEACells to obtain pseudobulked counts
     mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = \
-        run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_umap')
+        run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_umap', save_dir=subdir)
 
     X_rna = torch.from_numpy(mdd_rna_sampled_group_seacells.X.toarray())
     X_atac = torch.from_numpy(mdd_atac_sampled_group_seacells.X.toarray())
@@ -2678,7 +2679,7 @@ def differential_grn_analysis(
         get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
 
     ## assign to dicts
-    return_tuple = (sex, celltype, condition, X_rna, X_atac, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
+    return_tuple = (sex, celltype, condition, mdd_rna_sampled_group, mdd_atac_sampled_group, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
     return return_tuple
 
 def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna_var_names, significant_genes, pathways, output_dir=os.environ['OUTPATH']):
@@ -2696,9 +2697,9 @@ def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, to
     deg_df.attrs.update({'sex': sex, 'celltype': celltype, 'type': 'deg_df'})
     deg_match_length_df.attrs.update({'sex': sex, 'celltype': celltype, 'type': 'deg_match_length_df'})
 
-    enr, enr_sig_pathways_set, enr_sig_pathways_padj = do_enrichr(lr_filtered, pathways, outdir=output_dir)
-    enr_deg_match_length, enr_sig_pathways_deg_match_length_set, enr_sig_pathways_deg_match_length_padj = do_enrichr(deg_match_length_df, pathways, outdir=output_dir)
-    enr_deg, enr_sig_pathways_deg_set, enr_sig_pathways_deg_padj = do_enrichr(deg_df, pathways, outdir=output_dir) if deg_df.empty is False else (None, None, None)
+    enr_sig_df = do_enrichr(lr_filtered, pathways, outdir=output_dir)
+    enr_deg_match_length_df = do_enrichr(deg_match_length_df, pathways, outdir=output_dir)
+    enr_deg_df = do_enrichr(deg_df, pathways, outdir=output_dir) if deg_df.empty is False else None
 
     #enr_woDeg, enr_sig_pathways_woDeg_set, enr_sig_pathways_woDeg_padj = do_enrichr(lr_filtered_woDeg, pathways) if lr_filtered_woDeg.empty is False else (None, None, None)
     #enr_top_wDeg, enr_sig_pathways_top_wDeg_set, enr_sig_pathways_top_wDeg_padj = do_enrichr(top_lr_filtered_wDeg, pathways) if top_lr_filtered_wDeg.empty is False else (None, None, None)
@@ -2706,63 +2707,56 @@ def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, to
 
     ## save enrs_dict
     enrs_dict = {
-        'All LR': enr_sig_pathways_set,
-        'DEG (matched length)': enr_sig_pathways_deg_match_length_set,
+        'All LR': set(enr_sig_df['Term'].to_list()),
+        'DEG (matched length)': set(enr_deg_match_length_df['Term'].to_list()),
     }
-    if enr_sig_pathways_deg_set is not None:
-        enrs_dict.update({'DEG': enr_sig_pathways_deg_set})
+    if enr_deg_df is not None:
+        enrs_dict.update({'DEG': set(enr_deg_df['Term'].to_list())})
     else:
         print('No gene set enrichment for DEG genes')
 
     venn(enrs_dict)
+    venn_path = os.path.join(output_dir, f'venn_{sex}_{celltype}.png')
+    plt.savefig(venn_path, bbox_inches='tight', dpi=150)
+    plt.close()
 
-    ## save p_dict
-    p_dict = {
-        'All LR': enr_sig_pathways_padj,
-        'DEG (matched length)': enr_sig_pathways_deg_match_length_padj,
+    all_enrs_dict = {
+        'All LR': enr_sig_df,
+        'DEG (matched length)': enr_deg_match_length_df,
     }
-    if enr_sig_pathways_deg_set is not None:
-        p_dict.update({'DEG': enr_sig_pathways_deg_padj})
-    else:
-        print('No gene set enrichment for DEG genes')
+    if enr_deg_df is not None:
+        all_enrs_dict.update({'DEG': enr_deg_df})
+    
+    return all_enrs_dict
 
-    # Merge enrs_dict and p_dict into one dictionary with structure: lr_filtered_type -> pathway_name -> p_adjusted
-    merged_dict = {}
-    for key in enrs_dict.keys():
-        merged_dict[key] = {}
-        if enrs_dict[key] is not None and p_dict[key] is not None:
-            for pathway, p_value in zip(enrs_dict[key], p_dict[key]):
-                merged_dict[key][pathway] = p_value
+def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna_var_names, pydeseq2_results_dict, pathways, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, subdir=None):
 
-    return merged_dict
+    ## get MDD-association gene scores
+    LR, Z, LR_up, LR_down, Z_up, Z_down = compute_scompreg_loglikelihoods(
+        sex, celltype,
+        scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict,
+        slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict
+    )
 
-def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna_var_names, pydeseq2_results_dict, pathways, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, output_dir):
+    ## filter LR values with fitted null distribution (sc-compReg)
+    lr_filtered, Z_filtered, lr_up_filtered, lr_down_filtered, lr_fitted_cdf = filter_LR_stats(LR, Z, LR_up, LR_down, save_dir=subdir)
 
-        # create subdirectory to save sex & celltype results
-        subdir = os.path.join(output_dir, f'magma_{sex}_{celltype}')
-        os.makedirs(subdir, exist_ok=True)
+    ## Merge lr_filtered into mean_grn_df
+    mean_grn_df_filtered = merge_grn_lr_filtered(mean_grn_df, lr_filtered, subdir)
 
-        ## get MDD-association gene scores
-        LR, Z, LR_up, LR_down, Z_up, Z_down = compute_scompreg_loglikelihoods(sex, celltype,\
-            scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict,\
-            slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict)
+    ## Get gene sets that include DEG genes from pyDESeq2 analysis
+    top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes_dict[sex][celltype])
 
-        ## filter LR values with fitted null distribution (sc-compReg)
-        lr_filtered, Z_filtered, lr_up_filtered, lr_down_filtered, lr_fitted_cdf = filter_LR_stats(LR, Z, LR_up, LR_down)
+    ## run MAGMA
+    magma_results_series, magma_results = run_magma(lr_filtered, Z, significant_genes_dict[sex][celltype], subdir, fuma_job_id='563797')
 
-        ## Merge lr_filtered into mean_grn_df
-        mean_grn_df_filtered = merge_grn_lr_filtered(mean_grn_df, lr_filtered, output_dir)
+    ## run EnrichR
+    merged_dict = perform_enrichr_comparison(
+        sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg,
+        pydeseq2_results_dict, mdd_rna_var_names, significant_genes_dict[sex][celltype], pathways, output_dir=subdir
+    )
 
-        ## Get gene sets that include DEG genes from pyDESeq2 analysis
-        top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes_dict[sex][celltype])
-
-        ## run MAGMA
-        magma_results_series, magma_results = run_magma(lr_filtered, Z, significant_genes_dict[sex][celltype], subdir, fuma_job_id='563797')
-
-        ## run EnrichR
-        merged_dict = perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna_var_names, significant_genes_dict[sex][celltype], pathways, output_dir=subdir)
-
-        return merged_dict, magma_results_series
+    return merged_dict, magma_results_series
 
 def set_env_variables(config_path='../config'):
 
