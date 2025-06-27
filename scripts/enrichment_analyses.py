@@ -299,7 +299,7 @@ for sex in unique_sexes:
     
     # Use a lock to prevent race conditions when creating directories
     dir_lock = threading.Lock()
-    results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='multiprocessing')(
+    results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
         delayed(safe_perform_gene_set_enrichment)(
             sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna.var_names, pydeseq2_results_dict, brain_gmt_cortical, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, subdir=os.path.join(output_dir, f'{condition}_{sex}_{celltype}')
         )
@@ -334,5 +334,46 @@ sns.heatmap(magma_results_df.apply(lambda x: -np.log10(x)))
 plt.savefig(os.path.join(output_dir, "magma_heatmap.png"), bbox_inches='tight', dpi=150)
 plt.close()
 
+#%% module scores for enriched pathways
+
+gene_set_scores_dict = tree()
+
+for sex in unique_sexes:
+    sex = sex.lower()
+    for celltype in unique_celltypes:
+
+        enrs_scompreg = enrs_dict[sex][celltype]['All LR']
+
+        for condition in unique_conditions:
+            adata = X_rna_dict[sex][celltype][condition]
+
+            for gene_set in enrs_scompreg.itertuples():
+                term = gene_set.Term
+                genes = gene_set.Genes.split(';')
+                term_scores = sc.tl.score_genes(adata, gene_list=genes, score_name=term, copy=True)
+                gene_set_scores_dict[sex][celltype][condition][term] = term_scores.obs[term].values
+
+# Convert nested dictionary to multi-index DataFrame
+gene_set_scores_df = pd.DataFrame.from_dict(
+    {(sex, celltype, condition, term): value 
+     for sex in gene_set_scores_dict.keys()
+     for celltype in gene_set_scores_dict[sex].keys()
+     for condition in gene_set_scores_dict[sex][celltype].keys()
+     for term, value in gene_set_scores_dict[sex][celltype][condition].items()},
+    orient='index'
+)
+
+dicts_to_save = {
+    'gene_set_scores_dict': gene_set_scores_dict,
+}
+
+for dict_name, dict_obj in dicts_to_save.items():
+    with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
+        pickle.dump(dict_obj, f)
+    print(f"Saved {dict_name}")
+
+
+#%%
+        
 # %%
 print ('Done!')
