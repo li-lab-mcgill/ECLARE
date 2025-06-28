@@ -7,6 +7,7 @@ import pybedtools
 import anndata
 import torch
 import seaborn as sns
+from scanpy.tl import score_genes
 
 # Set matplotlib to use a thread-safe backend
 import matplotlib
@@ -84,7 +85,7 @@ eclare_student_model = eclare_student_model.train().to('cpu')
 #%% load data
 
 ## define decimation factor
-decimate_factor = 10
+decimate_factor = 1
 
 ## define args for mdd_setup
 args = SimpleNamespace(
@@ -177,7 +178,7 @@ enrs_dict = tree()
 magma_results_dict = tree()
 
 ## TEMPORARY - restrict unique celltypes
-unique_celltypes = ['Mic', 'OPC']#['Ast', 'Mic', 'Oli', 'End', 'InN', 'OPC']
+#unique_celltypes = ['Ast', 'Mic', 'Oli', 'End', 'InN', 'OPC']
 
 ## Get BrainGMT and filter for cortical genes
 brain_gmt_cortical, brain_gmt_cortical_wGO = get_brain_gmt()
@@ -225,7 +226,7 @@ def safe_differential_grn_analysis(condition, sex, celltype, *args, **kwargs):
         logger.info(f"Starting differential GRN analysis for {condition}_{sex}_{celltype}")
         # Create unique subdirectory for each thread
         thread_id = threading.current_thread().ident
-        unique_subdir = os.path.join(kwargs['subdir'], f'thread_{thread_id}')
+        unique_subdir = os.path.join(kwargs['subdir'], f'grn_thread_{thread_id}')
         os.makedirs(unique_subdir, exist_ok=True)
         kwargs['subdir'] = unique_subdir
 
@@ -281,7 +282,7 @@ def safe_perform_gene_set_enrichment(sex, celltype, *args, **kwargs):
         logger.info(f"Starting enrichment for {sex}_{celltype}")
         # Create unique subdirectory for each thread
         thread_id = threading.current_thread().ident
-        unique_subdir = os.path.join(kwargs['subdir'], f'thread_{thread_id}')
+        unique_subdir = os.path.join(kwargs['subdir'], f'enr_thread_{thread_id}')
         os.makedirs(unique_subdir, exist_ok=True)
         kwargs['subdir'] = unique_subdir
         
@@ -350,18 +351,8 @@ for sex in unique_sexes:
             for gene_set in enrs_scompreg.itertuples():
                 term = gene_set.Term
                 genes = gene_set.Genes.split(';')
-                term_scores = sc.tl.score_genes(adata, gene_list=genes, score_name=term, copy=True)
+                term_scores = score_genes(adata, gene_list=genes, score_name=term, copy=True)
                 gene_set_scores_dict[sex][celltype][condition][term] = term_scores.obs[term].values
-
-# Convert nested dictionary to multi-index DataFrame
-gene_set_scores_df = pd.DataFrame.from_dict(
-    {(sex, celltype, condition, term): value 
-     for sex in gene_set_scores_dict.keys()
-     for celltype in gene_set_scores_dict[sex].keys()
-     for condition in gene_set_scores_dict[sex][celltype].keys()
-     for term, value in gene_set_scores_dict[sex][celltype][condition].items()},
-    orient='index'
-)
 
 dicts_to_save = {
     'gene_set_scores_dict': gene_set_scores_dict,

@@ -156,8 +156,9 @@ def create_celltype_palette(all_rna_celltypes, all_atac_celltypes, plot_color_pa
     return color_map
 
 
-def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None, save_path=None):
+def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, title=None, marker='.', umap_embedding=None, save_path=None):
 
+    ## train UMAP embedding on project RNA and ATAC latents separately
     if umap_embedding is None:
         rna_atac_latents = np.concatenate([rna_latents, atac_latents], axis=0)
         umap_embedding = UMAP(n_neighbors=50, min_dist=0.5, n_components=2, metric='cosine', random_state=42)
@@ -166,13 +167,14 @@ def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltype
     rna_umap = umap_embedding.transform(rna_latents)
     atac_umap = umap_embedding.transform(atac_latents)
 
+    ## save UMAP embeddings to dataframe
     rna_df_umap = pd.DataFrame(data={'umap_1': rna_umap[:, 0], 'umap_2': rna_umap[:, 1], 'celltypes': rna_celltypes, 'condition': rna_condition, 'modality': 'RNA'})
     atac_df_umap = pd.DataFrame(data={'umap_1': atac_umap[:, 0], 'umap_2': atac_umap[:, 1], 'celltypes': atac_celltypes, 'condition': atac_condition, 'modality': 'ATAC'})
     rna_atac_df_umap = pd.concat([rna_df_umap, atac_df_umap], axis=0).sample(frac=1) # shuffle
 
-    marker = '.'
-
+    ## check if multiple conditions are present, in which case we will plot the condition on the fourth subplot
     multiple_conditions = (len(np.unique(rna_condition)) > 1) or (len(np.unique(atac_condition)) > 1)
+
     if multiple_conditions:
         hue_order = np.unique(np.concatenate([rna_condition, atac_condition]))
 
@@ -182,30 +184,47 @@ def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltype
     else:
         fig, ax = plt.subplots(1, 3, figsize=(10, 4))
 
-    sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='celltypes', palette=color_map_ct, alpha=0.8, ax=ax[1], legend=False, marker=marker)
-    sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, ax=ax[2], legend=True, marker=marker)
+    ## check if multiple cell types are present
+    multiple_celltypes = (len(color_map_ct) > 1)
 
-    ax[1].set_xticklabels([]); ax[1].set_yticklabels([]); ax[2].set_xticklabels([]); ax[2].set_yticklabels([])
-    ax[1].set_xlabel(''); ax[1].set_ylabel(''); ax[2].set_xlabel(''); ax[2].set_ylabel('')
+    if multiple_celltypes:
+        sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='celltypes', palette=color_map_ct, alpha=0.8, ax=ax[1], legend=False, marker=marker)
+        sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, ax=ax[2], legend=True, marker=marker)
 
-    ## add cell-type legend
-    ax[0].set_xlim(0, 3)
-    ax[0].set_ylim(-0.5, len(color_map_ct) - 0.5)
-    for i, (name, color) in enumerate(reversed(color_map_ct.items())):  # Reverse order to match plot
-        rect_height = 0.8
-        rect_y = i - rect_height/2  # Center the rectangle vertically
-        ax[0].add_patch(plt.Rectangle((0, rect_y), 0.5, rect_height, color=color))
-        ax[0].text(0.7, i, name, va='center', ha='left', fontsize=10)
-    ax[0].axis('off')
+        ax[1].set_xticklabels([]); ax[1].set_yticklabels([]); ax[2].set_xticklabels([]); ax[2].set_yticklabels([])
+        ax[1].set_xlabel(''); ax[1].set_ylabel(''); ax[2].set_xlabel(''); ax[2].set_ylabel('')
 
-    ax[0].set_title('legend: cell types')
-    ax[1].set_title('labelled by cell type')
-    ax[2].set_title('labelled by modality')
+        ## add cell-type legend
+        ax[0].set_xlim(0, 3)
+        ax[0].set_ylim(-0.5, len(color_map_ct) - 0.5)
+        for i, (name, color) in enumerate(reversed(color_map_ct.items())):  # Reverse order to match plot
+            rect_height = 0.8
+            rect_y = i - rect_height/2  # Center the rectangle vertically
+            ax[0].add_patch(plt.Rectangle((0, rect_y), 0.5, rect_height, color=color))
+            ax[0].text(0.7, i, name, va='center', ha='left', fontsize=10)
+        ax[0].axis('off')
 
+        ax[0].set_title('legend: cell types')
+        ax[1].set_title('labelled by cell type')
+        ax[2].set_title('labelled by modality')
+
+    elif not multiple_celltypes: # plot ATAC and RNA separately, then plot both in overlay
+        sns.scatterplot(data=atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], ax=ax[0], marker=marker, legend=False)
+        sns.scatterplot(data=rna_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], ax=ax[1], marker=marker, legend=False)
+        sns.scatterplot(data=rna_atac_df_umap, x='umap_1', y='umap_2', hue='modality', hue_order=['ATAC','RNA'], alpha=0.5, ax=ax[2], legend=True, marker=marker)
+
+        ax[0].set_xticklabels([]); ax[0].set_yticklabels([]); ax[1].set_xticklabels([]); ax[1].set_yticklabels([])
+        ax[0].set_xlabel(''); ax[0].set_ylabel(''); ax[1].set_xlabel(''); ax[1].set_ylabel('')
+        ax[2].set_xticklabels([]); ax[2].set_yticklabels([]); ax[2].set_xlabel(''); ax[2].set_ylabel('')
+        ax[0].set_title('ATAC'); ax[1].set_title('RNA'); ax[2].set_title('ATAC & RNA')
+
+    fig.suptitle(title)
     fig.tight_layout()
+
     if save_path is not None:
         fig.savefig(save_path, bbox_inches='tight', dpi=150)
         plt.close(fig)
+
     return umap_embedding, fig, rna_atac_df_umap
 
 
@@ -2628,7 +2647,7 @@ def differential_grn_analysis(
 
     ## plot UMAP of aligned RNA latents and ATAC latents
     rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_aligned, mdd_atac_aligned, return_tensor=True)
-    umap_embedder, _, _ = plot_umap_embeddings(rna_latents, atac_latents, [celltype]*len(rna_latents), [celltype]*len(atac_latents), [condition]*len(rna_latents), [condition]*len(atac_latents), color_map_ct={celltype: 'black'}, umap_embedding=None, save_path=os.path.join(subdir, f'umap_rna_atac.png'))
+    umap_embedder, _, _ = plot_umap_embeddings(rna_latents, atac_latents, [celltype]*len(rna_latents), [celltype]*len(atac_latents), [condition]*len(rna_latents), [condition]*len(atac_latents), color_map_ct={celltype: 'black'}, title=f'{sex} - {celltype} - {condition}', umap_embedding=None, save_path=os.path.join(subdir, f'umap_rna_atac.png'))
 
     ## get mean GRN from brainSCOPE
     mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned)
@@ -2742,7 +2761,7 @@ def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfr
     lr_filtered, Z_filtered, lr_up_filtered, lr_down_filtered, lr_fitted_cdf = filter_LR_stats(LR, Z, LR_up, LR_down, save_dir=subdir)
 
     ## Merge lr_filtered into mean_grn_df
-    mean_grn_df_filtered = merge_grn_lr_filtered(mean_grn_df, lr_filtered, subdir)
+    #mean_grn_df_filtered = merge_grn_lr_filtered(mean_grn_df, lr_filtered, subdir)
 
     ## Get gene sets that include DEG genes from pyDESeq2 analysis
     top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes_dict[sex][celltype])
