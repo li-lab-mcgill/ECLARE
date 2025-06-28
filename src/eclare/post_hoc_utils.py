@@ -722,11 +722,11 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
 
     # Copy the counts to ".raw" attribute of the anndata since it is necessary for downstream analysis
     # This step should be performed after filtering 
-    raw_ad = sc.AnnData(adata_train.X)
+    raw_ad = sc.AnnData(adata_train.X).copy()
     raw_ad.obs_names, raw_ad.var_names = adata_train.obs_names, adata_train.var_names
     adata_train.raw = raw_ad
 
-    raw_ad = sc.AnnData(adata_apply.X)
+    raw_ad = sc.AnnData(adata_apply.X).copy()
     raw_ad.obs_names, raw_ad.var_names = adata_apply.obs_names, adata_apply.var_names
     adata_apply.raw = raw_ad
 
@@ -788,6 +788,10 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
     else:
         SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=False)
         SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=True, save_as=os.path.join(save_dir, f'seacells_umap.png'))
+
+    ## remove raw attribute
+    adata_train.raw = None
+    adata_apply.raw = None
 
     return SEACell_ad_train, SEACell_ad_apply
 

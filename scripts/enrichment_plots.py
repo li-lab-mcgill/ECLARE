@@ -1,7 +1,7 @@
 import os
 import pickle
 
-from eclare.post_hoc_utils import combined_plot_target_only, get_next_version_dir, tree
+from eclare.post_hoc_utils import tree
 
 ## Create dict for methods and job_ids
 methods_id_dict = {'eclare_mdd': ['16103846']}
