@@ -1,3 +1,27 @@
+#%% set env variables
+import os
+import sys
+
+# Check if environment variables are already set
+eclare_root = os.environ.get('ECLARE_ROOT')
+outpath = os.environ.get('OUTPATH')
+datapath = os.environ.get('DATAPATH')
+
+# Print status of environment variables
+if all([eclare_root, outpath, datapath]):
+    print(f"Environment variables already set:")
+    print(f"ECLARE_ROOT: {eclare_root}")
+    print(f"OUTPATH: {outpath}")
+    print(f"DATAPATH: {datapath}")
+else:
+    print(f"Missing environment variables")
+
+    config_path = '../config'
+    sys.path.insert(0, config_path)
+
+    from export_env_variables import export_env_variables
+    export_env_variables(config_path)
+    
 #%%
 import os
 import pickle
@@ -85,7 +109,7 @@ eclare_student_model = eclare_student_model.train().to('cpu')
 #%% load data
 
 ## define decimation factor
-decimate_factor = 1
+decimate_factor = 10
 
 ## define args for mdd_setup
 args = SimpleNamespace(
