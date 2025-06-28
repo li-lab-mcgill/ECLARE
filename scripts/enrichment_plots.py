@@ -11,6 +11,7 @@ output_dir = base_output_dir + '_18'
 # Load all saved dictionaries
 dicts_to_load = [
     'X_rna_dict',
+    'X_atac_dict',
     'pydeseq2_results_dict',
     'significant_genes_dict',
     'overlapping_target_genes_dict',
@@ -39,6 +40,7 @@ for dict_name in dicts_to_load:
 
 # Unpack loaded dictionaries into individual variables
 X_rna_dict = loaded_dicts.get('X_rna_dict', tree())
+X_atac_dict = loaded_dicts.get('X_atac_dict', tree())
 pydeseq2_results_dict = loaded_dicts.get('pydeseq2_results_dict', tree())
 significant_genes_dict = loaded_dicts.get('significant_genes_dict', tree())
 overlapping_target_genes_dict = loaded_dicts.get('overlapping_target_genes_dict', tree())

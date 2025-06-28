@@ -789,6 +789,10 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
         SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=False)
         SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=True, save_as=os.path.join(save_dir, f'seacells_umap.png'))
 
+    ## add proportion of cells per SEACell
+    SEACell_ad_train.obs['proportion_of_cells'] = n_cells_per_SEACell / n_cells_per_SEACell.sum()
+    SEACell_ad_apply.obs['proportion_of_cells'] = n_cells_per_SEACell / n_cells_per_SEACell.sum()
+
     ## remove raw attribute
     adata_train.raw = None
     adata_apply.raw = None
@@ -2579,7 +2583,6 @@ def differential_grn_analysis(
         assert np.equal(mdd_rna_aligned.obs[rna_subject_key].values, mdd_atac_aligned.obs[atac_subject_key].values).all()
         assert (mdd_rna_aligned.obs_names.nunique() == mdd_rna_aligned.n_obs) & (mdd_atac_aligned.obs_names.nunique() == mdd_atac_aligned.n_obs)
 
-
     elif ot_alignment_type == 'all':
 
         ## select cell indices
@@ -2680,7 +2683,6 @@ def differential_grn_analysis(
 
     sc.pp.pca(mdd_atac_sampled_group, n_comps=50)
 
-
     ## run SEACells to obtain pseudobulked counts
     mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells = \
         run_SEACells(mdd_rna_sampled_group, mdd_atac_sampled_group, build_kernel_on='X_pca', key='X_umap', save_dir=subdir)
@@ -2702,7 +2704,7 @@ def differential_grn_analysis(
         get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs)
 
     ## assign to dicts
-    return_tuple = (sex, celltype, condition, mdd_rna_sampled_group, mdd_atac_sampled_group, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
+    return_tuple = (sex, celltype, condition, mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
     return return_tuple
 
 def perform_enrichr_comparison(sex, celltype, lr_filtered, lr_filtered_woDeg, top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, pydeseq2_results_dict, mdd_rna_var_names, significant_genes, pathways, output_dir=os.environ['OUTPATH']):
@@ -2765,7 +2767,7 @@ def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfr
     lr_filtered, Z_filtered, lr_up_filtered, lr_down_filtered, lr_fitted_cdf = filter_LR_stats(LR, Z, LR_up, LR_down, save_dir=subdir)
 
     ## Merge lr_filtered into mean_grn_df
-    #mean_grn_df_filtered = merge_grn_lr_filtered(mean_grn_df, lr_filtered, subdir)
+    mean_grn_df_filtered = merge_grn_lr_filtered(mean_grn_df, lr_filtered, subdir)
 
     ## Get gene sets that include DEG genes from pyDESeq2 analysis
     top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes_dict[sex][celltype])
@@ -2779,7 +2781,7 @@ def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfr
         pydeseq2_results_dict, mdd_rna_var_names, significant_genes_dict[sex][celltype], pathways, output_dir=subdir
     )
 
-    return merged_dict, magma_results_series
+    return merged_dict, magma_results_series, mean_grn_df_filtered
 
 def set_env_variables(config_path='../config'):
 
