@@ -345,6 +345,7 @@ for sex in unique_sexes:
 dicts_to_save = {
     'enrs_dict': enrs_dict,
     'magma_results_dict': magma_results_dict,
+    'mean_grn_df_filtered_dict': mean_grn_df_filtered_dict,
 }
 
 # Use a lock for file writing to prevent race conditions

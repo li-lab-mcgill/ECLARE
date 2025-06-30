@@ -1802,7 +1802,7 @@ def compute_scompreg_loglikelihoods(sex, celltype,
         tfrps               = tfrps_dict[sex][celltype][condition]
         tg_expressions      = tg_expressions_dict[sex][celltype][condition]
 
-        for gene in tqdm(genes_names):
+        for gene in genes_names:
 
             log_gaussian_likelihood_pre = scompreg_loglikelihoods_dict[sex][celltype][condition][gene]
             if np.isnan(log_gaussian_likelihood_pre):
@@ -1837,7 +1837,7 @@ def compute_scompreg_loglikelihoods(sex, celltype,
     diffs_all = []
     scompreg_loglikelihoods_all = {}
 
-    for gene in tqdm(genes_names):
+    for gene in genes_names:
 
         tfrp = tfrps_all.loc[:,gene].values.astype(float)
         tg_expression = tg_expressions_all.loc[:,gene].values.astype(float)
