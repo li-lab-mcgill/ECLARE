@@ -55,6 +55,7 @@ from joblib import Parallel, delayed
 from multiprocessing import cpu_count
 import threading
 
+from eclare.data_utils import compute_LR_grns
 from eclare.post_hoc_utils import \
     extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, \
     set_env_variables, download_mlflow_runs,\
@@ -383,7 +384,7 @@ for sex in unique_sexes:
                 weighted_term_score = (term_scores.obs[term].values * term_scores.obs['proportion_of_cells']).sum()
                 gene_set_scores_dict[sex][celltype][condition][term] = weighted_term_score
 
-                print(term, term_scores.obs[term].mean())
+                #print(term, term_scores.obs[term].mean())
 
 dicts_to_save = {
     'gene_set_scores_dict': gene_set_scores_dict,
@@ -396,92 +397,44 @@ for dict_name, dict_obj in dicts_to_save.items():
 
 
 #%% obtain LR for TF-peak-TG combinations
-from eclare.data_utils import get_scompreg_loglikelihood_full
-from scipy.stats import linregress
-from tqdm import tqdm
 
-def scompreg_likelihood_ratio(tg_expression, tfrp):
+unique_TF_TG_combinations_dict = tree()
+shared_TF_TG_pairs = set()
 
-    try:
-        linregress_res = linregress(tg_expression, tfrp) # if unpack directly, returns only 5 of the 6 outputs..
-    except:
-        log_gaussian_likelihood = np.nan
-    else:
-        slope, intercept, r_value, p_value, std_err, intercept_stderr = (linregress_res.slope, linregress_res.intercept, linregress_res.rvalue, linregress_res.pvalue, linregress_res.stderr, linregress_res.intercept_stderr)
-        tfrp_predictions = slope * tg_expression + intercept
+for sex in unique_sexes:
+    sex = sex.lower()
 
-        ## compute residuals and variance
-        n = len(tfrp)
-        sq_residuals = (tfrp - tfrp_predictions)**2
-        var = sq_residuals.sum() / n
-        log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
+    results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
+        delayed(compute_LR_grns)(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac_dict)
+        for celltype in unique_celltypes
+    )
 
-    return log_gaussian_likelihood
-
-
-def compute_LR_grns(sex, celltype):
-
-    X_rna_control = torch.from_numpy(X_rna_dict[sex][celltype]['Control'].X.toarray())
-    X_atac_control = torch.from_numpy(X_atac_dict[sex][celltype]['Control'].X.toarray())
-
-    X_rna_case = torch.from_numpy(X_rna_dict[sex][celltype]['Case'].X.toarray())
-    X_atac_case = torch.from_numpy(X_atac_dict[sex][celltype]['Case'].X.toarray())
-
-    X_rna_all = torch.cat([X_rna_control, X_rna_case], dim=0)
-    X_atac_all = torch.cat([X_atac_control, X_atac_case], dim=0)
-
-    mean_grn_df_filtered = mean_grn_df_filtered_dict[sex][celltype]
-
-    overlapping_target_genes = mean_grn_df_filtered['TG'].unique()
-    overlapping_tfs = mean_grn_df_filtered['TF'].unique()
-
-    mean_grn_df_filtered, tfrps_control, tg_expressions_control = get_scompreg_loglikelihood_full(mean_grn_df_filtered, X_rna_control, X_atac_control, overlapping_target_genes, overlapping_tfs, 'll_control')
-    mean_grn_df_filtered, tfrps_case, tg_expressions_case = get_scompreg_loglikelihood_full(mean_grn_df_filtered, X_rna_case, X_atac_case, overlapping_target_genes, overlapping_tfs, 'll_case')
-
-    assert list(tfrps_control.keys()) == list(tfrps_case.keys())
-    assert list(tg_expressions_control.keys()) == list(tg_expressions_case.keys())
-
-
-    for gene in tqdm(overlapping_target_genes, total=len(overlapping_target_genes), desc='Null LR'):
-
-        tfrps_control_gene = tfrps_control[gene]
-        tfrps_case_gene = tfrps_case[gene]
-        tg_expressions_control_gene = tg_expressions_control[gene]
-        tg_expressions_case_gene = tg_expressions_case[gene]
-        
-        tfrps_all_gene = pd.concat([tfrps_control_gene, tfrps_case_gene], axis=1)
-        tg_expressions_all_gene = torch.cat([tg_expressions_control_gene, tg_expressions_case_gene], dim=0).numpy()
-
-        scompreg_likelihood_ratio_lambda = lambda tfrp: scompreg_likelihood_ratio(tg_expressions_all_gene, tfrp)
-        tfrps_all_gene['scompreg_likelihood_ratio'] = tfrps_all_gene.apply(scompreg_likelihood_ratio_lambda, axis=1)
-
-        mean_grn_df_filtered.loc[tfrps_all_gene.index, 'll_all'] = tfrps_all_gene['scompreg_likelihood_ratio']
-        
-
-    LR_grns = -2 * (mean_grn_df_filtered.apply(lambda grn: grn['ll_all'] - (grn['ll_case'] + grn['ll_control']), axis=1))
-    LR_grns_filtered = LR_grns[LR_grns > LR_grns.quantile(0.95)]
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    LR_grns.hist(bins=100, ax=ax)
-
-    #ax.axvline(x=lr_at_p, color='black', linestyle='--')
-    ax.axvline(x=LR_grns.quantile(0.95), color='green', linestyle='--')
-
-    ax.set_xlabel('LR')
-    ax.set_ylabel('Frequency')
-    ax.set_title('LR distribution')
-    plt.show()
-
-    mean_grn_df_filtered['LR_grns'] = LR_grns
-    mean_grn_df_filtered_pruned = mean_grn_df_filtered[mean_grn_df_filtered['LR_grns'] > LR_grns.quantile(0.95)]
-
-    return mean_grn_df_filtered_pruned
+    for celltype, result in zip(unique_celltypes, results):
+        mean_grn_df_filtered_pruned_dict[sex][celltype] = result
 
 for sex in unique_sexes:
     sex = sex.lower()
     for celltype in unique_celltypes:
-        mean_grn_df_filtered_pruned = compute_LR_grns(sex, celltype)
-        mean_grn_df_filtered_pruned_dict[sex][celltype] = mean_grn_df_filtered_pruned
+        unique_TF_TG_combinations_df = mean_grn_df_filtered_pruned_dict[sex][celltype][['TF', 'TG']].drop_duplicates()
+        unique_TF_TG_combinations_str = unique_TF_TG_combinations_df.apply(lambda x: ' - '.join(x), axis=1).values
+        unique_TF_TG_combinations_dict[sex][celltype] = unique_TF_TG_combinations_str
+
+        pairs = set(unique_TF_TG_combinations_dict[sex][celltype])
+        # Initialize shared pairs with first combination
+        if not shared_TF_TG_pairs:
+            shared_TF_TG_pairs = pairs
+        else:
+            shared_TF_TG_pairs = shared_TF_TG_pairs.intersection(pairs)
+            
+
+shared_TF_TG_pairs_df = pd.DataFrame(shared_TF_TG_pairs).iloc[:, 0].str.split(' - ', expand=True)
+shared_TF_TG_pairs_df.columns = ['TF', 'TG']
+shared_TF_TG_pairs_df.sort_values(by='TG', inplace=True)
+
+shared_TF_TG_pairs_df.to_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'), index=False)
+
+print(f'Shared TF-TG pairs (n={len(shared_TF_TG_pairs)}):')
+print(shared_TF_TG_pairs_df)
         
 # %%
 print ('Done!')
