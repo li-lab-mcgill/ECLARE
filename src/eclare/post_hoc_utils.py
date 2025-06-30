@@ -32,6 +32,7 @@ import gseapy as gp
 import mygene
 from venn import venn
 from datetime import datetime
+import subprocess
 
 from eclare import load_CLIP_model
 from eclare import return_setup_func_from_dataset
@@ -2132,13 +2133,37 @@ def get_brain_gmt():
 
     return brain_gmt_cortical, brain_gmt_cortical_wGO
 
+def run_h_magma_prep(output_dir):
+
+    MAGMAPATH = glob(os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10*'))[0]
+    os.makedirs(os.path.join(os.environ['DATAPATH'], 'MDD_H_MAGMA'), exist_ok=True)
+
+    bfile_path = os.path.join(os.environ['DATAPATH'], 'g1000_eur', 'g1000_eur')
+    pval_path = os.path.join(os.environ['DATAPATH'], 'DS_10283_3203', 'PGC_UKB_depression_genome-wide.txt')
+    gene_annot_path = os.path.join(os.environ['DATAPATH'], 'Adult_brain.genes.annot')
+    out_path = os.path.join(os.environ['DATAPATH'], 'MDD_H_MAGMA', 'mdd_h_magma')
+
+    h_magma_cmd = f"""{MAGMAPATH}/magma \
+    --bfile {bfile_path} \
+    --pval {pval_path} use=MarkerName,P N=500199 \
+    --gene-annot {gene_annot_path} \
+    --out {out_path}"""
+
+    subprocess.run(h_magma_cmd, shell=True, check=True)
+
+    return out_path
+
 def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461'):
     
     mg = mygene.MyGeneInfo()
 
     ## paths for MAGMA
     MAGMAPATH = glob(os.path.join(os.environ['ECLARE_ROOT'], 'magma_v1.10*'))[0]
-    magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', f'FUMA_public_job{fuma_job_id}', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
+
+    if fuma_job_id is not None:
+        magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', f'FUMA_public_job{fuma_job_id}', 'magma.genes.raw')  # https://fuma.ctglab.nl/browse#GwasList
+    else:
+        magma_genes_raw_path = os.path.join(os.environ['DATAPATH'], 'MDD_H_MAGMA', 'mdd_h_magma.genes.raw')
     
     # Create unique output path to avoid race conditions
     import threading
@@ -2149,15 +2174,14 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
     genes_raw_df = pd.read_csv(magma_genes_raw_path, sep='/t', header=None, skiprows=2)
     genes_raw_ids = genes_raw_df[0].apply(lambda x: x.split(' ')[0])
 
-    genes_out_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', f'FUMA_public_job{fuma_job_id}', 'magma.genes.out'), sep='\t')
-    genes_magma_control = genes_out_df.loc[genes_out_df['ZSTAT'].argsort()][-len(significant_genes):]['GENE'].to_list()
+    #genes_out_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'FUMA_public_jobs', f'FUMA_public_job{fuma_job_id}', 'magma.genes.out'), sep='\t')
+    #genes_magma_control = genes_out_df.loc[genes_out_df['ZSTAT'].argsort()][-len(significant_genes):]['GENE'].to_list()
 
     #lr_filtered_top = lr_filtered[lr_filtered.argsort().values][-len(significant_genes):]
     #lr_filtered_union = pd.concat([lr_filtered, pd.Series(significant_genes, index=significant_genes)]).drop_duplicates()
 
     gene_sets = {
         'sc-compReg': lr_filtered.index.to_list(),
-        'magma-control': genes_magma_control,
         'Z_IGNORE': Z.index.to_list()}
     
     if not significant_genes.empty:
@@ -2228,16 +2252,15 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
     Z_ensembl = pd.merge(Z, Z_IGNORE_ensembl, left_index=True, right_index=True, how='right')
     Z_ensembl = Z_ensembl.set_index('ensembl', drop=True)
 
-    magma_genecovar_path = os.path.join(output_dir, f'Z.covariates_thread_{thread_id}.txt')
+    magma_genecovar_path = os.path.join(os.path.dirname(output_dir), f'Z.covariates_thread_{thread_id}.txt')
     Z_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
 
     ## write list file for interaction analysis
-    magma_list_file_path = os.path.join(output_dir, f'significant_genes_thread_{thread_id}.list')
+    magma_list_file_path = os.path.join(os.path.dirname(output_dir), f'significant_genes_thread_{thread_id}.list')
     list_file_dict = {'condition-interaction': ['sc-compReg', 'ZSTAT']}
     pd.DataFrame.from_dict(list_file_dict, orient='index').to_csv(magma_list_file_path, sep='\t', header=False, index=False)
 
     ## run MAGMA using subprocess instead of os.system for better thread safety
-    import subprocess
     
     magma_gs_cmd = f"""{MAGMAPATH}/magma \
         --gene-results {magma_genes_raw_path} \
