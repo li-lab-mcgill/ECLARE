@@ -328,7 +328,7 @@ for sex in unique_sexes:
     dir_lock = threading.Lock()
     results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
         delayed(safe_perform_gene_set_enrichment)(
-            sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna.var_names, pydeseq2_results_dict, brain_gmt_cortical, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, subdir=os.path.join(output_dir, f'{condition}_{sex}_{celltype}')
+            sex, celltype, scompreg_loglikelihoods_dict, tfrps_dict, tg_expressions_dict, tfrp_predictions_dict, mean_grn_df, significant_genes_dict, mdd_rna.var_names, pydeseq2_results_dict, brain_gmt_cortical, slopes_dict, std_errs_dict, intercepts_dict, intercept_stderrs_dict, subdir=os.path.join(output_dir, f'{sex}_{celltype}')
         )
         for celltype in unique_celltypes
     )
