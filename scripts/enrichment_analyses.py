@@ -167,7 +167,8 @@ mdd_rna_counts = anndata.AnnData(
     obs=rna_counts_obs,
 )
 
-unique_celltypes = np.unique(np.concatenate([mdd_rna.obs[rna_celltype_key], mdd_atac.obs[atac_celltype_key]]))
+import warnings; warnings.warn("Only using Ast and Oli celltypes for analysis."); unique_celltypes = ['Ast', 'Oli']
+#unique_celltypes = np.unique(np.concatenate([mdd_rna.obs[rna_celltype_key], mdd_atac.obs[atac_celltype_key]]))
 unique_conditions = np.unique(np.concatenate([mdd_rna.obs[rna_condition_key], mdd_atac.obs[atac_condition_key]]))
 unique_sexes = np.unique(np.concatenate([mdd_rna.obs[rna_sex_key].str.lower(), mdd_atac.obs[atac_sex_key].str.lower()]))
 
