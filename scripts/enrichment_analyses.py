@@ -166,8 +166,8 @@ mdd_rna_counts = anndata.AnnData(
     obs=rna_counts_obs,
 )
 
-import warnings; warnings.warn("Only using Ast and Oli celltypes for analysis."); unique_celltypes = ['Ast', 'Oli']
-#unique_celltypes = np.unique(np.concatenate([mdd_rna.obs[rna_celltype_key], mdd_atac.obs[atac_celltype_key]]))
+#unique_celltypes = ['Ast', 'Oli']; logger.warning(f"Only using {unique_celltypes} celltypes for analysis.")
+unique_celltypes = np.unique(np.concatenate([mdd_rna.obs[rna_celltype_key], mdd_atac.obs[atac_celltype_key]]))
 unique_conditions = np.unique(np.concatenate([mdd_rna.obs[rna_condition_key], mdd_atac.obs[atac_condition_key]]))
 unique_sexes = np.unique(np.concatenate([mdd_rna.obs[rna_sex_key].str.lower(), mdd_atac.obs[atac_sex_key].str.lower()]))
 
@@ -203,9 +203,6 @@ enrs_dict = tree()
 magma_results_dict = tree()
 mean_grn_df_filtered_dict = tree()
 mean_grn_df_filtered_pruned_dict = tree()
-
-## TEMPORARY - restrict unique celltypes
-#unique_celltypes = ['Ast', 'Mic', 'Oli', 'End', 'InN', 'OPC']
 
 ## Get BrainGMT and filter for cortical genes
 brain_gmt_cortical, brain_gmt_cortical_wGO = get_brain_gmt()
