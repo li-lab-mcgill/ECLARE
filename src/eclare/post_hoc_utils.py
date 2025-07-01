@@ -2490,28 +2490,32 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None):
 
     display(enr.res2d.sort_values('Adjusted P-value', ascending=True).head(20)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
 
-    # dotplot
-    max_pval = enr.res2d['Adjusted P-value'].max()
-    fig = gp.dotplot(enr.res2d,
-            column='Adjusted P-value',
-            figsize=(3,7),
-            title=f'{lr_filtered_type.attrs["sex"]} - {lr_filtered_type.attrs["celltype"]} ({lr_filtered_type.attrs["type"]})',
-            cmap=plt.cm.viridis,
-            size=12, # adjust dot size
-            cutoff=max_pval,
-            top_term=15,
-            show_ring=False,
-            ofname=os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs["type"]}.png'))
-    # Remove plt.show() - it's not thread-safe
-    plt.close(fig)  # Close the figure to free memory
+    if len(enr.res2d) > 0:
+        # dotplot
+        max_pval = enr.res2d['Adjusted P-value'].max()
+        fig = gp.dotplot(enr.res2d,
+                column='Adjusted P-value',
+                figsize=(3,7),
+                title=f'{lr_filtered_type.attrs["sex"]} - {lr_filtered_type.attrs["celltype"]} ({lr_filtered_type.attrs["type"]})',
+                cmap=plt.cm.viridis,
+                size=12, # adjust dot size
+                cutoff=max_pval,
+                top_term=15,
+                show_ring=False,
+                ofname=os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs["type"]}.png'))
+        # Remove plt.show() - it's not thread-safe
+        plt.close(fig)  # Close the figure to free memory
 
-    enr_sig_pathways_df = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]
-    #enr_sig_pathways_padj = enr_sig_pathways_df['Adjusted P-value'].to_list()
-    #enr_sig_pathways = enr_sig_pathways_df['Term'].to_list()
-    #enr_sig_pathways_set = set(enr_sig_pathways) if enr_sig_pathways is not None else set()
-    #enr_sig_pathways_genes = enr_sig_pathways_df['Genes'].str.split(';').to_list()
+        enr_sig_pathways_df = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]
+        #enr_sig_pathways_padj = enr_sig_pathways_df['Adjusted P-value'].to_list()
+        #enr_sig_pathways = enr_sig_pathways_df['Term'].to_list()
+        #enr_sig_pathways_set = set(enr_sig_pathways) if enr_sig_pathways is not None else set()
+        #enr_sig_pathways_genes = enr_sig_pathways_df['Genes'].str.split(';').to_list()
 
-    return enr_sig_pathways_df
+        return enr_sig_pathways_df
+    else:
+        print(f'No significant pathways found for {lr_filtered_type.attrs["type"]}')
+        return None
 
 def differential_grn_analysis(
         condition, sex, celltype,

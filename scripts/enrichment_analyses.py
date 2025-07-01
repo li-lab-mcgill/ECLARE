@@ -59,7 +59,7 @@ from eclare.data_utils import compute_LR_grns
 from eclare.post_hoc_utils import \
     extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, \
     set_env_variables, download_mlflow_runs,\
-    tree
+    tree, do_enrichr
 
 set_env_variables()
 
@@ -365,41 +365,11 @@ sns.heatmap(magma_results_df.apply(lambda x: -np.log10(x)))
 plt.savefig(os.path.join(output_dir, "magma_heatmap.png"), bbox_inches='tight', dpi=150)
 plt.close()
 
-#%% module scores for enriched pathways
 
-gene_set_scores_dict = tree()
-
-for sex in unique_sexes:
-    sex = sex.lower()
-    for celltype in unique_celltypes:
-
-        enrs_scompreg = enrs_dict[sex][celltype]['All LR']
-
-        for condition in unique_conditions:
-            adata = X_rna_dict[sex][celltype][condition]
-
-            for gene_set in enrs_scompreg.itertuples():
-                term = gene_set.Term
-                genes = gene_set.Genes.split(';')
-                term_scores = score_genes(adata, gene_list=genes, score_name=term, copy=True)
-                weighted_term_score = (term_scores.obs[term].values * term_scores.obs['proportion_of_cells']).sum()
-                gene_set_scores_dict[sex][celltype][condition][term] = weighted_term_score
-
-                #print(term, term_scores.obs[term].mean())
-
-dicts_to_save = {
-    'gene_set_scores_dict': gene_set_scores_dict,
-}
-
-for dict_name, dict_obj in dicts_to_save.items():
-    with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
-        pickle.dump(dict_obj, f)
-    print(f"Saved {dict_name}")
-
-
-#%% obtain LR for TF-peak-TG combinations
+#%% obtain LR for TF-peak-TG combinations and find enriched TF-TG pairs
 
 unique_TF_TG_combinations_dict = tree()
+enriched_TF_TG_pairs_dict = dict()
 shared_TF_TG_pairs = set()
 all_TF_TG_pairs = set()
 
@@ -433,11 +403,68 @@ for sex in unique_sexes:
 shared_TF_TG_pairs_df = pd.DataFrame(shared_TF_TG_pairs).iloc[:, 0].str.split(' - ', expand=True)
 shared_TF_TG_pairs_df.columns = ['TF', 'TG']
 shared_TF_TG_pairs_df.sort_values(by='TG', inplace=True)
-
 shared_TF_TG_pairs_df.to_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'), index=False)
+
+shared_TF_TG_pairs_df_grouped = shared_TF_TG_pairs_df.groupby('TF').agg({
+    'TG': [list, 'nunique'],
+}).sort_values(by=('TG', 'nunique'), ascending=False)
+
+## Perform enrichment analysis on TG regulons of TFs that are enriched in shared TF-TG pairs
+for TF in shared_TF_TG_pairs_df_grouped.index:
+
+    TF_TG_pairs = shared_TF_TG_pairs_df_grouped.loc[TF, ('TG', 'list')]
+    TF_TG_pairs_series = pd.Series(TF, index=TF_TG_pairs)
+    TF_TG_pairs_series.attrs = {'sex':sex, 'celltype':celltype, 'type': 'TF-TG pairs'}
+
+    enrichr_results = do_enrichr(TF_TG_pairs_series, 'TRRUST_Transcription_Factors_2019', outdir=output_dir)
+
+    if enrichr_results is not None:
+        enrichr_results_sig = enrichr_results[enrichr_results['Adjusted P-value'] < 0.05]
+        enriched_tfs = enrichr_results_sig['Term'].str.split(' ').str[0]
+        enriched_tfs_match_TF = np.isin(enriched_tfs, TF)
+    
+        if enriched_tfs_match_TF.any():
+            enriched_tfs_match_TF_list = enrichr_results_sig[enriched_tfs_match_TF]['Genes'].tolist()
+            enriched_TF_TG_pairs_dict[TF] = enriched_tfs_match_TF_list
+
 
 print(f'Shared TF-TG pairs (n={len(shared_TF_TG_pairs)} out of {len(all_TF_TG_pairs)}):')
 print(shared_TF_TG_pairs_df)
+
+#%% module scores for enriched pathways
+
+gene_set_scores_dict = tree()
+
+for sex in unique_sexes:
+    sex = sex.lower()
+    for celltype in unique_celltypes:
+
+        enrs_scompreg = enrs_dict[sex][celltype]['All LR']
+
+        if not enrs_scompreg or (hasattr(enrs_scompreg, '__len__') and len(enrs_scompreg) == 0):
+            logger.warning(f"No enrichment results found for sex: {sex}, celltype: {celltype}")
+            continue
+
+        for condition in unique_conditions:
+            adata = X_rna_dict[sex][celltype][condition]
+
+            for gene_set in enrs_scompreg.itertuples():
+                term = gene_set.Term
+                genes = gene_set.Genes.split(';')
+                term_scores = score_genes(adata, gene_list=genes, score_name=term, copy=True)
+                weighted_term_score = (term_scores.obs[term].values * term_scores.obs['proportion_of_cells']).sum()
+                gene_set_scores_dict[sex][celltype][condition][term] = weighted_term_score
+
+                #print(term, term_scores.obs[term].mean())
+
+dicts_to_save = {
+    'gene_set_scores_dict': gene_set_scores_dict,
+}
+
+for dict_name, dict_obj in dicts_to_save.items():
+    with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
+        pickle.dump(dict_obj, f)
+    print(f"Saved {dict_name}")
         
 # %%
 print ('Done!')
