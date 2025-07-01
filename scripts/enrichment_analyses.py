@@ -55,11 +55,10 @@ from joblib import Parallel, delayed
 from multiprocessing import cpu_count
 import threading
 
-from eclare.data_utils import compute_LR_grns
 from eclare.post_hoc_utils import \
     extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, \
     set_env_variables, download_mlflow_runs,\
-    tree, do_enrichr
+    tree
 
 set_env_variables()
 
