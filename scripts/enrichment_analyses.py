@@ -401,6 +401,7 @@ for dict_name, dict_obj in dicts_to_save.items():
 
 unique_TF_TG_combinations_dict = tree()
 shared_TF_TG_pairs = set()
+all_TF_TG_pairs = set()
 
 for sex in unique_sexes:
     sex = sex.lower()
@@ -426,7 +427,8 @@ for sex in unique_sexes:
             shared_TF_TG_pairs = pairs
         else:
             shared_TF_TG_pairs = shared_TF_TG_pairs.intersection(pairs)
-            
+
+        all_TF_TG_pairs = all_TF_TG_pairs.union(pairs)
 
 shared_TF_TG_pairs_df = pd.DataFrame(shared_TF_TG_pairs).iloc[:, 0].str.split(' - ', expand=True)
 shared_TF_TG_pairs_df.columns = ['TF', 'TG']
@@ -434,7 +436,7 @@ shared_TF_TG_pairs_df.sort_values(by='TG', inplace=True)
 
 shared_TF_TG_pairs_df.to_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'), index=False)
 
-print(f'Shared TF-TG pairs (n={len(shared_TF_TG_pairs)}):')
+print(f'Shared TF-TG pairs (n={len(shared_TF_TG_pairs)} out of {len(all_TF_TG_pairs)}):')
 print(shared_TF_TG_pairs_df)
         
 # %%
