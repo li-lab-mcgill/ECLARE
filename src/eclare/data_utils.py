@@ -15,7 +15,6 @@ from pybedtools import BedTool
 from glob import glob
 from tqdm import tqdm
 
-from eclare.post_hoc_utils import filter_LR_stats
 from eclare.custom_annloader import CustomAnnLoader as AnnLoader
 
 class SparseData(Dataset):
@@ -819,69 +818,3 @@ def scompreg_likelihood_ratio(tg_expression, tfrp):
         log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
 
     return log_gaussian_likelihood
-
-def compute_LR_grns(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac_dict):
-
-    X_rna_control = torch.from_numpy(X_rna_dict[sex][celltype]['Control'].X.toarray())
-    X_atac_control = torch.from_numpy(X_atac_dict[sex][celltype]['Control'].X.toarray())
-
-    X_rna_case = torch.from_numpy(X_rna_dict[sex][celltype]['Case'].X.toarray())
-    X_atac_case = torch.from_numpy(X_atac_dict[sex][celltype]['Case'].X.toarray())
-
-    X_rna_all = torch.cat([X_rna_control, X_rna_case], dim=0)
-    X_atac_all = torch.cat([X_atac_control, X_atac_case], dim=0)
-
-    mean_grn_df_filtered = mean_grn_df_filtered_dict[sex][celltype]
-
-    overlapping_target_genes = mean_grn_df_filtered['TG'].unique()
-    overlapping_tfs = mean_grn_df_filtered['TF'].unique()
-
-    mean_grn_df_filtered, tfrps_control, tg_expressions_control = get_scompreg_loglikelihood_full(mean_grn_df_filtered, X_rna_control, X_atac_control, overlapping_target_genes, overlapping_tfs, 'll_control')
-    mean_grn_df_filtered, tfrps_case, tg_expressions_case = get_scompreg_loglikelihood_full(mean_grn_df_filtered, X_rna_case, X_atac_case, overlapping_target_genes, overlapping_tfs, 'll_case')
-
-    assert list(tfrps_control.keys()) == list(tfrps_case.keys())
-    assert list(tg_expressions_control.keys()) == list(tg_expressions_case.keys())
-
-
-    for gene in tqdm(overlapping_target_genes, total=len(overlapping_target_genes), desc='Null LR'):
-
-        tfrps_control_gene = tfrps_control[gene]
-        tfrps_case_gene = tfrps_case[gene]
-        tg_expressions_control_gene = tg_expressions_control[gene]
-        tg_expressions_case_gene = tg_expressions_case[gene]
-        
-        tfrps_all_gene = pd.concat([tfrps_control_gene, tfrps_case_gene], axis=1)
-        tg_expressions_all_gene = torch.cat([tg_expressions_control_gene, tg_expressions_case_gene], dim=0).numpy()
-
-        scompreg_likelihood_ratio_lambda = lambda tfrp: scompreg_likelihood_ratio(tg_expressions_all_gene, tfrp)
-        tfrps_all_gene['scompreg_likelihood_ratio'] = tfrps_all_gene.apply(scompreg_likelihood_ratio_lambda, axis=1)
-
-        mean_grn_df_filtered.loc[tfrps_all_gene.index, 'll_all'] = tfrps_all_gene['scompreg_likelihood_ratio']
-        
-
-    LR_grns = -2 * (mean_grn_df_filtered.apply(lambda grn: grn['ll_all'] - (grn['ll_case'] + grn['ll_control']), axis=1))
-    LR_grns = LR_grns.dropna()
-
-    Z_grns = pd.Series(np.zeros_like(LR_grns))
-    LR_grns_up = pd.Series(np.zeros_like(LR_grns))
-    LR_grns_down = pd.Series(np.zeros_like(LR_grns))
-
-    LR_grns_filtered, _, _, _, _ = filter_LR_stats(LR_grns, Z_grns, LR_grns_up, LR_grns_down)
-
-    mean_grn_df_filtered['LR_grns'] = LR_grns
-    mean_grn_df_filtered_pruned = mean_grn_df_filtered.loc[LR_grns_filtered.index]
-    
-    '''
-    fig, ax = plt.subplots(figsize=(10, 5))
-    LR_grns.hist(bins=100, ax=ax)
-
-    #ax.axvline(x=lr_at_p, color='black', linestyle='--')
-    ax.axvline(x=LR_grns.quantile(0.95), color='green', linestyle='--')
-
-    ax.set_xlabel('LR')
-    ax.set_ylabel('Frequency')
-    ax.set_title('LR distribution')
-    plt.show()
-    '''
-
-    return mean_grn_df_filtered_pruned
