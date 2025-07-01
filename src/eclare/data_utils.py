@@ -861,6 +861,10 @@ def compute_LR_grns(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac
     LR_grns = -2 * (mean_grn_df_filtered.apply(lambda grn: grn['ll_all'] - (grn['ll_case'] + grn['ll_control']), axis=1))
     LR_grns_filtered = LR_grns[LR_grns > LR_grns.quantile(0.95)]
 
+    mean_grn_df_filtered['LR_grns'] = LR_grns
+    mean_grn_df_filtered_pruned = mean_grn_df_filtered[mean_grn_df_filtered['LR_grns'] > LR_grns.quantile(0.95)]
+    
+    '''
     fig, ax = plt.subplots(figsize=(10, 5))
     LR_grns.hist(bins=100, ax=ax)
 
@@ -871,8 +875,6 @@ def compute_LR_grns(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac
     ax.set_ylabel('Frequency')
     ax.set_title('LR distribution')
     plt.show()
-
-    mean_grn_df_filtered['LR_grns'] = LR_grns
-    mean_grn_df_filtered_pruned = mean_grn_df_filtered[mean_grn_df_filtered['LR_grns'] > LR_grns.quantile(0.95)]
+    '''
 
     return mean_grn_df_filtered_pruned
