@@ -281,7 +281,7 @@ def match_analyses(similarities, datasets):
     plt.suptitle('Column-softmax cosine similarities between MDD RNA and ATAC latent nuclei \n masked by optimal transport plan')
     plt.tight_layout()
 
-    sort_indices_1d = torch.flip(similarities_masked.flatten().argsort(), dims=(0,))
+    sort_indices_1d = torch.flip(similarities_masked.flatten().argsort(stable=True), dims=(0,))
     similarities_masked_idxs_sorted = [similarities_masked_idxs[i] for i in sort_indices_1d]
 
     ## OT on mean cosine similarities across datasets
@@ -706,11 +706,11 @@ def cell_gap_ot(student_logits, atac_latents, rna_latents, mdd_atac_sampled_grou
         plan = ot.partial.partial_wasserstein(a, b, 1-student_logits, m=mass)
 
     if student_logits.shape[0] > student_logits.shape[1]:
-        keep_atac_cells = plan.max(1).values.argsort()[cells_gap:].sort().values.detach().cpu().numpy()
+        keep_atac_cells = plan.max(1).values.argsort(stable=True)[cells_gap:].sort().values.detach().cpu().numpy()
         atac_latents = atac_latents[keep_atac_cells]
         mdd_atac_sampled_group = mdd_atac_sampled_group[keep_atac_cells]
     else:
-        keep_rna_cells = plan.max(0).values.argsort()[cells_gap:].sort().values.detach().cpu().numpy()
+        keep_rna_cells = plan.max(0).values.argsort(stable=True)[cells_gap:].sort().values.detach().cpu().numpy()
         rna_latents = rna_latents[keep_rna_cells]
         mdd_rna_sampled_group = mdd_rna_sampled_group[keep_rna_cells]
 
@@ -2010,7 +2010,7 @@ def get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes):
         n_lr_deg = len(lr_filtered) + deg_df['names'].nunique()
         n_lr_minus_deg = len(lr_filtered) - deg_df['names'].nunique(); assert n_lr_minus_deg > 0, 'list of DEG genes is longer than list of filtered LR genes'
 
-        where_filtered_with_excess = np.flip(lr_fitted_cdf.argsort())[:n_lr_deg]
+        where_filtered_with_excess = np.flip(lr_fitted_cdf.argsort(kind='stable'))[:n_lr_deg]
         where_filtered_with_excess_top = where_filtered_with_excess[:n_lr_minus_deg]
         where_filtered_with_excess_bottom = where_filtered_with_excess[-n_lr_minus_deg:]
 
