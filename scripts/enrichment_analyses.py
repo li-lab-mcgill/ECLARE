@@ -373,7 +373,7 @@ for sex in unique_sexes:
     sex = sex.lower()
 
     results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
-        delayed(compute_LR_grns)(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac_dict)
+        delayed(compute_LR_grns)(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac_dict, output_dir=output_dir)
         for celltype in unique_celltypes
     )
 
@@ -438,7 +438,7 @@ for sex in unique_sexes:
 
         enrs_scompreg = enrs_dict[sex][celltype]['All LR']
 
-        if not enrs_scompreg or (hasattr(enrs_scompreg, '__len__') and len(enrs_scompreg) == 0):
+        if len(enrs_scompreg) == 0:
             logger.warning(f"No enrichment results found for sex: {sex}, celltype: {celltype}")
             continue
 
