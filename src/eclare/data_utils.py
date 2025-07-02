@@ -588,7 +588,7 @@ def get_scompreg_loglikelihood_full(mean_grn_df, X_rna, X_atac, overlapping_targ
         tg_expression = X_rna[:, tg_idx]
 
         ## compute peak-tg correlations
-        peak_tg_expressions = np.concatenate([peak_expressions.argsort(dim=0, stable=True), tg_expression.argsort(dim=0, stable=True)[:,None]], axis=1)
+        peak_tg_expressions = np.concatenate([peak_expressions.argsort(0, stable=True), tg_expression.argsort(0, stable=True)[:,None]], axis=1)
         peak_tg_correlations = np.corrcoef(peak_tg_expressions.T)[:-1, -1]
         peak_tg_correlations = peak_tg_correlations[None, :]
 
@@ -681,7 +681,7 @@ def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_ge
         tg_expression = X_rna[:, tg_idx]
 
         ## compute peak-tg correlations
-        peak_tg_expressions = np.concatenate([peak_expressions.argsort(0), tg_expression.argsort(0)[:,None]], axis=1)
+        peak_tg_expressions = np.concatenate([peak_expressions.argsort(0, stable=True), tg_expression.argsort(0, stable=True)[:,None]], axis=1)
         peak_tg_correlations = np.corrcoef(peak_tg_expressions.T)[:-1, -1]
         peak_tg_correlations = peak_tg_correlations[None, :]
 
