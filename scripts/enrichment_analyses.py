@@ -56,7 +56,7 @@ from multiprocessing import cpu_count
 import threading
 
 from eclare.post_hoc_utils import \
-    extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, \
+    extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, compute_LR_grns, do_enrichr, \
     set_env_variables, download_mlflow_runs,\
     tree
 
@@ -109,7 +109,7 @@ eclare_student_model = eclare_student_model.train().to('cpu')
 #%% load data
 
 ## define decimation factor
-decimate_factor = 10
+decimate_factor = 1
 
 ## define args for mdd_setup
 args = SimpleNamespace(
@@ -415,6 +415,7 @@ for TF in shared_TF_TG_pairs_df_grouped.index:
     enrichr_results = do_enrichr(TF_TG_pairs_series, 'TRRUST_Transcription_Factors_2019', outdir=output_dir)
 
     if enrichr_results is not None:
+
         enrichr_results_sig = enrichr_results[enrichr_results['Adjusted P-value'] < 0.05]
         enriched_tfs = enrichr_results_sig['Term'].str.split(' ').str[0]
         enriched_tfs_match_TF = np.isin(enriched_tfs, TF)
