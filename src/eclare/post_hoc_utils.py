@@ -1977,7 +1977,7 @@ def filter_LR_stats(LR, Z, LR_up, LR_down, save_dir=None):
     plt.legend()
     plt.grid(True, alpha=0.3)
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, 'lr_gamma_fit.png'), bbox_inches='tight', dpi=150)
+        plt.savefig(os.path.join(save_dir, 'lr_gamma_fit_grn.png'), bbox_inches='tight', dpi=150)
     plt.close()
 
     ## filter LR values with fitted null distribution
@@ -2733,7 +2733,7 @@ def differential_grn_analysis(
     return_tuple = (sex, celltype, condition, mdd_rna_sampled_group_seacells, mdd_atac_sampled_group_seacells, overlapping_target_genes, overlapping_tfs, scompreg_loglikelihoods, std_errs, tg_expressions, tfrps, tfrp_predictions, slopes, intercepts, intercept_stderrs)
     return return_tuple
 
-def compute_LR_grns(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac_dict):
+def compute_LR_grns(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac_dict, output_dir=None):
 
     X_rna_control = torch.from_numpy(X_rna_dict[sex][celltype]['Control'].X.toarray())
     X_atac_control = torch.from_numpy(X_atac_dict[sex][celltype]['Control'].X.toarray())
@@ -2779,7 +2779,9 @@ def compute_LR_grns(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac
     LR_grns_up = pd.Series(np.zeros_like(LR_grns))
     LR_grns_down = pd.Series(np.zeros_like(LR_grns))
 
-    LR_grns_filtered, _, _, _, _ = filter_LR_stats(LR_grns, Z_grns, LR_grns_up, LR_grns_down)
+    save_dir = os.path.join(output_dir, f'{sex}_{celltype}') if output_dir is not None else None
+
+    LR_grns_filtered, _, _, _, _ = filter_LR_stats(LR_grns, Z_grns, LR_grns_up, LR_grns_down, save_dir=save_dir)
 
     mean_grn_df_filtered['LR_grns'] = LR_grns
     mean_grn_df_filtered_pruned = mean_grn_df_filtered.loc[LR_grns_filtered.index]
