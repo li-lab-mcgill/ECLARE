@@ -6,7 +6,7 @@ from eclare.post_hoc_utils import tree
 ## Create dict for methods and job_ids
 methods_id_dict = {'eclare_mdd': ['16103846']}
 base_output_dir = os.path.join(os.environ['OUTPATH'], f"enrichment_analyses_{methods_id_dict['eclare_mdd'][0]}")
-output_dir = base_output_dir + '_31'
+output_dir = base_output_dir + '_37'
 
 # Load all saved dictionaries
 dicts_to_load = [
@@ -57,3 +57,4 @@ intercept_stderrs_dict = loaded_dicts.get('intercept_stderrs_dict', tree())
 enrs_dict = loaded_dicts.get('enrs_dict', tree())
 magma_results_dict = loaded_dicts.get('magma_results_dict', tree())
 mean_grn_df_filtered_dict = loaded_dicts.get('mean_grn_df_filtered_dict', tree())
+gene_set_scores_dict = loaded_dicts.get('gene_set_scores_dict', tree())
