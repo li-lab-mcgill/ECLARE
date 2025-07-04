@@ -380,6 +380,7 @@ enriched_TF_TG_pairs_dict = dict()
 shared_TF_TG_pairs = set()
 all_TF_TG_pairs = set()
 
+## compute LR for TF-peak-TG combinations
 for sex in unique_sexes:
     sex = sex.lower()
 
@@ -391,6 +392,7 @@ for sex in unique_sexes:
     for celltype, result in zip(unique_celltypes, results):
         mean_grn_df_filtered_pruned_dict[sex][celltype] = result
 
+## find shared TF-TG pairs
 for sex in unique_sexes:
     sex = sex.lower()
     for celltype in unique_celltypes:
@@ -399,7 +401,7 @@ for sex in unique_sexes:
         unique_TF_TG_combinations_dict[sex][celltype] = unique_TF_TG_combinations_str
 
         pairs = set(unique_TF_TG_combinations_dict[sex][celltype])
-        # Initialize shared pairs with first combination
+        
         if not shared_TF_TG_pairs:
             shared_TF_TG_pairs = pairs
         else:
@@ -507,7 +509,43 @@ enrs_mdd_dn_genes = np.unique(np.hstack(enrs_mdd_dn_df['Genes'].apply(lambda x: 
 enrs_mdd_dn_genes_series = pd.Series(enrs_mdd_dn_genes, index=enrs_mdd_dn_genes)
 enrs_mdd_dn_genes_series.attrs = {'sex': 'all', 'celltype': 'all', 'type': 'MDD-DN_genes'}
 
-do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, outdir=output_dir)
+enrs_mdd_dn_genes_enrichr = do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, outdir=output_dir)
+
+## search genes with largest overlap across enriched pathways
+enrs_mdd_dn_genes_shared_TF_TG_pairs_df = shared_TF_TG_pairs_df[shared_TF_TG_pairs_df['TG'].isin(enrs_mdd_dn_genes)]
+enrs_mdd_dn_genes_shared = enrs_mdd_dn_genes_shared_TF_TG_pairs_df['TG'].unique()
+
+hits_df = pd.DataFrame(index=enrs_mdd_dn_genes_shared).assign(n_hits=0, terms_hits=None)
+
+for gene in enrs_mdd_dn_genes_shared:
+
+    terms_hits = []
+    for term_row in enrs_mdd_dn_genes_enrichr.itertuples():
+
+        term_name = term_row.Term
+        term_genes = term_row.Genes
+        term_genes_list = term_genes.split(';')
+
+        if gene in term_genes_list:
+            hits_df.loc[gene, 'n_hits'] += 1
+            terms_hits.append(term_name)
+
+    hits_df.loc[gene, 'terms_hits'] = '; '.join(terms_hits)
+
+hits_df.sort_values(by='n_hits', inplace=True, ascending=False)
+
+## Merge hits_df with shared_TF_TG_pairs_df and find TFs with multiple hits
+hits_df = hits_df.merge(shared_TF_TG_pairs_df.groupby('TG').agg({'TF': list}), left_index=True, right_on='TG', how='left')
+
+# Create dummy encoded columns for each unique TF
+unique_tfs = np.unique(np.hstack(hits_df['TF'].values))
+for tf in unique_tfs:
+    hits_df[f'TF_{tf}'] = hits_df['TF'].apply(lambda x: 1 if tf in x else 0)
+
+tfs_multiple_hits = hits_df[hits_df.iloc[:, 2:].sum(0) > 1].index.values
+
+#hits_df.to_csv(os.path.join(output_dir, 'hits_df.csv'), index=True, header=True)
+
 
 
 ## EnrichR based on all genes filtered using sc-compReg across all celltypes and sexes for which MDD-DN was significant
@@ -519,7 +557,7 @@ all_sccompreg_genes = np.unique(np.hstack([
 all_sccompreg_genes_series = pd.Series(all_sccompreg_genes, index=all_sccompreg_genes)
 all_sccompreg_genes_series.attrs = {'sex': 'all', 'celltype': 'all', 'type': 'sc-compReg_filtered_genes'}
 
-do_enrichr(all_sccompreg_genes_series, brain_gmt_cortical, outdir=output_dir)
+all_sccompreg_genes_enrichr = do_enrichr(all_sccompreg_genes_series, brain_gmt_cortical, outdir=output_dir)
 
 
 ## get all pyDESeq2 significant genes from significant_genes_dict
@@ -540,9 +578,6 @@ pydeseq2_match_length_genes_series = pd.Series(pydeseq2_match_length_genes, inde
 pydeseq2_match_length_genes_series.attrs = {'sex': 'all', 'celltype': 'all', 'type': 'pyDESeq2_significant_genes'}
 
 do_enrichr(pydeseq2_match_length_genes_series, brain_gmt_cortical, outdir=output_dir)
-
-
-
 
 
         
