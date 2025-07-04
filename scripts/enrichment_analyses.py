@@ -356,8 +356,19 @@ for dict_name, dict_obj in dicts_to_save.items():
 
 ## transform magma_results_dict to df
 magma_results_df = magma_dicts_to_df(magma_results_dict)
+magma_results_mlog10 = magma_results_df.apply(lambda x: -np.log10(x))
+
 plt.figure(figsize=(10, 8))
-sns.heatmap(magma_results_df.apply(lambda x: -np.log10(x)))
+ax = sns.heatmap(magma_results_mlog10, annot=False, cbar_kws={'label': '-log10(p-value)'})
+
+# Add asterisks for significant values (p < 0.05, i.e., -log10 > -log10(0.05))
+threshold = -np.log10(0.05)
+for i in range(magma_results_mlog10.shape[0]):
+    for j in range(magma_results_mlog10.shape[1]):
+        if magma_results_mlog10.iloc[i, j] > threshold:
+            ax.text(j + 0.5, i + 0.5, '*', ha='center', va='center', 
+                   fontsize=16, fontweight='bold', color='black')
+
 plt.savefig(os.path.join(output_dir, "magma_heatmap.png"), bbox_inches='tight', dpi=150)
 plt.close()
 
@@ -412,7 +423,7 @@ for TF in shared_TF_TG_pairs_df_grouped.index:
     TF_TG_pairs_series = pd.Series(TF, index=TF_TG_pairs)
     TF_TG_pairs_series.attrs = {'sex':sex, 'celltype':celltype, 'type': 'TF-TG pairs'}
 
-    enrichr_results = do_enrichr(TF_TG_pairs_series, 'TRRUST_Transcription_Factors_2019', outdir=output_dir)
+    enrichr_results = do_enrichr(TF_TG_pairs_series, 'TRRUST_Transcription_Factors_2019', outdir=None)
 
     if enrichr_results is not None:
 
@@ -431,6 +442,8 @@ print(shared_TF_TG_pairs_df)
 #%% module scores for enriched pathways
 
 gene_set_scores_dict = tree()
+ttest_comp_df_dict = tree()
+enrs_mdd_dn_list = []
 
 for sex in unique_sexes:
     sex = sex.lower()
@@ -438,10 +451,18 @@ for sex in unique_sexes:
 
         enrs_scompreg = enrs_dict[sex][celltype]['All LR']
 
+        ## extract MDD-DN pathway
+        enrs_mdd_dn = enrs_scompreg[enrs_scompreg.Term == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
+        if len(enrs_mdd_dn) > 0:
+            enrs_mdd_dn.index = [f'{sex} - {celltype}']
+            enrs_mdd_dn = enrs_mdd_dn.assign(sex=sex, celltype=celltype)
+            enrs_mdd_dn_list.append(enrs_mdd_dn)
+
         if len(enrs_scompreg) == 0:
             logger.warning(f"No enrichment results found for sex: {sex}, celltype: {celltype}")
             continue
 
+        ## compute module scores for all pathways
         for condition in unique_conditions:
             adata = X_rna_dict[sex][celltype][condition]
 
@@ -449,10 +470,27 @@ for sex in unique_sexes:
                 term = gene_set.Term
                 genes = gene_set.Genes.split(';')
                 term_scores = score_genes(adata, gene_list=genes, score_name=term, copy=True)
-                weighted_term_score = (term_scores.obs[term].values * term_scores.obs['proportion_of_cells']).sum()
+                #weighted_term_score = (term_scores.obs[term].values * term_scores.obs['proportion_of_cells']).sum()
+                weighted_term_score = DescrStatsW(term_scores.obs[term].values, weights=term_scores.obs['proportion_of_cells'].values)
                 gene_set_scores_dict[sex][celltype][condition][term] = weighted_term_score
 
-                #print(term, term_scores.obs[term].mean())
+        ## compute weighted t-tests for all pathways based on module scores
+        ttest_comp_df_dict_list = []
+        for term in enrs_scompreg.Term:
+            d1 = gene_set_scores_dict[sex][celltype]['Case'][term]
+            d2 = gene_set_scores_dict[sex][celltype]['Control'][term]
+
+            ## case vs 0
+            tstat, pval, df = d1.ttest_mean(0)
+
+            ## case vs control
+            cm = d1.get_compare(d2)
+            tstat_comp, pvalue_comp, df_comp = cm.ttest_ind(usevar='unequal', alternative='two-sided')
+            ttest_comp_df = pd.DataFrame({'tstat': tstat_comp, 'pvalue': pvalue_comp, 'df': df_comp}, index=[term])
+            ttest_comp_df_dict_list.append(ttest_comp_df)
+
+        ttest_comp_df_dict[sex][celltype] = pd.concat(ttest_comp_df_dict_list)
+
 
 dicts_to_save = {
     'gene_set_scores_dict': gene_set_scores_dict,
@@ -462,6 +500,51 @@ for dict_name, dict_obj in dicts_to_save.items():
     with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
         pickle.dump(dict_obj, f)
     print(f"Saved {dict_name}")
+
+## EnrichR based on MDD-DN genes across all celltypes and sexes
+enrs_mdd_dn_df = pd.concat(enrs_mdd_dn_list)
+enrs_mdd_dn_genes = np.unique(np.hstack(enrs_mdd_dn_df['Genes'].apply(lambda x: x.split(';')).values))
+enrs_mdd_dn_genes_series = pd.Series(enrs_mdd_dn_genes, index=enrs_mdd_dn_genes)
+enrs_mdd_dn_genes_series.attrs = {'sex': 'all', 'celltype': 'all', 'type': 'MDD-DN_genes'}
+
+do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, outdir=output_dir)
+
+
+## EnrichR based on all genes filtered using sc-compReg across all celltypes and sexes for which MDD-DN was significant
+all_sccompreg_genes = np.unique(np.hstack([
+    mean_grn_df_filtered_dict[sex][celltype]['TG'].unique() for sex in unique_sexes for celltype in unique_celltypes
+    if enrs_mdd_dn_df['sex'].isin([sex]).any() and enrs_mdd_dn_df['celltype'].isin([celltype]).any()
+    ]))
+
+all_sccompreg_genes_series = pd.Series(all_sccompreg_genes, index=all_sccompreg_genes)
+all_sccompreg_genes_series.attrs = {'sex': 'all', 'celltype': 'all', 'type': 'sc-compReg_filtered_genes'}
+
+do_enrichr(all_sccompreg_genes_series, brain_gmt_cortical, outdir=output_dir)
+
+
+## get all pyDESeq2 significant genes from significant_genes_dict
+#all_significant_genes = np.unique(np.hstack([significant_genes_dict[sex][celltype].values for sex in unique_sexes for celltype in unique_celltypes]))
+all_pydeseq2_padj = [pydeseq2_results_dict[sex][celltype]['padj'] for sex in unique_sexes for celltype in unique_celltypes]
+all_pydeseq2_padj_series = pd.concat(all_pydeseq2_padj).dropna()
+all_pydeseq2_padj_series.sort_values(inplace=True)
+all_pydeseq2_padj_series.drop_duplicates(keep='first', inplace=True)
+
+#pydeseq2_match_length_idxs = all_pydeseq2_padj_series.loc[all_pydeseq2_padj_series < 0.05]
+#pydeseq2_match_length_idxs = all_pydeseq2_padj_series.iloc[:len(enrs_mdd_dn_genes)]
+pydeseq2_match_length_idxs = all_pydeseq2_padj_series.iloc[:len(all_sccompreg_genes)]
+
+pydeseq2_match_length_idxs = pydeseq2_match_length_idxs.index.values.astype(int)
+pydeseq2_match_length_genes = mdd_rna.var_names[pydeseq2_match_length_idxs]
+
+pydeseq2_match_length_genes_series = pd.Series(pydeseq2_match_length_genes, index=pydeseq2_match_length_genes)
+pydeseq2_match_length_genes_series.attrs = {'sex': 'all', 'celltype': 'all', 'type': 'pyDESeq2_significant_genes'}
+
+do_enrichr(pydeseq2_match_length_genes_series, brain_gmt_cortical, outdir=output_dir)
+
+
+
+
+
         
 # %%
 print ('Done!')

@@ -790,8 +790,8 @@ def run_SEACells(adata_train, adata_apply, build_kernel_on, redo_umap=False, key
         SEACells.plot.plot_2D(adata_train, key=key, colour_metacells=True, save_as=os.path.join(save_dir, f'seacells_umap.png'))
 
     ## add proportion of cells per SEACell
-    SEACell_ad_train.obs['proportion_of_cells'] = n_cells_per_SEACell / n_cells_per_SEACell.sum()
-    SEACell_ad_apply.obs['proportion_of_cells'] = n_cells_per_SEACell / n_cells_per_SEACell.sum()
+    SEACell_ad_train.obs['proportion_of_cells'] = n_cells_per_SEACell# / n_cells_per_SEACell.sum()
+    SEACell_ad_apply.obs['proportion_of_cells'] = n_cells_per_SEACell# / n_cells_per_SEACell.sum()
 
     ## remove raw attribute
     adata_train.raw = None
@@ -2489,6 +2489,8 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None):
 
     display(enr.res2d.sort_values('Adjusted P-value', ascending=True).head(20)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
 
+    ofname = None if outdir is None else os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs["type"]}.png')
+
     if len(enr.res2d) > 0:
         # dotplot
         max_pval = enr.res2d['Adjusted P-value'].max()
@@ -2496,12 +2498,12 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None):
                 column='Adjusted P-value',
                 figsize=(3,7),
                 title=f'{lr_filtered_type.attrs["sex"]} - {lr_filtered_type.attrs["celltype"]} ({lr_filtered_type.attrs["type"]})',
-                cmap=plt.cm.viridis,
+                cmap=plt.cm.winter,
                 size=12, # adjust dot size
                 cutoff=max_pval,
                 top_term=15,
                 show_ring=False,
-                ofname=os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs["type"]}.png'))
+                ofname=ofname)
         # Remove plt.show() - it's not thread-safe
         plt.close(fig)  # Close the figure to free memory
 
