@@ -8,7 +8,7 @@ from scanpy.tl import leiden
 from scanpy.pp import neighbors
 
 from scib_metrics.nearest_neighbors import jax_approx_min_k
-from scib_metrics import ilisi_knn, nmi_ari_cluster_labels_leiden, silhouette_label
+from scib_metrics import ilisi_knn, nmi_ari_cluster_labels_leiden, silhouette_label, kbet
 
 from jax import jit
 import jax.numpy as jnp
@@ -57,6 +57,7 @@ def unpaired_metrics(latents, labels, modalities, batches, k=30):
     ## multimodal & batch integration
     multimodal_ilisi = ilisi_knn(neighbors, modalities, scale=True)
     batches_ilisi = ilisi_knn(neighbors, batches, scale=True)
+    batches_kbet_acceptance_rate, _, _ = kbet(neighbors, batches)
 
     ## update nmi_ari_dict to include other metrics
     unpaired_metrics.update({
@@ -64,7 +65,8 @@ def unpaired_metrics(latents, labels, modalities, batches, k=30):
         'ari': nmi_ari_dict['ari'],
         'silhouette_celltype': silhouette_celltype,
         'multimodal_ilisi': multimodal_ilisi,
-        'batches_ilisi': batches_ilisi
+        'batches_ilisi': batches_ilisi,
+        'batches_kbet_acceptance_rate': batches_kbet_acceptance_rate
     })
 
     return unpaired_metrics

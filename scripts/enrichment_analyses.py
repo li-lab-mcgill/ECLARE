@@ -143,6 +143,9 @@ atac_subject_key='BrainID'
 rna_sex_key = 'Sex'
 atac_sex_key = 'sex'
 
+rna_batch_key = 'Batch'
+atac_batch_key = 'batch'
+
 mdd_atac = atac[::decimate_factor].to_memory()
 mdd_rna = rna[::decimate_factor].to_memory()
 
@@ -261,7 +264,7 @@ for sex in unique_sexes:
 
         results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
                 delayed(safe_differential_grn_analysis)(
-                    condition, sex, celltype, mdd_rna, mdd_atac, rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key, eclare_student_model, mean_grn_df, \
+                    condition, sex, celltype, mdd_rna, mdd_atac, rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, rna_batch_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key, atac_batch_key, eclare_student_model, mean_grn_df, \
                     overlapping_subjects, subjects_by_condition_n_sex_df, cutoff=5025, ot_alignment_type='all', subdir=os.path.join(output_dir, f'{sex}_{celltype}', condition)
                 )
             for celltype in unique_celltypes
