@@ -1642,9 +1642,11 @@ def get_pseudo_replicates_counts(sex, celltype, rna_scaled_with_counts, mdd_rna_
             rna_subject_var = rna_sampled.raw.var.set_index('_index')
 
             subject_condition = rna_scaled_with_counts.obs[rna_condition_key][rna_scaled_with_counts.obs[rna_subject_key] == subject].iloc[0]
+            batch = rna_scaled_with_counts.obs['Batch'][rna_scaled_with_counts.obs[rna_subject_key] == subject].iloc[0]
+
             rna_subject_obs = pd.DataFrame(
-                np.hstack([subject_condition, sex, celltype]).reshape(1, -1),
-                columns=[rna_condition_key, rna_sex_key, rna_celltype_key],
+                np.hstack([batch, subject_condition, sex, celltype]).reshape(1, -1),
+                columns=['Batch', rna_condition_key, rna_sex_key, rna_celltype_key],
                 index=[subject],
             )
 
@@ -1670,7 +1672,7 @@ def run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key,
     dds = DeseqDataSet(
         counts=counts,
         metadata=metadata,
-        design_factors=rna_condition_key,
+        design_factors=['Batch', rna_condition_key],
         ref_level=[rna_condition_key, "Control"],
         refit_cooks=True,
         inference=inference,

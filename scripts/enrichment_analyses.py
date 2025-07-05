@@ -229,12 +229,11 @@ dicts_to_save = {
     'significant_genes_dict': significant_genes_dict,
 }
 
-file_lock = threading.Lock()
 for dict_name, dict_obj in dicts_to_save.items():
-    with file_lock:
-        with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
-            pickle.dump(dict_obj, f)
-        print(f"Saved {dict_name}")
+    with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
+        pickle.dump(dict_obj, f)
+    print(f"Saved {dict_name}")
+
 
 #%% sc-compReg analysis
 
