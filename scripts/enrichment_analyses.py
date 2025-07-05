@@ -217,18 +217,11 @@ mean_grn_df = all_dicts[-1]
 for sex in unique_sexes:
     sex = sex.lower()
     
-    results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
-        delayed(process_celltype)(
-            sex, celltype, rna_scaled_with_counts, mdd_rna.var,
-            rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key
-        )
-        for celltype in unique_celltypes
-    )
-    
-    # Process results
-    for celltype, (mdd_subjects_counts_adata, pydeseq2_results, significant_genes) in zip(unique_celltypes, results):
-        pydeseq2_results_dict[sex][celltype] = pydeseq2_results
-        significant_genes_dict[sex][celltype] = significant_genes
+    for celltype in unique_celltypes:
+
+        results = process_celltype(sex, celltype, rna_scaled_with_counts, mdd_rna.var, rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key)
+        pydeseq2_results_dict[sex][celltype] = results[1]
+        significant_genes_dict[sex][celltype] = results[2]
 
 # Save results with thread-safe file writing
 dicts_to_save = {
