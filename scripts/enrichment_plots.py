@@ -6,7 +6,7 @@ from eclare.post_hoc_utils import tree
 ## Create dict for methods and job_ids
 methods_id_dict = {'eclare_mdd': ['16103846']}
 base_output_dir = os.path.join(os.environ['OUTPATH'], f"enrichment_analyses_{methods_id_dict['eclare_mdd'][0]}")
-output_dir = base_output_dir + '_37'
+output_dir = base_output_dir + '_38'
 
 # Load all saved dictionaries
 dicts_to_load = [

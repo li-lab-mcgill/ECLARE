@@ -1796,7 +1796,6 @@ def compute_scompreg_loglikelihoods(sex, celltype,
     LR_precomputed = -2 * (scompreg_loglikelihoods_precomputed_df.apply(lambda gene: gene['all'] - (gene['case'] + gene['control']), axis=1))
 
     ## re-computed log likelihoods and confirm that same as pre-computed
-    print(f'Verifying condition-specific log likelihoods')
     for condition in ['Case', 'Control']:
 
         tfrps               = tfrps_dict[sex][celltype][condition]
@@ -1833,7 +1832,7 @@ def compute_scompreg_loglikelihoods(sex, celltype,
     tfrp_corrs = tfrp_predictions_all.corrwith(tfrps_all, method='kendall')
     tfrp_corrs = tfrp_corrs.dropna()
 
-    print(f'Computing pooled log likelihoods')
+    #print(f'Computing pooled log likelihoods')
     diffs_all = []
     scompreg_loglikelihoods_all = {}
 
@@ -1910,7 +1909,7 @@ def compute_scompreg_loglikelihoods(sex, celltype,
     t_slopes.name = 't_slopes'
     LR_t_df = pd.merge(left=LR, right=t_slopes.abs(), left_index=True, right_index=True, how='inner')
     LR_t_corr = LR_t_df.corr(method='spearman')['LR']['t_slopes']
-    print(f'Correlation between LR and absolute value of slopes t-statistic: {LR_t_corr:.2f}')
+    #print(f'Correlation between LR and absolute value of slopes t-statistic: {LR_t_corr:.2f}')
 
     ## separate up and down LR and Z based on sign of t-statistic
     LR_up = LR[t_slopes > 0]
@@ -2077,6 +2076,7 @@ def merge_grn_lr_filtered(mean_grn_df, lr_filtered, output_dir):
         keep_attrs=["lrCorr"]
         )
 
+    '''
     tg_dist_counts_sorted = mean_grn_df_filtered.groupby('TG')[['dist']].mean().merge(mean_grn_df_filtered['TG'].value_counts(), left_index=True, right_on='TG').sort_values('dist').head(20)
     display(tg_dist_counts_sorted)
 
@@ -2087,6 +2087,7 @@ def merge_grn_lr_filtered(mean_grn_df, lr_filtered, output_dir):
     display(tg_grn)
     print(f'{genes.loc[gene, "chrom"].drop_duplicates().values[0]}:{min(tg_grn_bounds)}-{max(tg_grn_bounds)}')
     print(genes.loc[gene,['chrom','chromStart','chromEnd','name']].drop_duplicates())
+    '''
 
     return mean_grn_df_filtered
 
@@ -2193,15 +2194,15 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
     for gene_set_name, gene_set in gene_sets.items():
 
         if pd.Series(gene_set).str.startswith('ENSG').all():
-            print(f"IDs are already Ensembl IDs")
+            #print(f"IDs are already Ensembl IDs")
             set_file_dict[gene_set_name] = gene_set
 
         else:
-            print(f"IDs are not Ensembl IDs, converting to Ensembl IDs")
+            #print(f"IDs are not Ensembl IDs, converting to Ensembl IDs")
 
             if genes_raw_ids.str.startswith('ENSG').all():
 
-                print(f"IDs are Ensembl IDs")
+                #print(f"IDs are Ensembl IDs")
 
                 significant_genes_mg_df = mg.querymany(
                     gene_set,
@@ -2210,6 +2211,7 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
                     species="human",
                     size=1,
                     as_dataframe=True,
+                    verbose=False
                     )
                 
                 sig_ensembl_ids = significant_genes_mg_df['ensembl.gene'].dropna()
@@ -2223,11 +2225,11 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
 
             else:
 
-                print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
+                #print(f"IDs are not Ensembl (defaulting to Entrez IDs)")
 
                 significant_genes_entrez_ids = []
                 for gene in tqdm(gene_set, total=len(gene_set), desc='Getting entrez IDs for significant genes'):
-                    entrez_id_res = mg.query(gene, species='human', scopes='entrezgenes', size=1)
+                    entrez_id_res = mg.query(gene, species='human', scopes='entrezgenes', size=1, verbose=False)
                     entrez_id = entrez_id_res['hits'][0]['_id']
                     significant_genes_entrez_ids.append(entrez_id)
 
@@ -2281,15 +2283,16 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
         --out {magma_out_path}"""
 
     # Use subprocess.run instead of os.system for better thread safety
-    subprocess.run(magma_gs_cmd, shell=True, check=True)
-    subprocess.run(magma_cvar_cmd, shell=True, check=True)
-    subprocess.run(magma_gs_cvar_interaction_cmd, shell=True, check=True)
+    #subprocess.run(magma_gs_cmd, shell=True, check=True)
+    #subprocess.run(magma_cvar_cmd, shell=True, check=True)
+    subprocess.run(magma_gs_cvar_interaction_cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     ## check content of output file and log file
     logfile = magma_out_path + '.log'
     outfile = magma_out_path + '.gsa.out'
-    outfile_self = magma_out_path + '.gsa.self.out'
+    #outfile_self = magma_out_path + '.gsa.self.out'
 
+    '''
     with open(logfile, 'r') as f:
         for line in f:
             print(line)
@@ -2299,6 +2302,7 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
     with open(outfile_self, 'r') as f:
         for line in f:
             print(line)
+    '''
 
     ## check number of lines in outfile to establish skiprows - depends on whether first line is # TOTAL_GENES or # MEAN_SAMPLE_SIZE
     with open(outfile, 'r') as f:
@@ -2758,7 +2762,7 @@ def compute_LR_grns(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac
     assert list(tg_expressions_control.keys()) == list(tg_expressions_case.keys())
 
 
-    for gene in tqdm(overlapping_target_genes, total=len(overlapping_target_genes), desc='Null LR'):
+    for gene in overlapping_target_genes:
 
         tfrps_control_gene = tfrps_control[gene]
         tfrps_case_gene = tfrps_case[gene]

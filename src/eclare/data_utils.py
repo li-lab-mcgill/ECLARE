@@ -561,7 +561,7 @@ def get_scompreg_loglikelihood_full(mean_grn_df, X_rna, X_atac, overlapping_targ
     tfrps = {}
     tg_expressions = {}
 
-    for gene in tqdm(overlapping_target_genes):
+    for gene in overlapping_target_genes:
 
         mean_grn_df_gene = mean_grn_df_grouped.get_group(gene)
         mean_grn_df_gene = mean_grn_df_gene[mean_grn_df_gene['TF'].isin(overlapping_tfs)]
