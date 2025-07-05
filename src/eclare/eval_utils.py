@@ -48,6 +48,7 @@ def unpaired_metrics(latents, labels, modalities, batches, k=30):
 
     ## get neighbors object & initialize metrics dict
     neighbors = jax_approx_min_k(latents.detach().cpu(), k)
+    neighbors.distances = neighbors.distances.astype(np.float64)
     unpaired_metrics = {}
 
     ## bioconservation
