@@ -2509,7 +2509,10 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None):
                 show_ring=False,
                 ofname=ofname)
         # Remove plt.show() - it's not thread-safe
-        plt.close(fig)  # Close the figure to free memory
+        if ofname is not None:
+            plt.close(fig)  # Close the figure to free memory
+        else:
+            plt.show()
 
         enr_sig_pathways_df = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]
         #enr_sig_pathways_padj = enr_sig_pathways_df['Adjusted P-value'].to_list()
@@ -2882,6 +2885,44 @@ def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfr
     )
 
     return merged_dict, magma_results_series, mean_grn_df_filtered
+
+def find_hits_overlap(gene_list, enrs, shared_TF_TG_pairs_df):
+
+    hits_df = pd.DataFrame(index=gene_list).assign(n_hits=0, terms_hits=None)
+
+    for gene in gene_list:
+
+        terms_hits = []
+        for term_row in enrs.itertuples():
+
+            term_name = term_row.Term
+            term_genes = term_row.Genes
+            term_genes_list = term_genes.split(';')
+
+            if gene in term_genes_list:
+                hits_df.loc[gene, 'n_hits'] += 1
+                terms_hits.append(term_name)
+
+        hits_df.loc[gene, 'terms_hits'] = '; '.join(terms_hits)
+
+    hits_df.sort_values(by='n_hits', inplace=True, ascending=False)
+
+    ## Merge hits_df with shared_TF_TG_pairs_df and find TFs with multiple hits
+    hits_df = hits_df.merge(shared_TF_TG_pairs_df.groupby('TG').agg({'TF': list}), left_index=True, right_on='TG', how='left')
+
+    # Create dummy encoded columns for each unique TF
+    unique_tfs = np.unique(np.hstack(hits_df['TF'].values))
+    for tf in unique_tfs:
+        hits_df[f'TF_{tf}'] = hits_df['TF'].apply(lambda x: 1 if tf in x else 0)
+
+    tfs_multiple_hits_bool = hits_df.loc[:, hits_df.columns.str.startswith('TF_')].sum(0) > 1
+    tfs_multiple_hits_names = tfs_multiple_hits_bool[tfs_multiple_hits_bool].index.values
+    tfs_multiple_hits = hits_df.loc[(hits_df.loc[:,tfs_multiple_hits_names] == 1).values.flatten()]
+    #hits_df.to_csv(os.path.join(output_dir, 'hits_df.csv'), index=True, header=True)
+
+    tfs_multiple_hits = tfs_multiple_hits.drop(columns=hits_df.columns[hits_df.columns.str.startswith('TF_')])
+
+    return hits_df, tfs_multiple_hits
 
 def set_env_variables(config_path='../config'):
 

@@ -57,7 +57,7 @@ from multiprocessing import cpu_count
 import threading
 
 from eclare.post_hoc_utils import \
-    extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, compute_LR_grns, do_enrichr, \
+    extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, compute_LR_grns, do_enrichr, find_hits_overlap, \
     set_env_variables, download_mlflow_runs,\
     tree
 
@@ -497,12 +497,15 @@ for sex in unique_sexes:
 
 dicts_to_save = {
     'gene_set_scores_dict': gene_set_scores_dict,
+    'ttest_comp_df_dict': ttest_comp_df_dict,
 }
 
 for dict_name, dict_obj in dicts_to_save.items():
     with open(os.path.join(output_dir, f"{dict_name}.pkl"), "wb") as f:
         pickle.dump(dict_obj, f)
     print(f"Saved {dict_name}")
+
+#%% Narrow down to TF-TG pairs that are enriched in MDD-DN and sc-compReg, across all celltypes and sexes
 
 ## EnrichR based on MDD-DN genes across all celltypes and sexes
 enrs_mdd_dn_df = pd.concat(enrs_mdd_dn_list)
@@ -516,45 +519,10 @@ enrs_mdd_dn_genes_enrichr = do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_corti
 enrs_mdd_dn_genes_shared_TF_TG_pairs_df = shared_TF_TG_pairs_df[shared_TF_TG_pairs_df['TG'].isin(enrs_mdd_dn_genes)]
 enrs_mdd_dn_genes_shared = enrs_mdd_dn_genes_shared_TF_TG_pairs_df['TG'].unique()
 
-
-def find_hits_overlap(gene_list, enrs, shared_TF_TG_pairs_df):
-
-    hits_df = pd.DataFrame(index=gene_list).assign(n_hits=0, terms_hits=None)
-
-    for gene in gene_list:
-
-        terms_hits = []
-        for term_row in enrs.itertuples():
-
-            term_name = term_row.Term
-            term_genes = term_row.Genes
-            term_genes_list = term_genes.split(';')
-
-            if gene in term_genes_list:
-                hits_df.loc[gene, 'n_hits'] += 1
-                terms_hits.append(term_name)
-
-        hits_df.loc[gene, 'terms_hits'] = '; '.join(terms_hits)
-
-    hits_df.sort_values(by='n_hits', inplace=True, ascending=False)
-
-    ## Merge hits_df with shared_TF_TG_pairs_df and find TFs with multiple hits
-    hits_df = hits_df.merge(shared_TF_TG_pairs_df.groupby('TG').agg({'TF': list}), left_index=True, right_on='TG', how='left')
-
-    # Create dummy encoded columns for each unique TF
-    unique_tfs = np.unique(np.hstack(hits_df['TF'].values))
-    for tf in unique_tfs:
-        hits_df[f'TF_{tf}'] = hits_df['TF'].apply(lambda x: 1 if tf in x else 0)
-
-    tfs_multiple_hits_bool = hits_df.loc[:, hits_df.columns.str.startswith('TF_')].sum(0) > 1
-    tfs_multiple_hits_names = tfs_multiple_hits_bool[tfs_multiple_hits_bool].index.values
-    tfs_multiple_hits = hits_df.loc[(hits_df.loc[:,tfs_multiple_hits_names] == 1).values.flatten()]
-    #hits_df.to_csv(os.path.join(output_dir, 'hits_df.csv'), index=True, header=True)
-
-    return hits_df, tfs_multiple_hits
-
 if len(enrs_mdd_dn_genes_shared) > 0:
     enrs_mdd_dn_hits_df, enrs_mdd_dn_tfs_multiple_hits = find_hits_overlap(enrs_mdd_dn_genes_shared, enrs_mdd_dn_genes_enrichr, shared_TF_TG_pairs_df)
+    enrs_mdd_dn_hits_df.to_csv(os.path.join(output_dir, 'enrs_mdd_dn_hits_df.csv'), index=True, header=True)
+    enrs_mdd_dn_tfs_multiple_hits.to_csv(os.path.join(output_dir, 'enrs_mdd_dn_tfs_multiple_hits.csv'), index=True, header=True)
 
 ## EnrichR based on all genes filtered using sc-compReg across all celltypes and sexes for which MDD-DN was significant
 all_sccompreg_genes = np.unique(np.hstack([
@@ -572,7 +540,8 @@ all_sccompreg_genes_shared = all_sccompreg_genes_shared_TF_TG_pairs_df['TG'].uni
 
 if len(all_sccompreg_genes_shared) > 0:
     all_sccompreg_hits_df, all_sccompreg_tfs_multiple_hits = find_hits_overlap(all_sccompreg_genes_shared, all_sccompreg_genes_enrichr, all_sccompreg_genes_shared_TF_TG_pairs_df)
-
+    all_sccompreg_hits_df.to_csv(os.path.join(output_dir, 'all_sccompreg_hits_df.csv'), index=True, header=True)
+    all_sccompreg_tfs_multiple_hits.to_csv(os.path.join(output_dir, 'all_sccompreg_tfs_multiple_hits.csv'), index=True, header=True)
 
 ## get all pyDESeq2 significant genes from significant_genes_dict
 #all_significant_genes = np.unique(np.hstack([significant_genes_dict[sex][celltype].values for sex in unique_sexes for celltype in unique_celltypes]))
@@ -591,8 +560,15 @@ pydeseq2_match_length_genes = mdd_rna.var_names[pydeseq2_match_length_idxs]
 pydeseq2_match_length_genes_series = pd.Series(pydeseq2_match_length_genes, index=pydeseq2_match_length_genes)
 pydeseq2_match_length_genes_series.attrs = {'sex': 'all', 'celltype': 'all', 'type': 'pyDESeq2_significant_genes'}
 
-do_enrichr(pydeseq2_match_length_genes_series, brain_gmt_cortical, outdir=output_dir)
+pydeseq2_match_length_genes_enrichr = do_enrichr(pydeseq2_match_length_genes_series, brain_gmt_cortical, outdir=output_dir)
 
+pydeseq2_match_length_genes_shared_TF_TG_pairs_df = shared_TF_TG_pairs_df[shared_TF_TG_pairs_df['TG'].isin(pydeseq2_match_length_genes)]
+pydeseq2_match_length_genes_shared = pydeseq2_match_length_genes_shared_TF_TG_pairs_df['TG'].unique()
+
+if len(pydeseq2_match_length_genes_shared) > 0:
+    pydeseq2_match_length_genes_hits_df, pydeseq2_match_length_genes_tfs_multiple_hits = find_hits_overlap(pydeseq2_match_length_genes_shared, pydeseq2_match_length_genes_enrichr, pydeseq2_match_length_genes_shared_TF_TG_pairs_df)
+    pydeseq2_match_length_genes_hits_df.to_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_hits_df.csv'), index=True, header=True)
+    pydeseq2_match_length_genes_tfs_multiple_hits.to_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_tfs_multiple_hits.csv'), index=True, header=True)
 
         
 # %%
