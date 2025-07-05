@@ -36,6 +36,7 @@ import subprocess
 
 from eclare.models import load_CLIP_model
 from eclare.setup_utils import return_setup_func_from_dataset, mdd_setup
+from eclare.eval_utils import unpaired_metrics
 from eclare.data_utils import get_scompreg_loglikelihood, filter_mean_grn, scompreg_likelihood_ratio, get_scompreg_loglikelihood_full
 
 
@@ -2530,7 +2531,7 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None):
 def differential_grn_analysis(
         condition, sex, celltype,
         mdd_rna, mdd_atac,
-        rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key,
+        rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, rna_batch_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key, atac_batch_key,
         eclare_student_model, mean_grn_df, overlapping_subjects, subjects_by_condition_n_sex_df, cutoff=5025, ot_alignment_type='all', subdir=None
         ):
 
@@ -2692,6 +2693,14 @@ def differential_grn_analysis(
     ## plot UMAP of aligned RNA latents and ATAC latents
     rna_latents, atac_latents = get_latents(eclare_student_model, mdd_rna_aligned, mdd_atac_aligned, return_tensor=True)
     umap_embedder, _, _ = plot_umap_embeddings(rna_latents, atac_latents, [celltype]*len(rna_latents), [celltype]*len(atac_latents), [condition]*len(rna_latents), [condition]*len(atac_latents), color_map_ct={celltype: 'black'}, title=f'{sex} - {celltype} - {condition}', umap_embedding=None, save_path=os.path.join(subdir, f'umap_rna_atac.png'))
+
+    ## get unpaired metrics
+    rna_atac_latents = torch.cat([rna_latents, atac_latents], dim=0)
+    rna_atac_labels     = np.hstack([mdd_rna_aligned.obs[rna_celltype_key], mdd_atac_aligned.obs[atac_celltype_key]])
+    rna_atac_batches    = np.hstack([mdd_rna_aligned.obs[rna_batch_key], mdd_atac_aligned.obs[atac_batch_key]])
+    rna_atac_modalities = np.hstack([ np.repeat('rna', len(rna_latents)) , np.repeat('atac', len(atac_latents)) ])
+
+    unpaired_metrics_dict = unpaired_metrics(rna_atac_latents, rna_atac_labels, rna_atac_modalities, rna_atac_batches)
 
     ## get mean GRN from brainSCOPE
     mean_grn_df, mdd_rna_sampled_group, mdd_atac_sampled_group = filter_mean_grn(mean_grn_df, mdd_rna_aligned, mdd_atac_aligned)
