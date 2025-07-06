@@ -1,12 +1,13 @@
 import os
 import pickle
+import pandas as pd
 
 from eclare.post_hoc_utils import tree
 
 ## Create dict for methods and job_ids
 methods_id_dict = {'eclare_mdd': ['16103846']}
 base_output_dir = os.path.join(os.environ['OUTPATH'], f"enrichment_analyses_{methods_id_dict['eclare_mdd'][0]}")
-output_dir = base_output_dir + '_38'
+output_dir = base_output_dir + '_41'
 
 # Load all saved dictionaries
 dicts_to_load = [
@@ -58,3 +59,6 @@ enrs_dict = loaded_dicts.get('enrs_dict', tree())
 magma_results_dict = loaded_dicts.get('magma_results_dict', tree())
 mean_grn_df_filtered_dict = loaded_dicts.get('mean_grn_df_filtered_dict', tree())
 gene_set_scores_dict = loaded_dicts.get('gene_set_scores_dict', tree())
+
+## Load CSV files and other file types
+shared_TF_TG_pairs_df = pd.read_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'))
