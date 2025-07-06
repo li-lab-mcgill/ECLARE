@@ -2488,7 +2488,7 @@ def plot_pathway_ranks(pathway_ranks, stem=True, save_path=None):
         plt.savefig(save_path, bbox_inches='tight', dpi=150)
     plt.close()
 
-def do_enrichr(lr_filtered_type, pathways, outdir=None):
+def do_enrichr(lr_filtered_type, pathways, filter_var='Adjusted P-value', outdir=None):
 
     enr = gp.enrichr(lr_filtered_type.index.to_list(),
                         gene_sets=pathways,
@@ -2517,7 +2517,7 @@ def do_enrichr(lr_filtered_type, pathways, outdir=None):
         else:
             plt.show()
 
-        enr_sig_pathways_df = enr.res2d[enr.res2d['Adjusted P-value'] < 0.05]
+        enr_sig_pathways_df = enr.res2d[enr.res2d[filter_var] < 0.05]
         #enr_sig_pathways_padj = enr_sig_pathways_df['Adjusted P-value'].to_list()
         #enr_sig_pathways = enr_sig_pathways_df['Term'].to_list()
         #enr_sig_pathways_set = set(enr_sig_pathways) if enr_sig_pathways is not None else set()
@@ -2928,7 +2928,7 @@ def find_hits_overlap(gene_list, enrs, shared_TF_TG_pairs_df):
 
     tfs_multiple_hits_bool = hits_df.loc[:, hits_df.columns.str.startswith('TF_')].sum(0) > 1
     tfs_multiple_hits_names = tfs_multiple_hits_bool[tfs_multiple_hits_bool].index.values
-    tfs_multiple_hits = hits_df.loc[(hits_df.loc[:,tfs_multiple_hits_names] == 1).values.flatten()]
+    tfs_multiple_hits = hits_df.loc[(hits_df.loc[:,tfs_multiple_hits_names] == 1).values.any(1)]
     #hits_df.to_csv(os.path.join(output_dir, 'hits_df.csv'), index=True, header=True)
 
     tfs_multiple_hits = tfs_multiple_hits.drop(columns=hits_df.columns[hits_df.columns.str.startswith('TF_')])

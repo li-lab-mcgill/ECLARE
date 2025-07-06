@@ -265,7 +265,7 @@ for sex in unique_sexes:
         results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
                 delayed(safe_differential_grn_analysis)(
                     condition, sex, celltype, mdd_rna, mdd_atac, rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, rna_batch_key, atac_celltype_key, atac_condition_key, atac_sex_key, atac_subject_key, atac_batch_key, eclare_student_model, mean_grn_df, \
-                    overlapping_subjects, subjects_by_condition_n_sex_df, cutoff=5025, ot_alignment_type='all', subdir=os.path.join(output_dir, f'{sex}_{celltype}', condition)
+                    overlapping_subjects, subjects_by_condition_n_sex_df, cutoff=10000, ot_alignment_type='all', subdir=os.path.join(output_dir, f'{sex}_{celltype}', condition)
                 )
             for celltype in unique_celltypes
         )
@@ -415,23 +415,27 @@ shared_TF_TG_pairs_df_grouped = shared_TF_TG_pairs_df.groupby('TF').agg({
 }).sort_values(by=('TG', 'nunique'), ascending=False)
 
 ## Perform enrichment analysis on TG regulons of TFs that are enriched in shared TF-TG pairs
-for TF in shared_TF_TG_pairs_df_grouped.index:
+shared_TF_TG_pairs_df_grouped_filtered = shared_TF_TG_pairs_df_grouped[shared_TF_TG_pairs_df_grouped['TG','nunique'] > 1] # not interesting to find TFs with only one regulon gene
+
+for TF in shared_TF_TG_pairs_df_grouped_filtered.index:
 
     TF_TG_pairs = shared_TF_TG_pairs_df_grouped.loc[TF, ('TG', 'list')]
     TF_TG_pairs_series = pd.Series(TF, index=TF_TG_pairs)
-    TF_TG_pairs_series.attrs = {'sex':sex, 'celltype':celltype, 'type': 'TF-TG pairs'}
+    TF_TG_pairs_series.attrs = {'sex':'all', 'celltype':'all', 'type': 'TF-TG pairs'}
 
-    enrichr_results = do_enrichr(TF_TG_pairs_series, 'TRRUST_Transcription_Factors_2019', outdir=None)
+    enrichr_results_sig = do_enrichr(TF_TG_pairs_series, 'ChEA_2022', filter_var='P-value', outdir=None) # only looking for specific TF, so no need to correct for multiple testing
 
-    if enrichr_results is not None:
+    if enrichr_results_sig is not None:
 
-        enrichr_results_sig = enrichr_results[enrichr_results['Adjusted P-value'] < 0.05]
+        #enrichr_results_sig = enrichr_results_sig[enrichr_results_sig['P-value'] < 0.05]
         enriched_tfs = enrichr_results_sig['Term'].str.split(' ').str[0]
         enriched_tfs_match_TF = np.isin(enriched_tfs, TF)
     
         if enriched_tfs_match_TF.any():
-            enriched_tfs_match_TF_list = enrichr_results_sig[enriched_tfs_match_TF]['Genes'].tolist()
-            enriched_TF_TG_pairs_dict[TF] = enriched_tfs_match_TF_list
+            enriched_tfs_match_TF_list = enrichr_results_sig[enriched_tfs_match_TF]['Genes'].str.split(';').item()
+
+            if len(enriched_tfs_match_TF_list) >= 2: # at least 2 TFs should be enriched for the same TG to study interesting TFs and their regulons
+                enriched_TF_TG_pairs_dict[TF] = enriched_tfs_match_TF_list
 
 
 print(f'Shared TF-TG pairs (n={len(shared_TF_TG_pairs)} out of {len(all_TF_TG_pairs)}):')
@@ -535,8 +539,8 @@ all_sccompreg_genes_shared = all_sccompreg_genes_shared_TF_TG_pairs_df['TG'].uni
 
 if len(all_sccompreg_genes_shared) > 0:
     all_sccompreg_hits_df, all_sccompreg_tfs_multiple_hits = find_hits_overlap(all_sccompreg_genes_shared, all_sccompreg_genes_enrichr, all_sccompreg_genes_shared_TF_TG_pairs_df)
-    all_sccompreg_hits_df.to_csv(os.path.join(output_dir, 'all_sccompreg_hits_df.csv'), index=True, header=True)
     all_sccompreg_tfs_multiple_hits.to_csv(os.path.join(output_dir, 'all_sccompreg_tfs_multiple_hits.csv'), index=True, header=True)
+    all_sccompreg_hits_df.to_csv(os.path.join(output_dir, 'all_sccompreg_hits_df.csv'), index=True, header=True)
 
 ## get all pyDESeq2 significant genes from significant_genes_dict
 #all_significant_genes = np.unique(np.hstack([significant_genes_dict[sex][celltype].values for sex in unique_sexes for celltype in unique_celltypes]))
