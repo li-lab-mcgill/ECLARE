@@ -27,6 +27,7 @@ else:
 import pickle
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 from eclare.post_hoc_utils import tree
 
@@ -127,45 +128,96 @@ for sex in unique_sexes:
 enrs_mdd_dn_hits_df.reset_index(inplace=True)
 enrs_mdd_dn_hits_df['mlog10_padj'] = enrs_mdd_dn_hits_df['mlog10_padj'].fillna(0)
 enrs_mdd_dn_hits_df['ngenes'] = enrs_mdd_dn_hits_df['ngenes'].fillna(0)
-enrs_mdd_dn_hits_df['size_ngenes'] = enrs_mdd_dn_hits_df['ngenes'] * 10
-
-fig, ax = plt.subplots(figsize=(6, 4))
-ax.scatter(enrs_mdd_dn_hits_df['celltype'], enrs_mdd_dn_hits_df['sex'], s=enrs_mdd_dn_hits_df['size_ngenes'], c=enrs_mdd_dn_hits_df['mlog10_padj'], cmap='viridis', alpha=0.5)
-
-# Add grey crosses for points where mlog10_padj == 0
-zero_data = enrs_mdd_dn_hits_df[enrs_mdd_dn_hits_df['mlog10_padj'] == 0]
-if len(zero_data) > 0:
-    ax.scatter(zero_data['celltype'], zero_data['sex'], 
-                color='grey', alpha=0.7, 
-                marker='+', linewidths=1)
-
-ax.set_ylim(-0.5, 1.5)
-
-## Bonferroni correction
-bonferroni_threshold = 0.05 / len(enrs_mdd_dn_hits_df)
-bonferroni_threshold_mlog10 = -np.log10(bonferroni_threshold)
-bonferonni_mask = enrs_mdd_dn_hits_df['mlog10_padj'] > bonferroni_threshold_mlog10
-
-enrs_mdd_dn_hits_df['Adjusted P-value (bonferroni)'] = 0
-enrs_mdd_dn_hits_df['size_ngenes_bonferroni'] = 0
-enrs_mdd_dn_hits_df.loc[bonferonni_mask, 'Adjusted P-value (bonferroni)'] = enrs_mdd_dn_hits_df['mlog10_padj']
-enrs_mdd_dn_hits_df.loc[bonferonni_mask, 'size_ngenes_bonferroni'] = enrs_mdd_dn_hits_df['size_ngenes']
-
-fig, ax = plt.subplots(figsize=(6, 4))
-ax.scatter(enrs_mdd_dn_hits_df['celltype'], enrs_mdd_dn_hits_df['sex'], s=enrs_mdd_dn_hits_df['size_ngenes_bonferroni'], c=enrs_mdd_dn_hits_df['Adjusted P-value (bonferroni)'], cmap='viridis', alpha=0.5)
-
-zero_data = enrs_mdd_dn_hits_df[enrs_mdd_dn_hits_df['Adjusted P-value (bonferroni)'] == 0]
-if len(zero_data) > 0:
-    ax.scatter(zero_data['celltype'], zero_data['sex'], 
-                color='grey', alpha=0.7, 
-                marker='+', linewidths=1)
-
-ax.set_ylim(-0.5, 1.5)
+enrs_mdd_dn_hits_df['size_ngenes'] = (enrs_mdd_dn_hits_df['ngenes']/enrs_mdd_dn_hits_df['ngenes'].max())**2 * 500
 
 
+def plot_enrichment_significance(enrs_mdd_dn_hits_df, figsize=(6, 2)):
+    """
+    Create a scatter plot showing enrichment significance levels with different markers.
+    
+    Parameters:
+    -----------
+    enrs_mdd_dn_hits_df : pandas.DataFrame
+        DataFrame containing enrichment results with columns: 'celltype', 'sex', 'mlog10_padj', 'ngenes', 'size_ngenes'
+    figsize : tuple, optional
+        Figure size as (width, height), default is (6, 2)
+    
+    Returns:
+    --------
+    fig : matplotlib.figure.Figure
+        The created figure object
+    ax : matplotlib.axes.Axes
+        The main axes object
+    """
+    # Single plot with three marker types
+    fig, ax = plt.subplots(figsize=figsize)
 
+    # Define thresholds
+    sig_threshold = -np.log10(0.05)
+    bonferroni_threshold = 0.05 / len(enrs_mdd_dn_hits_df)
+    bonferroni_threshold_mlog10 = -np.log10(bonferroni_threshold)
 
+    # Split data by significance levels
+    non_sig_data = enrs_mdd_dn_hits_df[enrs_mdd_dn_hits_df['mlog10_padj'] == 0]
+    sig_not_bonferroni_data = enrs_mdd_dn_hits_df[(enrs_mdd_dn_hits_df['mlog10_padj'] > sig_threshold) & (enrs_mdd_dn_hits_df['mlog10_padj'] <= bonferroni_threshold_mlog10)]
+    bonferroni_sig_data = enrs_mdd_dn_hits_df[enrs_mdd_dn_hits_df['mlog10_padj'] > bonferroni_threshold_mlog10]
 
+    # Fix range of colormap so applies to all data
+    vmin = min(enrs_mdd_dn_hits_df['mlog10_padj'].min(), sig_not_bonferroni_data['mlog10_padj'].min(), bonferroni_sig_data['mlog10_padj'].min())
+    vmax = max(enrs_mdd_dn_hits_df['mlog10_padj'].max(), sig_not_bonferroni_data['mlog10_padj'].max(), bonferroni_sig_data['mlog10_padj'].max())
+    cmap = plt.get_cmap('viridis')
+    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+
+    # Plot non-significant as grey crosses
+    if len(non_sig_data) > 0:
+        ax.scatter(non_sig_data['celltype'], non_sig_data['sex'], 
+                   color='grey', alpha=0.7, 
+                   marker='+', linewidths=1, label='Non-significant')
+
+    # Plot significant but not Bonferroni as circles
+    if len(sig_not_bonferroni_data) > 0:
+        ax.scatter(sig_not_bonferroni_data['celltype'], sig_not_bonferroni_data['sex'], 
+                   s=sig_not_bonferroni_data['size_ngenes'], c=sig_not_bonferroni_data['mlog10_padj'], 
+                   cmap=cmap, norm=norm, alpha=0.6, marker='o', hatch=2*'.', label='Significant (p<0.05)', edgecolors='black')
+
+    # Plot Bonferroni significant as stars
+    if len(bonferroni_sig_data) > 0:
+        ax.scatter(bonferroni_sig_data['celltype'], bonferroni_sig_data['sex'], 
+                   s=bonferroni_sig_data['size_ngenes'], c=bonferroni_sig_data['mlog10_padj'], 
+                   cmap=cmap, norm=norm, alpha=0.8, marker='o', edgecolors='black',
+                   label=f'Bonferroni significant (p<{bonferroni_threshold:.3f})')
+
+    ax.set_ylim(-0.5, 1.5)
+
+    # Add colorbar for mlog10_padj
+    scatter = ax.scatter(bonferroni_sig_data['celltype'], bonferroni_sig_data['sex'], c=bonferroni_sig_data['mlog10_padj'], cmap='viridis', alpha=0.6, s=0)
+    cbar = plt.colorbar(scatter, ax=ax, label='-log10(padj)')
+
+    # Add size legend for ngenes
+    # Create dummy scatter plot for size legend
+    sizes_describe = enrs_mdd_dn_hits_df[['size_ngenes','ngenes']].loc[enrs_mdd_dn_hits_df['ngenes']>0].describe()
+    sizes = [sizes_describe.loc['min','size_ngenes'], sizes_describe.loc['50%','size_ngenes'], sizes_describe.loc['max','size_ngenes']]
+    size_labels = np.array([sizes_describe.loc['min','ngenes'], sizes_describe.loc['50%','ngenes'], sizes_describe.loc['max','ngenes']]).astype(int)
+
+    # Create a separate axis for the size legend
+    ax2 = fig.add_axes([0.88, 0.2, 0.2, 0.8])  # Position for size legend
+    ax2.set_xlim(0, 1)
+    ax2.set_ylim(-1, 2 * len(sizes))  # More vertical space
+
+    for i, (size, label) in enumerate(zip(sizes, size_labels)):
+        y = i * 2  # Spread out vertically
+        ax2.scatter(0.5, y, s=size, color='grey', alpha=0.7, edgecolors='black')
+        ax2.text(0.7, y, f'{label} genes', va='center', fontsize=8)
+
+    ax2.set_title('Number of\nGenes', fontsize=9, pad=1)
+    ax2.axis('off')
+
+    fig.tight_layout()
+    
+    return fig, ax
+
+# Call the function
+enrs_mdd_dn_hits_df_fig, enrs_mdd_dn_hits_df_ax = plot_enrichment_significance(enrs_mdd_dn_hits_df)
 
 #%%
 
