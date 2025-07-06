@@ -1,6 +1,32 @@
+#%% set env variables
 import os
+import sys
+
+# Check if environment variables are already set
+eclare_root = os.environ.get('ECLARE_ROOT')
+outpath = os.environ.get('OUTPATH')
+datapath = os.environ.get('DATAPATH')
+
+# Print status of environment variables
+if all([eclare_root, outpath, datapath]):
+    print(f"Environment variables already set:")
+    print(f"ECLARE_ROOT: {eclare_root}")
+    print(f"OUTPATH: {outpath}")
+    print(f"DATAPATH: {datapath}")
+else:
+    print(f"Missing environment variables")
+
+    config_path = '../config'
+    sys.path.insert(0, config_path)
+
+    from export_env_variables import export_env_variables
+    export_env_variables(config_path)
+
+#%% import data
+
 import pickle
 import pandas as pd
+import numpy as np
 
 from eclare.post_hoc_utils import tree
 
@@ -62,3 +88,88 @@ gene_set_scores_dict = loaded_dicts.get('gene_set_scores_dict', tree())
 
 ## Load CSV files and other file types
 shared_TF_TG_pairs_df = pd.read_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'))
+
+enrs_mdd_dn_hits_df = pd.read_csv(os.path.join(output_dir, 'enrs_mdd_dn_hits_df.csv'))
+enrs_mdd_dn_tfs_multiple_hits = pd.read_csv(os.path.join(output_dir, 'enrs_mdd_dn_tfs_multiple_hits.csv'))
+
+all_sccompreg_tfs_multiple_hits = pd.read_csv(os.path.join(output_dir, 'all_sccompreg_tfs_multiple_hits.csv'))
+all_sccompreg_hits_df = pd.read_csv(os.path.join(output_dir, 'all_sccompreg_hits_df.csv'))
+
+pydeseq2_match_length_genes_hits_df = pd.read_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_hits_df.csv'))
+pydeseq2_match_length_genes_tfs_multiple_hits = pd.read_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_tfs_multiple_hits.csv'))
+
+#%%
+
+unique_sexes = list(enrs_dict.keys())
+unique_celltypes = list(enrs_dict[unique_sexes[0]].keys())
+
+enrs_mdd_dn_hits_df = pd.DataFrame(columns=['ngenes', 'padj', 'mlog10_padj'], 
+                                  index=pd.MultiIndex.from_product([unique_sexes, unique_celltypes], names=['sex', 'celltype']))
+
+for sex in unique_sexes:
+    for celltype in unique_celltypes:
+
+        enrs = enrs_dict[sex][celltype]['All LR']
+        enrs_mdd_dn = enrs[enrs.Term == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
+
+        if len(enrs_mdd_dn) == 0:
+            continue
+
+        ngenes = int(enrs_mdd_dn['Overlap'].str.split('/').item()[0])
+        padj = enrs_mdd_dn['Adjusted P-value'].item()
+        mlog10_padj = -np.log10(padj)
+
+        enrs_mdd_dn_hits_df.loc[(sex, celltype), 'ngenes'] = ngenes
+        enrs_mdd_dn_hits_df.loc[(sex, celltype), 'padj'] = padj
+        enrs_mdd_dn_hits_df.loc[(sex, celltype), 'mlog10_padj'] = mlog10_padj
+
+
+enrs_mdd_dn_hits_df.reset_index(inplace=True)
+enrs_mdd_dn_hits_df['mlog10_padj'] = enrs_mdd_dn_hits_df['mlog10_padj'].fillna(0)
+enrs_mdd_dn_hits_df['ngenes'] = enrs_mdd_dn_hits_df['ngenes'].fillna(0)
+enrs_mdd_dn_hits_df['size_ngenes'] = enrs_mdd_dn_hits_df['ngenes'] * 10
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.scatter(enrs_mdd_dn_hits_df['celltype'], enrs_mdd_dn_hits_df['sex'], s=enrs_mdd_dn_hits_df['size_ngenes'], c=enrs_mdd_dn_hits_df['mlog10_padj'], cmap='viridis', alpha=0.5)
+
+# Add grey crosses for points where mlog10_padj == 0
+zero_data = enrs_mdd_dn_hits_df[enrs_mdd_dn_hits_df['mlog10_padj'] == 0]
+if len(zero_data) > 0:
+    ax.scatter(zero_data['celltype'], zero_data['sex'], 
+                color='grey', alpha=0.7, 
+                marker='+', linewidths=1)
+
+ax.set_ylim(-0.5, 1.5)
+
+## Bonferroni correction
+bonferroni_threshold = 0.05 / len(enrs_mdd_dn_hits_df)
+bonferroni_threshold_mlog10 = -np.log10(bonferroni_threshold)
+bonferonni_mask = enrs_mdd_dn_hits_df['mlog10_padj'] > bonferroni_threshold_mlog10
+
+enrs_mdd_dn_hits_df['Adjusted P-value (bonferroni)'] = 0
+enrs_mdd_dn_hits_df['size_ngenes_bonferroni'] = 0
+enrs_mdd_dn_hits_df.loc[bonferonni_mask, 'Adjusted P-value (bonferroni)'] = enrs_mdd_dn_hits_df['mlog10_padj']
+enrs_mdd_dn_hits_df.loc[bonferonni_mask, 'size_ngenes_bonferroni'] = enrs_mdd_dn_hits_df['size_ngenes']
+
+fig, ax = plt.subplots(figsize=(6, 4))
+ax.scatter(enrs_mdd_dn_hits_df['celltype'], enrs_mdd_dn_hits_df['sex'], s=enrs_mdd_dn_hits_df['size_ngenes_bonferroni'], c=enrs_mdd_dn_hits_df['Adjusted P-value (bonferroni)'], cmap='viridis', alpha=0.5)
+
+zero_data = enrs_mdd_dn_hits_df[enrs_mdd_dn_hits_df['Adjusted P-value (bonferroni)'] == 0]
+if len(zero_data) > 0:
+    ax.scatter(zero_data['celltype'], zero_data['sex'], 
+                color='grey', alpha=0.7, 
+                marker='+', linewidths=1)
+
+ax.set_ylim(-0.5, 1.5)
+
+
+
+
+
+
+#%%
+
+
+
+
+
