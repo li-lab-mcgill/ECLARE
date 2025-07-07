@@ -104,32 +104,35 @@ pydeseq2_match_length_genes_tfs_multiple_hits = pd.read_csv(os.path.join(output_
 unique_sexes = list(enrs_dict.keys())
 unique_celltypes = list(enrs_dict[unique_sexes[0]].keys())
 
-enrs_mdd_dn_hits_df = pd.DataFrame(columns=['ngenes', 'padj', 'mlog10_padj'], 
-                                  index=pd.MultiIndex.from_product([unique_sexes, unique_celltypes], names=['sex', 'celltype']))
+def get_enrs_mdd_dn_hits_df(enrs_dict, filtered_type='All LR'):
 
-for sex in unique_sexes:
-    for celltype in unique_celltypes:
+    enrs_mdd_dn_hits_df = pd.DataFrame(columns=['ngenes', 'padj', 'mlog10_padj'], 
+                                    index=pd.MultiIndex.from_product([unique_sexes, unique_celltypes], names=['sex', 'celltype']))
 
-        enrs = enrs_dict[sex][celltype]['All LR']
-        enrs_mdd_dn = enrs[enrs.Term == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
+    for sex in unique_sexes:
+        for celltype in unique_celltypes:
 
-        if len(enrs_mdd_dn) == 0:
-            continue
+            enrs = enrs_dict[sex][celltype][filtered_type]
+            enrs_mdd_dn = enrs[enrs.Term == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
 
-        ngenes = int(enrs_mdd_dn['Overlap'].str.split('/').item()[0])
-        padj = enrs_mdd_dn['Adjusted P-value'].item()
-        mlog10_padj = -np.log10(padj)
+            if len(enrs_mdd_dn) == 0:
+                continue
 
-        enrs_mdd_dn_hits_df.loc[(sex, celltype), 'ngenes'] = ngenes
-        enrs_mdd_dn_hits_df.loc[(sex, celltype), 'padj'] = padj
-        enrs_mdd_dn_hits_df.loc[(sex, celltype), 'mlog10_padj'] = mlog10_padj
+            ngenes = int(enrs_mdd_dn['Overlap'].str.split('/').item()[0])
+            padj = enrs_mdd_dn['Adjusted P-value'].item()
+            mlog10_padj = -np.log10(padj)
+
+            enrs_mdd_dn_hits_df.loc[(sex, celltype), 'ngenes'] = ngenes
+            enrs_mdd_dn_hits_df.loc[(sex, celltype), 'padj'] = padj
+            enrs_mdd_dn_hits_df.loc[(sex, celltype), 'mlog10_padj'] = mlog10_padj
 
 
-enrs_mdd_dn_hits_df.reset_index(inplace=True)
-enrs_mdd_dn_hits_df['mlog10_padj'] = enrs_mdd_dn_hits_df['mlog10_padj'].fillna(0)
-enrs_mdd_dn_hits_df['ngenes'] = enrs_mdd_dn_hits_df['ngenes'].fillna(0)
-enrs_mdd_dn_hits_df['size_ngenes'] = (enrs_mdd_dn_hits_df['ngenes']/enrs_mdd_dn_hits_df['ngenes'].max())**2 * 500
+    enrs_mdd_dn_hits_df.reset_index(inplace=True)
+    enrs_mdd_dn_hits_df['mlog10_padj'] = enrs_mdd_dn_hits_df['mlog10_padj'].fillna(0)
+    enrs_mdd_dn_hits_df['ngenes'] = enrs_mdd_dn_hits_df['ngenes'].fillna(0)
+    enrs_mdd_dn_hits_df['size_ngenes'] = (enrs_mdd_dn_hits_df['ngenes']/enrs_mdd_dn_hits_df['ngenes'].max())**2 * 500
 
+    return enrs_mdd_dn_hits_df
 
 def plot_enrichment_significance(enrs_mdd_dn_hits_df, figsize=(6, 2)):
     """
@@ -178,7 +181,7 @@ def plot_enrichment_significance(enrs_mdd_dn_hits_df, figsize=(6, 2)):
     if len(sig_not_bonferroni_data) > 0:
         ax.scatter(sig_not_bonferroni_data['celltype'], sig_not_bonferroni_data['sex'], 
                    s=sig_not_bonferroni_data['size_ngenes'], c=sig_not_bonferroni_data['mlog10_padj'], 
-                   cmap=cmap, norm=norm, alpha=0.6, marker='o', hatch=2*'.', label='Significant (p<0.05)', edgecolors='black')
+                   cmap=cmap, norm=norm, alpha=0.6, marker='o', hatch=3*'.', label='Significant (p<0.05)', edgecolors='black')
 
     # Plot Bonferroni significant as stars
     if len(bonferroni_sig_data) > 0:
@@ -217,9 +220,14 @@ def plot_enrichment_significance(enrs_mdd_dn_hits_df, figsize=(6, 2)):
     return fig, ax
 
 # Call the function
-enrs_mdd_dn_hits_df_fig, enrs_mdd_dn_hits_df_ax = plot_enrichment_significance(enrs_mdd_dn_hits_df)
+enrs_mdd_dn_hits_lr_df = get_enrs_mdd_dn_hits_df(enrs_dict, filtered_type='All LR')
+enrs_mdd_dn_hits_lr_fig, enrs_mdd_dn_hits_lr_ax = plot_enrichment_significance(enrs_mdd_dn_hits_lr_df)
 
-#%%
+enrs_mdd_dn_hits_deg_df = get_enrs_mdd_dn_hits_df(enrs_dict, filtered_type='DEG (matched length)')
+#enrs_mdd_dn_hits_deg_fig, enrs_mdd_dn_hits_deg_ax = plot_enrichment_significance(enrs_mdd_dn_hits_deg_df)
+
+
+#%% 
 
 
 
