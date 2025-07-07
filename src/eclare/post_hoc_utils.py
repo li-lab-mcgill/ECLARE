@@ -2286,9 +2286,9 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
         --out {magma_out_path}"""
 
     # Use subprocess.run instead of os.system for better thread safety
-    #subprocess.run(magma_gs_cmd, shell=True, check=True)
-    #subprocess.run(magma_cvar_cmd, shell=True, check=True)
-    subprocess.run(magma_gs_cvar_interaction_cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(magma_gs_cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    #subprocess.run(magma_cvar_cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    #subprocess.run(magma_gs_cvar_interaction_cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     ## check content of output file and log file
     logfile = magma_out_path + '.log'
@@ -2310,7 +2310,9 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
     ## check number of lines in outfile to establish skiprows - depends on whether first line is # TOTAL_GENES or # MEAN_SAMPLE_SIZE
     with open(outfile, 'r') as f:
         n_lines = sum(1 for _ in f)
-    skiprows = n_lines - (3 + 1)
+
+    magma_gs_cmd_offset = 1 # magma_gs_cmd generates one extra line compared to magma_gs_cvar_interaction_cmd
+    skiprows = n_lines - (3 + 1) + magma_gs_cmd_offset
 
     ## read in MAGMA results
     magma_results_path = magma_out_path + '.gsa.out'
