@@ -504,7 +504,7 @@ for dict_name, dict_obj in dicts_to_save.items():
         pickle.dump(dict_obj, f)
     print(f"Saved {dict_name}")
 
-#%% Narrow down to TF-TG pairs that are enriched in MDD-DN and sc-compReg, across all celltypes and sexes
+#%% Aggregated EnrichR results
 
 ## EnrichR based on MDD-DN genes across all celltypes and sexes
 enrs_mdd_dn_df = pd.concat(enrs_mdd_dn_list)
