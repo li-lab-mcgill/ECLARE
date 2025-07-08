@@ -296,6 +296,7 @@ for dict_name, dict_obj in dicts_to_save.items():
         print(f"Saved {dict_name}")
 
 #%% gene set enrichment analyses
+
 def safe_perform_gene_set_enrichment(sex, celltype, *args, **kwargs):
     """Thread-safe wrapper for perform_gene_set_enrichment"""
     try:
@@ -388,7 +389,7 @@ for sex in unique_sexes:
     for celltype, result in zip(unique_celltypes, results):
         mean_grn_df_filtered_pruned_dict[sex][celltype] = result
 
-## find shared TF-TG pairs
+## find shared TF-TG pairs across all celltypes and sexes
 for sex in unique_sexes:
     sex = sex.lower()
     for celltype in unique_celltypes:
