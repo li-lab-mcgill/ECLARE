@@ -268,13 +268,12 @@ def get_ttest_df(ttest_comp_df_dict, pathway_name='ASTON_MAJOR_DEPRESSIVE_DISORD
 
     return ttest_comp_results_df
 
-def plot_ttest(ttest_mdd_dn_df):
+def plot_ttest(ttest_mdd_dn_df, ax=None):
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 2))
 
     # Ensure x-axis is in alphabetical order
     ttest_mdd_dn_df = ttest_mdd_dn_df.sort_values('celltype')
-
-    # Single plot with three marker types
-    fig, ax = plt.subplots(figsize=(6, 2))
 
     # Empty scatter plot for colorbar
     ax.scatter(ttest_mdd_dn_df['celltype'], ttest_mdd_dn_df['sex'], alpha=0, s=0)
@@ -312,7 +311,8 @@ def plot_ttest(ttest_mdd_dn_df):
     size_labels = np.array([sizes_describe.loc['min','mlog10_pvalue'], sizes_describe.loc['50%','mlog10_pvalue'], sizes_describe.loc['max','mlog10_pvalue']]).astype(int)
 
     # Create a separate axis for the size legend
-    ax2 = fig.add_axes([0.88, 0.1, 0.2, 0.8])  # Position for size legend
+    #ax2 = fig.add_axes([0.88, 0.1, 0.2, 0.8])  # Position for size legend
+    ax2 = ax.inset_axes([1.2, 0.1, 0.2, 0.8])  # Position for size legend
     ax2.set_xlim(0, 1)
     ax2.set_ylim(-1.2, 2 * len(sizes))  # More vertical space
 
@@ -329,13 +329,11 @@ def plot_ttest(ttest_mdd_dn_df):
     ax.set_xticks(celltype_order)
     ax.set_xticklabels(celltype_order, rotation=45, ha='right')
 
-    fig.tight_layout()
-    fig.suptitle('Differential expression of MDD-DN pathway genes', fontsize=10, y=0.96)
-    
-    return fig, ax
+    return ax
 
 ttest_mdd_dn_df = get_ttest_df(ttest_comp_df_dict, pathway_name='ASTON_MAJOR_DEPRESSIVE_DISORDER_DN')
-ttest_mdd_dn_fig, ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df)
+ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df)
+
 
 
 #%% Module scores for pathways of interest
@@ -358,9 +356,20 @@ pathways_of_interest = [
     "BLALOCK_ALZHEIMERS_DISEASE_UP"
 ]
 
-for pathway_name in pathways_of_interest:
+# Call the function
+n = len(pathways_of_interest)
+fig, axes = plt.subplots(n, 1, figsize=(8, 2*n), sharex=True)
+if n == 1:
+    axes = [axes]
+
+for i, pathway_name in enumerate(pathways_of_interest):
     ttest_df = get_ttest_df(ttest_comp_df_dict, pathway_name=pathway_name)
-    ttest_df_fig, ttest_df_ax = plot_ttest(ttest_df)
+    plot_ttest(ttest_df, ax=axes[i])
+    axes[i].set_title(pathway_name)
+
+fig.tight_layout()
+plt.show()
+
 
 
 
