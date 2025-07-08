@@ -390,7 +390,6 @@ for sex in unique_sexes:
         mean_grn_df_filtered_pruned_dict[sex][celltype] = result
 
 ## save mean_grn_df_filtered_pruned_dict
-
 with open(os.path.join(output_dir, 'mean_grn_df_filtered_pruned_dict.pkl'), 'wb') as f:
     pickle.dump(mean_grn_df_filtered_pruned_dict, f)
 
@@ -446,6 +445,82 @@ for TF in shared_TF_TG_pairs_df_grouped_filtered.index:
 
             if len(enriched_tfs_match_TF_list) >= 2: # at least 2 TFs should be enriched for the same TG to study interesting TFs and their regulons
                 enriched_TF_TG_pairs_dict[TF] = enriched_tfs_match_TF_list
+
+#%% investigate EGR1 and NR4A2
+
+TFs_of_EGR1 = mean_grn_df[mean_grn_df['TG'] == 'EGR1']['TF'].to_list()
+
+hit1 = 'NR4A2'
+assert hit1 in TFs_of_EGR1
+
+#NR4A2_targets_ExN_male = mean_grn_df_filtered_dict['male']['ExN'].loc[mean_grn_df_filtered_dict['male']['ExN']['TF'] == 'NR4A2']
+grn_female_exn = mean_grn_df_filtered_pruned_dict['female']['ExN']
+NR4A2_targets_ExN_female = grn_female_exn[grn_female_exn['TF']==hit1]
+EGR1_targets_ExN_female = grn_female_exn[grn_female_exn['TF']=='EGR1']
+SOX2_targets_ExN_female = grn_female_exn[grn_female_exn['TF']=='SOX2']
+
+hit2 = 'ABHD17B'
+assert hit2 in NR4A2_targets_ExN_female['TG'].to_list()
+
+enriched_TFs = np.array(list(enriched_TF_TG_pairs_dict.keys()))
+female_exn_TFs_of_ABHD17B = grn_female_exn[grn_female_exn['TG']==hit2]['TF'].values
+female_exn_enriched_TFs_of_ABHD17B = enriched_TFs[np.isin(enriched_TFs, female_exn_TFs_of_ABHD17B)]
+
+import networkx as nx
+G = nx.DiGraph()
+
+edge_color_map = {
+    'a priori': 'red',
+    'female_ExN': 'blue',
+    'all': 'gray'
+}
+
+G.add_edge('NR4A2', 'EGR1', interaction='a priori', color=edge_color_map['a priori'])
+G.add_edge('NR4A2', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
+G.add_edge('EGR1', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
+G.add_edge('SOX2', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
+
+all_targets = []
+for tf in female_exn_enriched_TFs_of_ABHD17B:
+    tf_targets = enriched_TF_TG_pairs_dict[tf]
+    for tf_target in tf_targets:
+        G.add_edge(tf, tf_target, interaction='all', color=edge_color_map['all'])
+        all_targets.append(tf_target)
+
+# Assign layer information to each node
+for node in G.nodes():
+    if node == 'NR4A2':
+        G.nodes[node]['layer'] = 0
+    elif node in ['EGR1', 'SOX2']:
+        G.nodes[node]['layer'] = 1
+    elif node == 'ABHD17B':
+        G.nodes[node]['layer'] = 2
+    elif node in all_targets:
+        G.nodes[node]['layer'] = 3
+
+pos = nx.multipartite_layout(G, subset_key='layer')
+
+for egr1_target in enriched_TF_TG_pairs_dict['EGR1']:
+    pos[egr1_target] += np.array([0, 0.4])
+
+#tmp = pos['ABHD17B']
+#pos['ABHD17B'] = pos['DEDD2']
+#pos['DEDD2'] = tmp
+
+import matplotlib.patches as mpatches
+
+colors = nx.get_edge_attributes(G, 'color').values()
+nx.draw(G, pos=pos, with_labels=True, edge_color=colors)
+
+# Add legend
+legend_handles = [
+    mpatches.Patch(color='red', label='a priori'),
+    mpatches.Patch(color='blue', label='female_ExN'),
+    mpatches.Patch(color='gray', label='all')
+]
+import matplotlib.pyplot as plt
+plt.legend(handles=legend_handles, title='Edge Type', loc='best')
+plt.show()
 
 
 #%% module scores for enriched pathways

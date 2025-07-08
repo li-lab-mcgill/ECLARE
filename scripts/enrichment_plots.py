@@ -56,6 +56,7 @@ dicts_to_load = [
     'enrs_dict',
     'magma_results_dict',
     'mean_grn_df_filtered_dict',
+    'mean_grn_df_filtered_pruned_dict',
     'gene_set_scores_dict',
     'ttest_comp_df_dict'
 ]
@@ -88,6 +89,7 @@ intercept_stderrs_dict = loaded_dicts.get('intercept_stderrs_dict', tree())
 enrs_dict = loaded_dicts.get('enrs_dict', tree())
 magma_results_dict = loaded_dicts.get('magma_results_dict', tree())
 mean_grn_df_filtered_dict = loaded_dicts.get('mean_grn_df_filtered_dict', tree())
+mean_grn_df_filtered_pruned_dict = loaded_dicts.get('mean_grn_df_filtered_pruned_dict', tree())
 gene_set_scores_dict = loaded_dicts.get('gene_set_scores_dict', tree())
 ttest_comp_df_dict = loaded_dicts.get('ttest_comp_df_dict', tree())
 
