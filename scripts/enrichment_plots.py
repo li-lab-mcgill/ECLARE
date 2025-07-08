@@ -28,6 +28,7 @@ import pickle
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.colors import SymLogNorm
 
 from eclare.post_hoc_utils import tree
 
@@ -102,10 +103,12 @@ all_sccompreg_hits_df = pd.read_csv(os.path.join(output_dir, 'all_sccompreg_hits
 pydeseq2_match_length_genes_hits_df = pd.read_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_hits_df.csv'))
 pydeseq2_match_length_genes_tfs_multiple_hits = pd.read_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_tfs_multiple_hits.csv'))
 
-#%% EnrichR results for MDD-DN pathway
-
+#%% Extract basic information
 unique_sexes = list(enrs_dict.keys())
 unique_celltypes = list(enrs_dict[unique_sexes[0]].keys())
+
+#%% EnrichR results for MDD-DN pathway
+
 
 def get_enrs_mdd_dn_hits_df(enrs_dict, filtered_type='All LR'):
 
@@ -230,9 +233,7 @@ enrs_mdd_dn_hits_deg_df = get_enrs_mdd_dn_hits_df(enrs_dict, filtered_type='DEG 
 
 #%% Differential expression of MDD-DN pathway genes
 
-from matplotlib.colors import SymLogNorm
-
-def get_ttest_mdd_dn_df(ttest_comp_df_dict):
+def get_ttest_df(ttest_comp_df_dict, pathway_name='ASTON_MAJOR_DEPRESSIVE_DISORDER_DN'):
 
     ttest_comp_results_df = pd.DataFrame(columns=['tstat', 'pvalue', 'df'], 
                                     index=pd.MultiIndex.from_product([unique_sexes, unique_celltypes], names=['sex', 'celltype']))
@@ -241,7 +242,7 @@ def get_ttest_mdd_dn_df(ttest_comp_df_dict):
         for celltype in unique_celltypes:
 
             ttests = ttest_comp_df_dict[sex][celltype]
-            ttest_mdd_dn = ttests[ttests.index == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
+            ttest_mdd_dn = ttests[ttests.index == pathway_name]
 
             if len(ttest_mdd_dn) == 0:
                 continue
@@ -267,7 +268,7 @@ def get_ttest_mdd_dn_df(ttest_comp_df_dict):
 
     return ttest_comp_results_df
 
-def plot_ttest_mdd_dn(ttest_mdd_dn_df):
+def plot_ttest(ttest_mdd_dn_df):
 
     # Ensure x-axis is in alphabetical order
     ttest_mdd_dn_df = ttest_mdd_dn_df.sort_values('celltype')
@@ -295,8 +296,9 @@ def plot_ttest_mdd_dn(ttest_mdd_dn_df):
     scatter = ax.scatter(ttest_mdd_dn_df['celltype'], ttest_mdd_dn_df['sex'], 
                c=ttest_mdd_dn_df['tstat'], cmap='PuOr', norm=norm, alpha=0.6, s=ttest_mdd_dn_df['size_mlog10_pvalue'], edgecolors='black')
     
-    assert (ttest_mdd_dn_df['mlog10_pvalue'][ttest_mdd_dn_df['mlog10_pvalue']>0] > -np.log10(0.05)).all()
-    assert (ttest_mdd_dn_df['mlog10_pvalue'][ttest_mdd_dn_df['mlog10_pvalue']>0] > -np.log10(0.05 / len(ttest_mdd_dn_df))).all()
+    if pathway_name == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN':
+        assert (ttest_mdd_dn_df['mlog10_pvalue'][ttest_mdd_dn_df['mlog10_pvalue']>0] > -np.log10(0.05)).all()
+        assert (ttest_mdd_dn_df['mlog10_pvalue'][ttest_mdd_dn_df['mlog10_pvalue']>0] > -np.log10(0.05 / len(ttest_mdd_dn_df))).all()
     
     ax.set_ylim(-0.5, 1.5)
 
@@ -332,9 +334,39 @@ def plot_ttest_mdd_dn(ttest_mdd_dn_df):
     
     return fig, ax
 
-ttest_mdd_dn_df = get_ttest_mdd_dn_df(ttest_comp_df_dict)
-ttest_mdd_dn_fig, ttest_mdd_dn_ax = plot_ttest_mdd_dn(ttest_mdd_dn_df)
+ttest_mdd_dn_df = get_ttest_df(ttest_comp_df_dict, pathway_name='ASTON_MAJOR_DEPRESSIVE_DISORDER_DN')
+ttest_mdd_dn_fig, ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df)
 
 
-#%%
+#%% Module scores for pathways of interest
 
+pathways_of_interest = [
+    "ASTON_MAJOR_DEPRESSIVE_DISORDER_DN",
+    "Oligodendrocyte_Mature_Darmanis_PNAS_2015",
+    "FAN_EMBRYONIC_CTX_OLIG",
+    "LEIN_OLIGODENDROCYTE_MARKERS",
+    "ZHONG_PFC_C4_PTGDS_POS_OPC",
+    "DESCARTES_FETAL_CEREBRUM_OLIGODENDROCYTES",
+    #"COLIN_PILOCYTIC_ASTROCYTOMA_VS_GLIOBLASTOMA_UP",
+    "DESCARTES_MAIN_FETAL_OLIGODENDROCYTES",
+    "DESCARTES_FETAL_CEREBELLUM_OLIGODENDROCYTES",
+    "LU_AGING_BRAIN_UP",
+    #"DURANTE_ADULT_OLFACTORY_NEUROEPITHELIUM_OLFACTORY_ENSHEATHING_GLIA",
+    "DESCARTES_MAIN_FETAL_SCHWANN_CELLS",
+    "Oligodendrocyte_All_Zeisel_Science_2015",
+    "GOBERT_OLIGODENDROCYTE_DIFFERENTIATION_DN",
+    "BLALOCK_ALZHEIMERS_DISEASE_UP"
+]
+
+for pathway_name in pathways_of_interest:
+    ttest_df = get_ttest_df(ttest_comp_df_dict, pathway_name=pathway_name)
+    ttest_df_fig, ttest_df_ax = plot_ttest(ttest_df)
+
+
+
+
+
+
+
+
+# %%
