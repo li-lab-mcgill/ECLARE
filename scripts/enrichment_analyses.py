@@ -389,6 +389,11 @@ for sex in unique_sexes:
     for celltype, result in zip(unique_celltypes, results):
         mean_grn_df_filtered_pruned_dict[sex][celltype] = result
 
+## save mean_grn_df_filtered_pruned_dict
+
+with open(os.path.join(output_dir, 'mean_grn_df_filtered_pruned_dict.pkl'), 'wb') as f:
+    pickle.dump(mean_grn_df_filtered_pruned_dict, f)
+
 ## find shared TF-TG pairs across all celltypes and sexes
 for sex in unique_sexes:
     sex = sex.lower()
@@ -411,6 +416,9 @@ shared_TF_TG_pairs_df.columns = ['TF', 'TG']
 shared_TF_TG_pairs_df.sort_values(by='TG', inplace=True)
 shared_TF_TG_pairs_df.to_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'), index=False)
 
+print(f'Shared TF-TG pairs (n={len(shared_TF_TG_pairs)} out of {len(all_TF_TG_pairs)}):')
+print(shared_TF_TG_pairs_df)
+
 shared_TF_TG_pairs_df_grouped = shared_TF_TG_pairs_df.groupby('TF').agg({
     'TG': [list, 'nunique'],
 }).sort_values(by=('TG', 'nunique'), ascending=False)
@@ -430,7 +438,8 @@ for TF in shared_TF_TG_pairs_df_grouped_filtered.index:
 
         #enrichr_results_sig = enrichr_results_sig[enrichr_results_sig['P-value'] < 0.05]
         enriched_tfs = enrichr_results_sig['Term'].str.split(' ').str[0]
-        enriched_tfs_match_TF = np.isin(enriched_tfs, TF)
+        enriched_species = enrichr_results_sig['Term'].str.split(' ').str[-1]
+        enriched_tfs_match_TF = np.isin(enriched_tfs, TF) & np.isin(enriched_species, 'Human')
     
         if enriched_tfs_match_TF.any():
             enriched_tfs_match_TF_list = enrichr_results_sig[enriched_tfs_match_TF]['Genes'].str.split(';').item()
@@ -438,9 +447,6 @@ for TF in shared_TF_TG_pairs_df_grouped_filtered.index:
             if len(enriched_tfs_match_TF_list) >= 2: # at least 2 TFs should be enriched for the same TG to study interesting TFs and their regulons
                 enriched_TF_TG_pairs_dict[TF] = enriched_tfs_match_TF_list
 
-
-print(f'Shared TF-TG pairs (n={len(shared_TF_TG_pairs)} out of {len(all_TF_TG_pairs)}):')
-print(shared_TF_TG_pairs_df)
 
 #%% module scores for enriched pathways
 

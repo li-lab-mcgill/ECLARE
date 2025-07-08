@@ -30,7 +30,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import SymLogNorm
 
-from eclare.post_hoc_utils import tree
+from eclare.post_hoc_utils import tree, get_brain_gmt
 
 ## Create dict for methods and job_ids
 methods_id_dict = {'eclare_mdd': ['16103846']}
@@ -106,6 +106,8 @@ pydeseq2_match_length_genes_tfs_multiple_hits = pd.read_csv(os.path.join(output_
 #%% Extract basic information
 unique_sexes = list(enrs_dict.keys())
 unique_celltypes = list(enrs_dict[unique_sexes[0]].keys())
+
+brain_gmt_cortical, brain_gmt_cortical_wGO = get_brain_gmt()
 
 #%% EnrichR results for MDD-DN pathway
 
@@ -312,7 +314,7 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
 
     # Create a separate axis for the size legend
     #ax2 = fig.add_axes([0.88, 0.1, 0.2, 0.8])  # Position for size legend
-    ax2 = ax.inset_axes([1.2, 0.1, 0.2, 0.8])  # Position for size legend
+    ax2 = ax.inset_axes([1.1, 0.1, 0.4, 0.8])  # Position for size legend
     ax2.set_xlim(0, 1)
     ax2.set_ylim(-1.2, 2 * len(sizes))  # More vertical space
 
@@ -321,7 +323,7 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
         ax2.scatter(0.5, y, s=size, color='grey', alpha=0.7, edgecolors='black')
         ax2.text(0.7, y, f'{label}', va='center', fontsize=8)
 
-    ax2.set_title('$-log_{10}(p)$', fontsize=9, pad=0, loc='left', x=0.3, y=0.96)
+    ax2.set_title('$-log_{10}(p)$', fontsize=9, pad=0, loc='left', x=0.4, y=0.96)
     ax2.axis('off')
 
     # Ensure x-axis is in alphabetical order
@@ -339,17 +341,16 @@ ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df)
 #%% Module scores for pathways of interest
 
 pathways_of_interest = [
-    "ASTON_MAJOR_DEPRESSIVE_DISORDER_DN",
     "Oligodendrocyte_Mature_Darmanis_PNAS_2015",
     "FAN_EMBRYONIC_CTX_OLIG",
     "LEIN_OLIGODENDROCYTE_MARKERS",
     "ZHONG_PFC_C4_PTGDS_POS_OPC",
     "DESCARTES_FETAL_CEREBRUM_OLIGODENDROCYTES",
-    #"COLIN_PILOCYTIC_ASTROCYTOMA_VS_GLIOBLASTOMA_UP",
+    "COLIN_PILOCYTIC_ASTROCYTOMA_VS_GLIOBLASTOMA_UP",
     "DESCARTES_MAIN_FETAL_OLIGODENDROCYTES",
     "DESCARTES_FETAL_CEREBELLUM_OLIGODENDROCYTES",
     "LU_AGING_BRAIN_UP",
-    #"DURANTE_ADULT_OLFACTORY_NEUROEPITHELIUM_OLFACTORY_ENSHEATHING_GLIA",
+    "DURANTE_ADULT_OLFACTORY_NEUROEPITHELIUM_OLFACTORY_ENSHEATHING_GLIA",
     "DESCARTES_MAIN_FETAL_SCHWANN_CELLS",
     "Oligodendrocyte_All_Zeisel_Science_2015",
     "GOBERT_OLIGODENDROCYTE_DIFFERENTIATION_DN",
