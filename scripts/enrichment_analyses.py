@@ -466,13 +466,16 @@ enriched_TFs = np.array(list(enriched_TF_TG_pairs_dict.keys()))
 female_exn_TFs_of_ABHD17B = grn_female_exn[grn_female_exn['TG']==hit2]['TF'].values
 female_exn_enriched_TFs_of_ABHD17B = enriched_TFs[np.isin(enriched_TFs, female_exn_TFs_of_ABHD17B)]
 
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+import matplotlib.patches as mpatches
 import networkx as nx
+
 G = nx.DiGraph()
 
 edge_color_map = {
-    'a priori': 'red',
+    'a priori': 'gray',
     'female_ExN': 'blue',
-    'all': 'gray'
+    'all': 'green'
 }
 
 G.add_edge('NR4A2', 'EGR1', interaction='a priori', color=edge_color_map['a priori'])
@@ -498,29 +501,143 @@ for node in G.nodes():
     elif node in all_targets:
         G.nodes[node]['layer'] = 3
 
-pos = nx.multipartite_layout(G, subset_key='layer')
+pos = nx.multipartite_layout(G, subset_key='layer', scale=2)
 
 for egr1_target in enriched_TF_TG_pairs_dict['EGR1']:
     pos[egr1_target] += np.array([0, 0.4])
 
-#tmp = pos['ABHD17B']
-#pos['ABHD17B'] = pos['DEDD2']
-#pos['DEDD2'] = tmp
-
-import matplotlib.patches as mpatches
-
 colors = nx.get_edge_attributes(G, 'color').values()
-nx.draw(G, pos=pos, with_labels=True, edge_color=colors)
+
+fig, ax = plt.subplots(figsize=(4, 4))
+
+nx.draw_networkx_nodes(G, pos,
+    node_size=1200,
+    node_color='lightgrey',
+    edgecolors='k',
+    ax=ax
+)
+nx.draw_networkx_edges(G, pos,
+    arrowstyle='-|>',
+    arrowsize=15,
+    width=2,
+    edge_color=list(nx.get_edge_attributes(G, 'color').values()),
+    min_source_margin=0.05,
+    min_target_margin=0.05,
+    ax=ax
+)
+
+# 2) Draw all labels *except* the special one at your default size
+labels = {n: n for n in G.nodes() if n != 'ABHD17B'}
+nx.draw_networkx_labels(G, pos, labels,
+    font_size=8,       # default for everyone else
+    font_color='black',
+    ax=ax
+)
+
+# 3) Finally, over‐draw the one with a custom fontsize:
+x, y = pos['ABHD17B']
+plt.text(
+    x, y,
+    'ABHD17B',
+    fontsize=6,        # big label
+    fontweight='bold',  # optional styling
+    ha='center',
+    va='center'
+)
+
+axins = inset_axes(ax,
+                   width="40%",    # width = 20% of parent_bbox width
+                   height="20%",   # height= 20%
+                   loc='lower left',
+                   borderpad=1)
+
+H = nx.DiGraph()
+H.add_edge('TF','TG')
+
+pos2 = {'TF': (0.4, 0.5),
+        'TG': (0.6, 0.5)}
+
+nx.draw_networkx_nodes(H, pos2, node_size=800, node_color='lightgrey', edgecolors='k', ax=axins)
+nx.draw_networkx_edges(H, pos2, arrowstyle='-|>', arrowsize=20, edge_color='k',min_source_margin=0.2, min_target_margin=0.2, ax=axins)
+nx.draw_networkx_labels(H, pos2, font_size=10, ax=axins)
 
 # Add legend
 legend_handles = [
-    mpatches.Patch(color='red', label='a priori'),
-    mpatches.Patch(color='blue', label='female_ExN'),
-    mpatches.Patch(color='gray', label='all')
+    mpatches.Patch(color=edge_color_map['a priori'], label='a priori'),
+    mpatches.Patch(color=edge_color_map['female_ExN'], label='female_ExN'),
+    mpatches.Patch(color=edge_color_map['all'], label='all')
 ]
-import matplotlib.pyplot as plt
-plt.legend(handles=legend_handles, title='Edge Type', loc='best')
+ax.legend(handles=legend_handles, title='relevant group', loc='upper left')
+
+axins.set_xlim(0.3, 0.7)
+axins.set_ylim(0.3, 0.7)
+
+axins.axis('off')
+ax.axis('off')
+
+plt.tight_layout()
 plt.show()
+
+#%% plot genome track around
+
+import scglue
+
+female_exn_grn = mean_grn_df_filtered_dict['female']['ExN']
+
+gene_ad = anndata.AnnData(var=pd.DataFrame(index=female_exn_grn['TG'].drop_duplicates().to_list()))
+scglue.data.get_gene_annotation(gene_ad, gtf=os.path.join(os.environ['DATAPATH'], 'gencode.v48.annotation.gtf.gz'), gtf_by='gene_name')
+
+genes = scglue.genomics.Bed(gene_ad.var)
+tss = genes.strand_specific_start_site()
+
+ABHD17B_grn_flag = (female_exn_grn['TG']=='ABHD17B') & female_exn_grn['TF'].isin(['NR4A2', 'EGR1', 'SOX2'])
+ABHD17B_grn_flag = ABHD17B_grn_flag.values
+
+ABHD17B_grn = female_exn_grn[ABHD17B_grn_flag]
+tss_abhd17b = tss.loc[['ABHD17B']]
+peaks_abhd17b = scglue.genomics.Bed(ABHD17B_grn.assign(name=ABHD17B_grn['enhancer']))
+
+## create graph from mean_grn_df_filtered with lrCorr as edge weight
+mean_grn_filtered_graph = nx.from_pandas_edgelist(
+    ABHD17B_grn,
+    source='TG',
+    target='enhancer',
+    edge_attr='lrCorr',
+    create_using=nx.DiGraph())
+
+peaks_abhd17b.write_bed(os.path.join(os.environ['OUTPATH'], 'peaks_abhd17b.bed'))
+
+scglue.genomics.write_links(
+    mean_grn_filtered_graph,
+    tss_abhd17b,
+    peaks_abhd17b,
+    os.path.join(os.environ['OUTPATH'], 'gene2peak_lrCorr_abhd17b.links'),
+    keep_attrs=["lrCorr"]
+    )
+
+gene = 'ABHD17B'
+tg_grn = ABHD17B_grn[ABHD17B_grn['TG']==gene].sort_values('dist')[['enhancer','dist']].groupby('enhancer').mean()
+tg_grn_bounds = np.stack(tg_grn.index.str.split(':|-')).flatten()
+tg_grn_bounds = [int(bound) for bound in tg_grn_bounds if bound.isdigit()] + [genes.loc[gene, 'chromStart']] + [genes.loc[gene, 'chromEnd']]
+
+print(tg_grn)
+print(f'{genes.loc[gene, "chrom"]}:{min(tg_grn_bounds)}-{max(tg_grn_bounds)}')
+print(genes.loc[gene,['chrom','chromStart','chromEnd','name']])
+
+import shutil
+
+# Copy tracks.ini to the output directory
+shutil.copy(
+    os.path.join(os.environ['OUTPATH'], "tracks.ini"),
+    os.path.join(output_dir, "tracks_abhd17b.ini")
+)
+
+shutil.copy(
+    os.path.join(os.environ['OUTPATH'], "tracks.ini"),
+    os.path.join(os.environ['OUTPATH'], "tracks_abhd17b.ini")
+)
+
+#!pyGenomeTracks --tracks tracks_abhd17b.ini --region chr9:71700000-72000000 -o tracks_abhd17b.png
 
 
 #%% module scores for enriched pathways
