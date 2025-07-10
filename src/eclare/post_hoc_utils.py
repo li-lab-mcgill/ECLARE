@@ -2156,7 +2156,7 @@ def run_h_magma_prep(output_dir):
 
     return out_path
 
-def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461'):
+def run_magma(lr_filtered, Z, significant_genes, output_dir, interaction=False, fuma_job_id='604461'):
     
     mg = mygene.MyGeneInfo()
 
@@ -2183,12 +2183,11 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
     #lr_filtered_top = lr_filtered[lr_filtered.argsort().values][-len(significant_genes):]
     #lr_filtered_union = pd.concat([lr_filtered, pd.Series(significant_genes, index=significant_genes)]).drop_duplicates()
 
-    gene_sets = {
-        'sc-compReg': lr_filtered.index.to_list(),
-        'Z_IGNORE': Z.index.to_list()}
-    
-    if not significant_genes.empty:
-        gene_sets['pyDESeq2'] = significant_genes.to_list()
+    gene_sets = {'sc-compReg': lr_filtered.index.to_list()}
+    if interaction:
+        gene_sets['Z_IGNORE'] = Z.index.to_list()
+    #if not significant_genes.empty:
+    #    gene_sets['pyDESeq2'] = significant_genes.to_list()
 
     ## get entrez IDs or Ensembl IDs for significant genes
     set_file_dict = {}
@@ -2247,48 +2246,52 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
                 f.write(f"{gene_set_name} {' '.join(gene_set)}\n")
 
     ## write gene covariate file
-    Z_IGNORE_ensembl = sig_ensembl_ids_all_dict['Z_IGNORE']
-    Z_IGNORE_ensembl.name = 'ensembl'
+    if interaction:
+        Z_IGNORE_ensembl = sig_ensembl_ids_all_dict['Z_IGNORE']
+        Z_IGNORE_ensembl.name = 'ensembl'
 
-    Z.name = 'ZSTAT'
-    Z.index.name = 'gene'
+        Z.name = 'ZSTAT'
+        Z.index.name = 'gene'
 
-    Z_ensembl = pd.merge(Z, Z_IGNORE_ensembl, left_index=True, right_index=True, how='right')
-    Z_ensembl = Z_ensembl.set_index('ensembl', drop=True)
+        Z_ensembl = pd.merge(Z, Z_IGNORE_ensembl, left_index=True, right_index=True, how='right')
+        Z_ensembl = Z_ensembl.set_index('ensembl', drop=True)
 
-    magma_genecovar_path = os.path.join(os.path.dirname(output_dir), f'Z.covariates_thread_{thread_id}.txt')
-    Z_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
+        magma_genecovar_path = os.path.join(os.path.dirname(output_dir), f'Z.covariates_thread_{thread_id}.txt')
+        Z_ensembl.to_csv(magma_genecovar_path, sep='\t', header=True)
 
-    ## write list file for interaction analysis
-    magma_list_file_path = os.path.join(os.path.dirname(output_dir), f'significant_genes_thread_{thread_id}.list')
-    list_file_dict = {'condition-interaction': ['sc-compReg', 'ZSTAT']}
-    pd.DataFrame.from_dict(list_file_dict, orient='index').to_csv(magma_list_file_path, sep='\t', header=False, index=False)
+        ## write list file for interaction analysis
+        magma_list_file_path = os.path.join(os.path.dirname(output_dir), f'significant_genes_thread_{thread_id}.list')
+        list_file_dict = {'condition-interaction': ['sc-compReg', 'ZSTAT']}
+        pd.DataFrame.from_dict(list_file_dict, orient='index').to_csv(magma_list_file_path, sep='\t', header=False, index=False)
 
     ## run MAGMA using subprocess instead of os.system for better thread safety
-    
     magma_gs_cmd = f"""{MAGMAPATH}/magma \
         --gene-results {magma_genes_raw_path} \
         --set-annot {magma_set_file_path} \
         --model self-contained correct=all\
         --out {magma_out_path}"""
 
-    magma_cvar_cmd = f"""{MAGMAPATH}/magma \
-        --gene-results {magma_genes_raw_path} \
-        --gene-covar {magma_genecovar_path} \
-        --model correct=all\
-        --out {magma_out_path}"""
+    if interaction:
 
-    magma_gs_cvar_interaction_cmd = f"""{MAGMAPATH}/magma \
-        --gene-results {magma_genes_raw_path} \
-        --set-annot {magma_set_file_path} \
-        --gene-covar {magma_genecovar_path} \
-        --model interaction={magma_list_file_path}\
-        --out {magma_out_path}"""
+        magma_cvar_cmd = f"""{MAGMAPATH}/magma \
+            --gene-results {magma_genes_raw_path} \
+            --gene-covar {magma_genecovar_path} \
+            --model correct=all\
+            --out {magma_out_path}"""
+
+        magma_gs_cvar_interaction_cmd = f"""{MAGMAPATH}/magma \
+            --gene-results {magma_genes_raw_path} \
+            --set-annot {magma_set_file_path} \
+            --gene-covar {magma_genecovar_path} \
+            --model interaction={magma_list_file_path}\
+            --out {magma_out_path}"""
 
     # Use subprocess.run instead of os.system for better thread safety
-    subprocess.run(magma_gs_cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    #subprocess.run(magma_cvar_cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    #subprocess.run(magma_gs_cvar_interaction_cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if interaction:
+        subprocess.run(magma_cvar_cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(magma_gs_cvar_interaction_cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.run(magma_gs_cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     ## check content of output file and log file
     logfile = magma_out_path + '.log'
@@ -2309,17 +2312,20 @@ def run_magma(lr_filtered, Z, significant_genes, output_dir, fuma_job_id='604461
 
     ## check number of lines in outfile to establish skiprows - depends on whether first line is # TOTAL_GENES or # MEAN_SAMPLE_SIZE
     with open(outfile, 'r') as f:
-        n_lines = sum(1 for _ in f)
+        #n_lines = sum(1 for _ in f)
 
-    magma_gs_cmd_offset = 1 # magma_gs_cmd generates one extra line compared to magma_gs_cvar_interaction_cmd
-    skiprows = n_lines - (3 + 1) + magma_gs_cmd_offset
+        for l, line in enumerate(f):
+            if 'VARIABLE' in line:
+                skiprows = l
+                break
 
     ## read in MAGMA results
     magma_results_path = magma_out_path + '.gsa.out'
     magma_results = pd.read_csv(magma_results_path, sep=r'\s+', skiprows=skiprows)
-    magma_results_series = magma_results.set_index('VARIABLE').iloc[:,-1]
+    magma_results_series = magma_results.set_index('VARIABLE').loc[:,['BETA','P']]
 
     return magma_results_series, magma_results
+
 
 def run_gseapy(rank, brain_gmt_cortical):
 
@@ -2889,7 +2895,7 @@ def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfr
     top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes_dict[sex][celltype])
 
     ## run MAGMA
-    magma_results_series, magma_results = run_magma(lr_filtered, Z, significant_genes_dict[sex][celltype], subdir, fuma_job_id=None) # set fuma_job_id to None to use MDD GWAS from H-MAGMA
+    magma_results_series, magma_results = run_magma(lr_filtered, Z, significant_genes_dict[sex][celltype], subdir, fuma_job_id='500') # set fuma_job_id to None to use MDD GWAS from H-MAGMA
 
     ## run EnrichR
     merged_dict = perform_enrichr_comparison(
@@ -3017,10 +3023,11 @@ def process_celltype(sex, celltype, rna_scaled_with_counts, mdd_rna_var, rna_cel
 
 def magma_dicts_to_df(magma_results_dict):
     sex_dfs = {
-        sex: pd.concat(cell_dict, axis=1).T
+        sex: pd.concat(cell_dict, axis=0)
         for sex, cell_dict in magma_results_dict.items()
     }
-    df = pd.concat(sex_dfs, names=['sex', 'celltype'])
+    df = pd.concat(sex_dfs, names=['sex', 'celltype', None])
+    df = df.droplevel(level=-1)
     return df
 
 def get_next_version_dir(base_dir):

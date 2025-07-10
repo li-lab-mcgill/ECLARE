@@ -374,11 +374,67 @@ fig.tight_layout()
 plt.show()
 
 
+#%% MAGMA results
 
+def plot_magma(magma_results_df, ax=None):
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 2))
 
+    # Ensure x-axis is in alphabetical order
+    magma_results_df = magma_results_df.sort_values('celltype')
 
+    # Empty scatter plot for colorbar
+    ax.scatter(magma_results_df['celltype'], magma_results_df['sex'], alpha=0, s=0)
 
+    # Plot non-significant as grey crosses
+    non_sig_data = magma_results_df[magma_results_df['mlog10_pvalue'] == 0]
+    if len(non_sig_data) > 0:
+        ax.scatter(non_sig_data['celltype'], non_sig_data['sex'], 
+                   color='grey', alpha=0.7, marker='+', linewidths=1)
 
+    # Main scatter plot
+    scatter = ax.scatter(magma_results_df['celltype'], magma_results_df['sex'], 
+               c=magma_results_df['BETA'], s=magma_results_df['size_mlog10_pvalue'], alpha=0.6, edgecolors='black')
+    
+    ax.set_ylim(-0.5, 1.5)
 
+    # Add colorbar for tstat
+    cbar = plt.colorbar(scatter, ax=ax)
+    cbar.ax.set_title('BETA', pad=10, fontsize=9)
+
+    # Add size legend for mlog10_pvalue
+    sizes_describe = magma_results_df[['size_mlog10_pvalue','mlog10_pvalue']].loc[magma_results_df['mlog10_pvalue']>0].describe()
+    sizes = [sizes_describe.loc['min','size_mlog10_pvalue'], sizes_describe.loc['50%','size_mlog10_pvalue'], sizes_describe.loc['max','size_mlog10_pvalue']]
+    size_labels = np.array([sizes_describe.loc['min','mlog10_pvalue'], sizes_describe.loc['50%','mlog10_pvalue'], sizes_describe.loc['max','mlog10_pvalue']]).round(2)
+
+    # Create a separate axis for the size legend
+    ax2 = ax.inset_axes([1.1, 0.1, 0.4, 0.8])  # Position for size legend
+    ax2.set_xlim(0, 1)
+    ax2.set_ylim(-1.2, 2 * len(sizes))  # More vertical space
+
+    for i, (size, label) in enumerate(zip(sizes, size_labels)):
+        y = i * 2  # Spread out vertically
+        ax2.scatter(0.5, y, s=size, color='grey', alpha=0.7, edgecolors='black')
+        ax2.text(0.7, y, f'{label}', va='center', fontsize=8)
+
+    ax2.set_title('$-log_{10}(p)$', fontsize=9, pad=0, loc='left', x=0.4, y=0.96)
+    ax2.axis('off')
+
+    # Ensure x-axis is in alphabetical order
+    celltype_order = sorted(magma_results_df['celltype'].unique())
+    ax.set_xticks(celltype_order)
+    ax.set_xticklabels(celltype_order, rotation=45, ha='right')
+
+    fig.tight_layout()
+    fig.suptitle('MAGMA results for MDD GWAS')
+
+    return ax
+
+#magma_results_df = pd.read_csv('data/magma_results/magma_results_mdd_dn_pathways.txt', sep='\t')
+magma_results_df = magma_results_df.reset_index()
+magma_results_df['mlog10_pvalue'] = -np.log10(magma_results_df['P'])
+magma_results_df['size_mlog10_pvalue'] = np.log1p(magma_results_df['mlog10_pvalue']) * 1000
+
+plot_magma(magma_results_df)
 
 # %%
