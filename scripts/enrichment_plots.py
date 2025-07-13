@@ -108,6 +108,21 @@ all_sccompreg_hits_df = pd.read_csv(os.path.join(output_dir, 'all_sccompreg_hits
 pydeseq2_match_length_genes_hits_df = pd.read_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_hits_df.csv'))
 pydeseq2_match_length_genes_tfs_multiple_hits = pd.read_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_tfs_multiple_hits.csv'))
 
+#%% Load GREAT results from R script output
+
+great_csv_outputs_path = os.path.join(output_dir, 'great_csv_outputs')
+great_csv_outputs_files = os.listdir(great_csv_outputs_path)
+
+great_results_df_dict = tree()
+for file in great_csv_outputs_files:
+    if file.endswith('.csv'):
+        great_results_df = pd.read_csv(os.path.join(great_csv_outputs_path, file), index_col=0)
+
+        sex = file.split('_')[0]
+        celltype = file.split('_')[1].split('.')[0]
+        great_results_df_dict[sex][celltype] = great_results_df
+
+
 #%% Extract basic information
 unique_sexes = list(enrs_dict.keys())
 unique_celltypes = list(enrs_dict[unique_sexes[0]].keys())
@@ -117,6 +132,7 @@ brain_gmt_cortical, brain_gmt_cortical_wGO = get_brain_gmt()
 with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
     all_dicts = pickle.load(f)
 mean_grn_df = all_dicts[-1]
+
 
 #%% EnrichR results for MDD-DN pathway
 
@@ -153,7 +169,6 @@ def get_enrs_mdd_dn_hits_df(enrs_dict, filtered_type='All LR'):
 
 def plot_enrichment_significance(enrs_mdd_dn_hits_df, figsize=(6, 2)):
 
-
     # Ensure x-axis is in alphabetical order
     enrs_mdd_dn_hits_df = enrs_mdd_dn_hits_df.sort_values('celltype')
 
@@ -167,6 +182,7 @@ def plot_enrichment_significance(enrs_mdd_dn_hits_df, figsize=(6, 2)):
 
     # Split data by significance levels
     non_sig_data = enrs_mdd_dn_hits_df[enrs_mdd_dn_hits_df['mlog10_padj'] == 0]
+    sig_data = enrs_mdd_dn_hits_df[enrs_mdd_dn_hits_df['mlog10_padj'] > 0]
     sig_not_bonferroni_data = enrs_mdd_dn_hits_df[(enrs_mdd_dn_hits_df['mlog10_padj'] > sig_threshold) & (enrs_mdd_dn_hits_df['mlog10_padj'] <= bonferroni_threshold_mlog10)]
     bonferroni_sig_data = enrs_mdd_dn_hits_df[enrs_mdd_dn_hits_df['mlog10_padj'] > bonferroni_threshold_mlog10]
 
@@ -201,7 +217,7 @@ def plot_enrichment_significance(enrs_mdd_dn_hits_df, figsize=(6, 2)):
     ax.set_ylim(-0.5, 1.5)
 
     # Add colorbar for mlog10_padj
-    scatter = ax.scatter(bonferroni_sig_data['celltype'], bonferroni_sig_data['sex'], c=bonferroni_sig_data['mlog10_padj'], cmap='viridis', alpha=0.6, s=0)
+    scatter = ax.scatter(sig_data['celltype'], sig_data['sex'], c=sig_data['mlog10_padj'], cmap='viridis', alpha=0.6, s=0)
     cbar = plt.colorbar(scatter, ax=ax)
     cbar.ax.set_title('$-log_{10}(p)$', pad=10, fontsize=9)
 
@@ -280,8 +296,13 @@ def get_ttest_df(ttest_comp_df_dict, pathway_name='ASTON_MAJOR_DEPRESSIVE_DISORD
     return ttest_comp_results_df
 
 def plot_ttest(ttest_mdd_dn_df, ax=None):
+
     if ax is None:
         fig, ax = plt.subplots(figsize=(6, 2))
+
+    # Further filter to only include celltypes with significant FDR p-values by setting mlog10_pvalue to 0
+    ttest_mdd_dn_df.loc[ttest_mdd_dn_df['mlog10_pvalue'] < -np.log10(0.05), 'mlog10_pvalue'] = 0
+    ttest_mdd_dn_df.loc[ttest_mdd_dn_df['mlog10_pvalue'] < -np.log10(0.05), 'size_mlog10_pvalue'] = 0
 
     # Ensure x-axis is in alphabetical order
     ttest_mdd_dn_df = ttest_mdd_dn_df.sort_values('celltype')
@@ -328,7 +349,8 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
     # Add size legend for mlog10_pvalue
     sizes_describe = ttest_mdd_dn_df[['size_mlog10_pvalue','mlog10_pvalue']].loc[ttest_mdd_dn_df['mlog10_pvalue']>0].describe()
     sizes = [sizes_describe.loc['min','size_mlog10_pvalue'], sizes_describe.loc['50%','size_mlog10_pvalue'], sizes_describe.loc['max','size_mlog10_pvalue']]
-    size_labels = np.array([sizes_describe.loc['min','mlog10_pvalue'], sizes_describe.loc['50%','mlog10_pvalue'], sizes_describe.loc['max','mlog10_pvalue']]).astype(int)
+    size_labels = np.array([sizes_describe.loc['min','mlog10_pvalue'], sizes_describe.loc['50%','mlog10_pvalue'], sizes_describe.loc['max','mlog10_pvalue']])
+    size_labels = [f'{int(x)}' if x>=10 else f'{x:.2g}' for x in size_labels]
 
     # Create a separate axis for the size legend
     #ax2 = fig.add_axes([0.88, 0.1, 0.2, 0.8])  # Position for size legend
@@ -360,9 +382,9 @@ ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df)
 
 pathways_of_interest = [
     "ASTON_MAJOR_DEPRESSIVE_DISORDER_DN",
-    #"Oligodendrocyte_Mature_Darmanis_PNAS_2015",
+    "Oligodendrocyte_Mature_Darmanis_PNAS_2015",
     #"FAN_EMBRYONIC_CTX_OLIG",
-    "LEIN_OLIGODENDROCYTE_MARKERS",
+    #"LEIN_OLIGODENDROCYTE_MARKERS",
     #"ZHONG_PFC_C4_PTGDS_POS_OPC",
     #"DESCARTES_FETAL_CEREBRUM_OLIGODENDROCYTES",
     #"COLIN_PILOCYTIC_ASTROCYTOMA_VS_GLIOBLASTOMA_UP",
@@ -378,7 +400,7 @@ pathways_of_interest = [
 
 # Call the function
 n = len(pathways_of_interest)
-fig, axes = plt.subplots(n, 1, figsize=(8, 2*n), sharex=True)
+fig, axes = plt.subplots(n, 1, figsize=(8, 2.25*n), sharex=True)
 if n == 1:
     axes = [axes]
 
@@ -387,6 +409,7 @@ for i, pathway_name in enumerate(pathways_of_interest):
     plot_ttest(ttest_df, ax=axes[i])
     axes[i].set_title(pathway_name)
 
+#fig.suptitle('Pathway-level differential expression of genes identified from MDD pathway enrichment', fontsize=10, y=0.96)
 fig.tight_layout()
 plt.show()
 
@@ -643,4 +666,32 @@ magma_results_df['size_mlog10_pvalue'] = np.log1p(magma_results_df['mlog10_pvalu
 
 plot_magma(magma_results_df)
 
-# %%
+#%% GREAT results
+
+great_results_mdd_dn_df = pd.DataFrame(columns=['ngenes', 'padj', 'mlog10_padj'], 
+                                index=pd.MultiIndex.from_product([unique_sexes, unique_celltypes], names=['sex', 'celltype']))
+
+for sex in unique_sexes:
+    for celltype in unique_celltypes:
+
+        great_results_df = great_results_df_dict[sex][celltype]
+        great_mdd_dn = great_results_df[great_results_df.index == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
+
+        if len(great_mdd_dn) == 0:
+            continue
+
+        ngenes = great_mdd_dn['observed_gene_hits'].item()
+        padj = great_mdd_dn['p_adjust_hyper'].item()
+        mlog10_padj = -np.log10(padj)
+
+        great_results_mdd_dn_df.loc[(sex, celltype), 'ngenes'] = ngenes
+        great_results_mdd_dn_df.loc[(sex, celltype), 'padj'] = padj
+        great_results_mdd_dn_df.loc[(sex, celltype), 'mlog10_padj'] = mlog10_padj
+
+great_results_mdd_dn_df.reset_index(inplace=True)
+great_results_mdd_dn_df['mlog10_padj'] = great_results_mdd_dn_df['mlog10_padj'].fillna(0)
+great_results_mdd_dn_df['ngenes'] = great_results_mdd_dn_df['ngenes'].fillna(0)
+great_results_mdd_dn_df['size_ngenes'] = (great_results_mdd_dn_df['ngenes']/great_results_mdd_dn_df['ngenes'].max())**2 * 500
+
+
+plot_enrichment_significance(great_results_mdd_dn_df)

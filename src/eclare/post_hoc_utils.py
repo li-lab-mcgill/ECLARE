@@ -2097,11 +2097,13 @@ def merge_grn_lr_filtered(mean_grn_df, lr_filtered, output_dir):
 ## gene set enrichment analyses
 def get_brain_gmt():
     
-    brain_gmt = gp.parser.read_gmt(os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_HumanOrthologs.gmt'))
+    brain_gmt_path = os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_HumanOrthologs.gmt')
+    brain_gmt = gp.parser.read_gmt(brain_gmt_path)
     brain_gmt_names = pd.Series(list(brain_gmt.keys()))
     brain_gmt_prefix_unique = np.unique([name.split('_')[0] for name in brain_gmt_names])
 
-    brain_gmt_wGO = gp.parser.read_gmt(os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_wGO_HumanOrthologs.gmt'))
+    brain_gmt_wGO_path = os.path.join(os.environ['DATAPATH'], 'BrainGMTv2_wGO_HumanOrthologs.gmt')
+    brain_gmt_wGO = gp.parser.read_gmt(brain_gmt_wGO_path)
     brain_gmt_wGO_names = pd.Series(list(brain_gmt_wGO.keys()))
     brain_gmt_wGO_prefix_unique = np.unique([name.split('_')[0] for name in brain_gmt_wGO_names])
 
@@ -2133,6 +2135,20 @@ def get_brain_gmt():
 
     keep_cortical_gmt_wGO = gset_by_blacklist_df_wGO.loc[:,~gset_by_blacklist_df_wGO.any(axis=0).values].columns.tolist()
     brain_gmt_cortical_wGO = {k:v for k,v in brain_gmt_wGO.items() if k in keep_cortical_gmt_wGO}
+
+    ## save brain_gmt_cortical and brain_gmt_cortical_wGO as gmt files (if don't already exist)
+    if not os.path.exists(os.path.join(os.environ['DATAPATH'], 'brain_gmt_cortical.gmt')):
+
+        # Write brain_gmt_cortical as a gmt file, where each row contains the pathway name and the genes
+        with open(os.path.join(os.environ['DATAPATH'], 'brain_gmt_cortical.gmt'), 'w') as f:
+            for pathway, genes in brain_gmt_cortical.items():
+                line = [pathway, ""] + genes
+                f.write('\t'.join(line) + '\n')
+
+        with open(os.path.join(os.environ['DATAPATH'], 'brain_gmt_cortical_wGO.gmt'), 'w') as f:
+            for pathway, genes in brain_gmt_cortical_wGO.items():
+                line = [pathway, ""] + genes
+                f.write('\t'.join(line) + '\n')
 
     return brain_gmt_cortical, brain_gmt_cortical_wGO
 
@@ -2496,29 +2512,40 @@ def plot_pathway_ranks(pathway_ranks, stem=True, save_path=None):
         plt.savefig(save_path, bbox_inches='tight', dpi=150)
     plt.close()
 
-def do_enrichr(lr_filtered_type, pathways, filter_var='Adjusted P-value', outdir=None):
+def do_enrichr(lr_filtered_type, pathways, filter_var='Adjusted P-value', remove_from_dotplot=[], outdir=None, figsize=(3,6)):
 
-    enr = gp.enrichr(lr_filtered_type.index.to_list(),
-                        gene_sets=pathways,
-                        outdir=None)
+    enr = gp.enrichr(lr_filtered_type.index.to_list(), gene_sets=pathways, outdir=None)
+    enr.res2d['-log10(fdr)'] = -np.log10(enr.res2d['Adjusted P-value'])
 
     display(enr.res2d.sort_values('Adjusted P-value', ascending=True).head(20)[['Term', 'Overlap', 'P-value', 'Adjusted P-value', 'Combined Score', 'Genes']])
 
-    ofname = None if outdir is None else os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs["type"]}.png')
-
     if len(enr.res2d) > 0:
         # dotplot
+        ofname = None if outdir is None else os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs["type"]}.png')
+
         max_pval = enr.res2d['Adjusted P-value'].max()
-        fig = gp.dotplot(enr.res2d,
-                column='Adjusted P-value',
-                figsize=(3,7),
+
+        enr_res2d_plot = enr.res2d.copy()
+        enr_res2d_plot = enr_res2d_plot[~enr_res2d_plot['Term'].isin(remove_from_dotplot)]
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # Add vertical dotted gray line at -log10(0.05)
+        sig_threshold = -np.log10(0.05)
+        ax.axvline(x=sig_threshold, color='gray', linestyle=':', linewidth=1)
+
+        fig = gp.dotplot(enr_res2d_plot,
+                column='Combined Score',
+                x='-log10(fdr)',
                 title=f'{lr_filtered_type.attrs["sex"]} - {lr_filtered_type.attrs["celltype"]} ({lr_filtered_type.attrs["type"]})',
                 cmap=plt.cm.winter,
                 size=12, # adjust dot size
                 cutoff=max_pval,
-                top_term=15,
+                top_term=10,
                 show_ring=False,
+                ax=ax,
                 ofname=ofname)
+
         # Remove plt.show() - it's not thread-safe
         if ofname is not None:
             plt.close(fig)  # Close the figure to free memory

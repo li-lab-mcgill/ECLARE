@@ -394,6 +394,20 @@ for sex in unique_sexes:
 with open(os.path.join(output_dir, 'mean_grn_df_filtered_pruned_dict.pkl'), 'wb') as f:
     pickle.dump(mean_grn_df_filtered_pruned_dict, f)
 
+##
+
+os.makedirs(os.path.join(output_dir, 'great_results'), exist_ok=True)
+
+for sex in unique_sexes:
+    sex = sex.lower()
+    for celltype in unique_celltypes:
+        mean_grn_df_filtered_pruned = mean_grn_df_filtered_pruned_dict[sex][celltype]
+
+        unique_peaks_df = mean_grn_df_filtered_pruned.drop_duplicates('enhancer')
+        peaks_bed = unique_peaks_df[['chrom','chromStart','chromEnd']]
+        peaks_bed.to_csv(os.path.join(output_dir, 'great_results', f'{sex}_{celltype}_peaks.bed'), sep='\t', header=False, index=False)
+
+
 ## find shared TF-TG pairs across all celltypes and sexes
 for sex in unique_sexes:
     sex = sex.lower()
@@ -716,8 +730,10 @@ enrs_mdd_dn_df = pd.concat(enrs_mdd_dn_list)
 enrs_mdd_dn_genes = np.unique(np.hstack(enrs_mdd_dn_df['Genes'].apply(lambda x: x.split(';')).values))
 enrs_mdd_dn_genes_series = pd.Series(enrs_mdd_dn_genes, index=enrs_mdd_dn_genes)
 enrs_mdd_dn_genes_series.attrs = {'sex': 'all', 'celltype': 'all', 'type': 'MDD-DN_genes'}
+print(f'Number of MDD-DN overlapping genes: {len(enrs_mdd_dn_genes_series)}')
 
-enrs_mdd_dn_genes_enrichr = do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, outdir=output_dir)
+enrs_mdd_dn_genes_enrichr = do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, outdir=output_dir,
+                                       remove_from_dotplot=['ASTON_MAJOR_DEPRESSIVE_DISORDER_DN'])
 
 ## search genes with largest overlap across enriched pathways
 enrs_mdd_dn_genes_shared_TF_TG_pairs_df = shared_TF_TG_pairs_df[shared_TF_TG_pairs_df['TG'].isin(enrs_mdd_dn_genes)]
@@ -737,7 +753,7 @@ all_sccompreg_genes = np.unique(np.hstack([
 all_sccompreg_genes_series = pd.Series(all_sccompreg_genes, index=all_sccompreg_genes)
 all_sccompreg_genes_series.attrs = {'sex': 'all', 'celltype': 'all', 'type': 'sc-compReg_filtered_genes'}
 
-all_sccompreg_genes_enrichr = do_enrichr(all_sccompreg_genes_series, brain_gmt_cortical, outdir=output_dir)
+all_sccompreg_genes_enrichr = do_enrichr(all_sccompreg_genes_series, brain_gmt_cortical, outdir=output_dir, figsize=(3,9))
 
 all_sccompreg_genes_shared_TF_TG_pairs_df = shared_TF_TG_pairs_df[shared_TF_TG_pairs_df['TG'].isin(all_sccompreg_genes)]
 all_sccompreg_genes_shared = all_sccompreg_genes_shared_TF_TG_pairs_df['TG'].unique()
