@@ -33,6 +33,7 @@ import torch
 import seaborn as sns
 from scanpy.tl import score_genes
 from statsmodels.stats.weightstats import DescrStatsW
+import json
 
 # Set matplotlib to use a thread-safe backend
 import matplotlib
@@ -445,6 +446,11 @@ for TF in shared_TF_TG_pairs_df_grouped_filtered.index:
 
             if len(enriched_tfs_match_TF_list) >= 2: # at least 2 TFs should be enriched for the same TG to study interesting TFs and their regulons
                 enriched_TF_TG_pairs_dict[TF] = enriched_tfs_match_TF_list
+
+## write enriched_TF_TG_pairs_dict to json
+with open(os.path.join(output_dir, 'enriched_TF_TG_pairs_dict.json'), 'w') as f:
+    json.dump(enriched_TF_TG_pairs_dict, f)
+
 
 #%% investigate EGR1 and NR4A2
 

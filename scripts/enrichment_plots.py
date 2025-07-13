@@ -28,7 +28,8 @@ import pickle
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import SymLogNorm
+from matplotlib.colors import SymLogNorm, ListedColormap
+import json
 
 from eclare.post_hoc_utils import tree, get_brain_gmt
 
@@ -95,6 +96,8 @@ ttest_comp_df_dict = loaded_dicts.get('ttest_comp_df_dict', tree())
 
 ## Load CSV files and other file types
 shared_TF_TG_pairs_df = pd.read_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'))
+with open(os.path.join(output_dir, 'enriched_TF_TG_pairs_dict.json'), 'r') as f:
+    enriched_TF_TG_pairs_dict = json.load(f)
 
 enrs_mdd_dn_hits_df = pd.read_csv(os.path.join(output_dir, 'enrs_mdd_dn_hits_df.csv'))
 enrs_mdd_dn_tfs_multiple_hits = pd.read_csv(os.path.join(output_dir, 'enrs_mdd_dn_tfs_multiple_hits.csv'))
@@ -110,6 +113,10 @@ unique_sexes = list(enrs_dict.keys())
 unique_celltypes = list(enrs_dict[unique_sexes[0]].keys())
 
 brain_gmt_cortical, brain_gmt_cortical_wGO = get_brain_gmt()
+
+with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
+    all_dicts = pickle.load(f)
+mean_grn_df = all_dicts[-1]
 
 #%% EnrichR results for MDD-DN pathway
 
@@ -268,7 +275,7 @@ def get_ttest_df(ttest_comp_df_dict, pathway_name='ASTON_MAJOR_DEPRESSIVE_DISORD
     ttest_comp_results_df.reset_index(inplace=True)
     ttest_comp_results_df['tstat'] = ttest_comp_results_df['tstat'].fillna(0)
     ttest_comp_results_df['mlog10_pvalue'] = ttest_comp_results_df['mlog10_pvalue'].fillna(0)
-    ttest_comp_results_df['size_mlog10_pvalue'] = np.log1p(ttest_comp_results_df['mlog10_pvalue']) * 100
+    ttest_comp_results_df['size_mlog10_pvalue'] = np.log1p(ttest_comp_results_df['mlog10_pvalue']) * 60
 
     return ttest_comp_results_df
 
@@ -294,10 +301,11 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
     vmax = max(abs(ttest_mdd_dn_df['tstat']))
     vmin = -vmax
     norm = SymLogNorm(linthresh=1.0, linscale=1.0, vmin=vmin, vmax=vmax)
+    cmap = ListedColormap(['orange', 'purple']) # recreate PuOr colormap
 
     # Main scatter plot
     scatter = ax.scatter(ttest_mdd_dn_df['celltype'], ttest_mdd_dn_df['sex'], 
-               c=ttest_mdd_dn_df['tstat'], cmap='PuOr', norm=norm, alpha=0.6, s=ttest_mdd_dn_df['size_mlog10_pvalue'], edgecolors='black')
+               c=ttest_mdd_dn_df['tstat'], cmap=cmap, norm=norm, alpha=0.6, s=ttest_mdd_dn_df['size_mlog10_pvalue'], edgecolors='black')
     
     if pathway_name == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN':
         assert (ttest_mdd_dn_df['mlog10_pvalue'][ttest_mdd_dn_df['mlog10_pvalue']>0] > -np.log10(0.05)).all()
@@ -307,7 +315,15 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
 
     # Add colorbar for tstat
     cbar = plt.colorbar(scatter, ax=ax)
-    cbar.ax.set_title('t-stat', pad=10, fontsize=9)
+    #cbar.ax.set_title('t-stat', pad=10, fontsize=9)
+    cbar.set_ticks([])  # Remove legend tick labels
+
+    # Add "downregulated" and "upregulated" labels to colorbar
+    cbar_min, cbar_max = cbar.ax.get_ylim()
+    mid_bottom = cbar_min + (cbar_max - cbar_min) / 2.1
+    mid_top = cbar_max - (cbar_max - cbar_min) / 2.1
+    cbar.ax.text(2, mid_bottom, 'down \n reg.', va='bottom', ha='left', fontsize=8, rotation=0, transform=cbar.ax.transData)
+    cbar.ax.text(2, mid_top, 'up \n reg.', va='top', ha='left', fontsize=8, rotation=0, transform=cbar.ax.transData)
 
     # Add size legend for mlog10_pvalue
     sizes_describe = ttest_mdd_dn_df[['size_mlog10_pvalue','mlog10_pvalue']].loc[ttest_mdd_dn_df['mlog10_pvalue']>0].describe()
@@ -316,14 +332,14 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
 
     # Create a separate axis for the size legend
     #ax2 = fig.add_axes([0.88, 0.1, 0.2, 0.8])  # Position for size legend
-    ax2 = ax.inset_axes([1.1, 0.1, 0.4, 0.8])  # Position for size legend
+    ax2 = ax.inset_axes([1.0, 0.1, 0.4, 0.8])  # Position for size legend
     ax2.set_xlim(0, 1)
     ax2.set_ylim(-1.2, 2 * len(sizes))  # More vertical space
 
     for i, (size, label) in enumerate(zip(sizes, size_labels)):
         y = i * 2  # Spread out vertically
         ax2.scatter(0.5, y, s=size, color='grey', alpha=0.7, edgecolors='black')
-        ax2.text(0.7, y, f'{label}', va='center', fontsize=8)
+        ax2.text(0.625, y, f'{label}', va='center', fontsize=8)
 
     ax2.set_title('$-log_{10}(p)$', fontsize=9, pad=0, loc='left', x=0.4, y=0.96)
     ax2.axis('off')
@@ -343,20 +359,21 @@ ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df)
 #%% Module scores for pathways of interest
 
 pathways_of_interest = [
-    "Oligodendrocyte_Mature_Darmanis_PNAS_2015",
-    "FAN_EMBRYONIC_CTX_OLIG",
+    "ASTON_MAJOR_DEPRESSIVE_DISORDER_DN",
+    #"Oligodendrocyte_Mature_Darmanis_PNAS_2015",
+    #"FAN_EMBRYONIC_CTX_OLIG",
     "LEIN_OLIGODENDROCYTE_MARKERS",
-    "ZHONG_PFC_C4_PTGDS_POS_OPC",
-    "DESCARTES_FETAL_CEREBRUM_OLIGODENDROCYTES",
-    "COLIN_PILOCYTIC_ASTROCYTOMA_VS_GLIOBLASTOMA_UP",
-    "DESCARTES_MAIN_FETAL_OLIGODENDROCYTES",
-    "DESCARTES_FETAL_CEREBELLUM_OLIGODENDROCYTES",
-    "LU_AGING_BRAIN_UP",
-    "DURANTE_ADULT_OLFACTORY_NEUROEPITHELIUM_OLFACTORY_ENSHEATHING_GLIA",
-    "DESCARTES_MAIN_FETAL_SCHWANN_CELLS",
-    "Oligodendrocyte_All_Zeisel_Science_2015",
-    "GOBERT_OLIGODENDROCYTE_DIFFERENTIATION_DN",
-    "BLALOCK_ALZHEIMERS_DISEASE_UP"
+    #"ZHONG_PFC_C4_PTGDS_POS_OPC",
+    #"DESCARTES_FETAL_CEREBRUM_OLIGODENDROCYTES",
+    #"COLIN_PILOCYTIC_ASTROCYTOMA_VS_GLIOBLASTOMA_UP",
+    #"DESCARTES_MAIN_FETAL_OLIGODENDROCYTES",
+    #"DESCARTES_FETAL_CEREBELLUM_OLIGODENDROCYTES",
+    #"LU_AGING_BRAIN_UP",
+    #"DURANTE_ADULT_OLFACTORY_NEUROEPITHELIUM_OLFACTORY_ENSHEATHING_GLIA",
+    #"DESCARTES_MAIN_FETAL_SCHWANN_CELLS",
+    #"Oligodendrocyte_All_Zeisel_Science_2015",
+    #"GOBERT_OLIGODENDROCYTE_DIFFERENTIATION_DN",
+    #"BLALOCK_ALZHEIMERS_DISEASE_UP"
 ]
 
 # Call the function
@@ -372,6 +389,195 @@ for i, pathway_name in enumerate(pathways_of_interest):
 
 fig.tight_layout()
 plt.show()
+
+#%% GRN plot of ABHD17B
+
+TFs_of_EGR1 = mean_grn_df[mean_grn_df['TG'] == 'EGR1']['TF'].to_list()
+
+hit1 = 'NR4A2'
+assert hit1 in TFs_of_EGR1
+
+#NR4A2_targets_ExN_male = mean_grn_df_filtered_dict['male']['ExN'].loc[mean_grn_df_filtered_dict['male']['ExN']['TF'] == 'NR4A2']
+grn_female_exn = mean_grn_df_filtered_pruned_dict['female']['ExN']
+NR4A2_targets_ExN_female = grn_female_exn[grn_female_exn['TF']==hit1]
+EGR1_targets_ExN_female = grn_female_exn[grn_female_exn['TF']=='EGR1']
+SOX2_targets_ExN_female = grn_female_exn[grn_female_exn['TF']=='SOX2']
+
+hit2 = 'ABHD17B'
+assert hit2 in NR4A2_targets_ExN_female['TG'].to_list()
+
+NR4A2_hit2 = NR4A2_targets_ExN_female[NR4A2_targets_ExN_female['TG'] == 'ABHD17B']['enhancer'].item()
+EGR1_hit2 = EGR1_targets_ExN_female[EGR1_targets_ExN_female['TG'] == 'ABHD17B']['enhancer'].item()
+assert NR4A2_hit2==EGR1_hit2
+
+SOX2_hit2 = SOX2_targets_ExN_female[SOX2_targets_ExN_female['TG'] == 'ABHD17B']['enhancer']
+assert not SOX2_hit2.isin([NR4A2_hit2, EGR1_hit2]).any()
+
+enriched_TFs = np.array(list(enriched_TF_TG_pairs_dict.keys()))
+female_exn_TFs_of_ABHD17B = grn_female_exn[grn_female_exn['TG']==hit2]['TF'].values
+female_exn_enriched_TFs_of_ABHD17B = enriched_TFs[np.isin(enriched_TFs, female_exn_TFs_of_ABHD17B)]
+
+
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+import matplotlib.patches as mpatches
+import networkx as nx
+
+G = nx.DiGraph()
+
+edge_color_map = {
+    'a priori (brainSCOPE)': 'gray',
+    'female ExN': 'blue',
+    'all': 'green'
+}
+
+G.add_edge('NR4A2', 'EGR1', interaction='a priori', color=edge_color_map['a priori'])
+G.add_edge('NR4A2', NR4A2_hit2, interaction='female_ExN', color=edge_color_map['female_ExN'])
+G.add_edge('EGR1', EGR1_hit2, interaction='female_ExN', color=edge_color_map['female_ExN'])
+G.add_edge(NR4A2_hit2, 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
+G.add_edge(EGR1_hit2, 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
+G.add_edge('SOX2', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
+#G.add_edge('NR4A2', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
+#G.add_edge('EGR1', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
+
+all_targets = []
+for tf in female_exn_enriched_TFs_of_ABHD17B:
+    tf_targets = enriched_TF_TG_pairs_dict[tf]
+
+    tf_targets_df = mean_grn_df[(mean_grn_df['TF']==tf) & mean_grn_df['TG'].isin(tf_targets)]
+    if_enhancer_more_than_one_tg = tf_targets_df.groupby('enhancer')['TG'].nunique() > 1
+    if if_enhancer_more_than_one_tg.any():
+        None # currently, no "all TF"-enhancer has more than one TG target
+
+    for tf_target in tf_targets:
+        G.add_edge(tf, tf_target, interaction='all', color=edge_color_map['all'])
+        all_targets.append(tf_target)
+
+# Assign layer information to each node
+for node in G.nodes():
+    if node == 'NR4A2':
+        G.nodes[node]['layer'] = 0
+    elif node in ['EGR1', 'SOX2']:
+        G.nodes[node]['layer'] = 1
+    elif (node==EGR1_hit2) and (node==NR4A2_hit2):
+        G.nodes[node]['layer'] = 2
+    elif node == 'ABHD17B':
+        G.nodes[node]['layer'] = 3
+    elif node in all_targets:
+        G.nodes[node]['layer'] = 4
+
+pos = nx.multipartite_layout(G, subset_key='layer', scale=2)
+
+for egr1_target in enriched_TF_TG_pairs_dict['EGR1']:
+    pos[egr1_target] += np.array([0, 0.4])
+
+colors = nx.get_edge_attributes(G, 'color').values()
+
+fig, ax = plt.subplots(figsize=(4, 4))
+
+# Draw nodes in groups with different styles
+# 1. Draw regular nodes (excluding the special ones)
+regular_nodes = [n for n in G.nodes() if n not in [NR4A2_hit2, EGR1_hit2]]
+nx.draw_networkx_nodes(G, pos,
+    nodelist=regular_nodes,
+    node_size=1200,
+    node_color='lightgrey',
+    edgecolors='k',
+    ax=ax
+)
+
+# 2. Draw the special nodes (NR4A2_hit2 and EGR1_hit2) with different style
+#special_nodes = [n for n in G.nodes() if n in [NR4A2_hit2, EGR1_hit2]]
+nx.draw_networkx_nodes(G, pos,
+    nodelist=[NR4A2_hit2],
+    node_size=100,  # smaller size
+    node_color='lightgrey',
+    edgecolors='k',
+    node_shape='s',  # square shape
+    ax=ax
+)
+
+# Draw edges
+nx.draw_networkx_edges(G, pos,
+    arrowstyle='-|>',
+    arrowsize=15,
+    width=2,
+    edge_color=list(nx.get_edge_attributes(G, 'color').values()),
+    min_source_margin=0.5,
+    min_target_margin=0.5,
+    ax=ax
+)
+
+# Draw labels for regular nodes only (excluding the special ones and ABHD17B)
+labels = {n: n for n in G.nodes() if n not in ['ABHD17B', NR4A2_hit2, EGR1_hit2]}
+nx.draw_networkx_labels(G, pos, labels,
+    font_size=8,
+    font_color='black',
+    ax=ax
+)
+
+# Draw ABHD17B label separately (as in original code)
+x, y = pos['ABHD17B']
+plt.text(
+    x, y,
+    'ABHD17B',
+    fontsize=6,
+    fontweight='bold',
+    ha='center',
+    va='center'
+)
+
+axins = inset_axes(ax,
+                   width="40%",    # width = 20% of parent_bbox width
+                   height="20%",   # height= 20%
+                   loc='lower left',
+                   borderpad=1)
+
+H = nx.DiGraph()
+H.add_edge('TF','TG')
+
+pos2 = {'TF': (0.4, 0.5),
+        'TG': (0.6, 0.5)}
+
+nx.draw_networkx_nodes(H, pos2, node_size=800, node_color='lightgrey', edgecolors='k', ax=axins)
+nx.draw_networkx_edges(H, pos2, arrowstyle='-|>', arrowsize=20, edge_color='k',min_source_margin=0.2, min_target_margin=0.2, ax=axins)
+nx.draw_networkx_labels(H, pos2, font_size=10, ax=axins)
+
+# Add legend
+legend_handles = [
+    mpatches.Patch(color=edge_color_map['a priori (brainSCOPE)'], label='a priori (brainSCOPE)'),
+    mpatches.Patch(color=edge_color_map['female ExN'], label='female ExN'),
+    mpatches.Patch(color=edge_color_map['all'], label='all'),
+]
+legend_labels = edge_color_map.keys()
+ax.legend(handles=legend_handles, title='relevant group', loc='upper left')
+
+axins.set_xlim(0.3, 0.7)
+axins.set_ylim(0.3, 0.7)
+
+axins.axis('off')
+ax.axis('off')
+
+plt.tight_layout()
+plt.show()
+
+
+## Create a new, empty figure just for the legend
+fig_legend = plt.figure(figsize=(3, 1))  # adjust size as needed
+fig_legend.legend(legend_handles, legend_labels,
+                  loc='center',        # put legend in the center
+                  title='edge type',
+                  frameon=False)
+
+## Remove axes, and save tight around the legend
+fig_legend.subplots_adjust(left=0, right=1, top=1, bottom=0)
+fig_legend.savefig(os.path.join(output_dir, 'grn_legend_only.png'), 
+                   bbox_inches='tight', 
+                   pad_inches=0.1, 
+                   dpi=300)
+
+#nx.write_graphml(G, os.path.join(output_dir, "ABHD17B_GRN.graphml"))
+nx.write_gexf(G, os.path.join(output_dir, "ABHD17B_GRN.gexf"))
+
 
 
 #%% MAGMA results
