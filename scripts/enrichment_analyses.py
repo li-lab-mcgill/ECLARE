@@ -394,18 +394,21 @@ for sex in unique_sexes:
 with open(os.path.join(output_dir, 'mean_grn_df_filtered_pruned_dict.pkl'), 'wb') as f:
     pickle.dump(mean_grn_df_filtered_pruned_dict, f)
 
-##
 
-os.makedirs(os.path.join(output_dir, 'great_results'), exist_ok=True)
+## save peak BED files for GREAT analysis (R script)
+os.makedirs(os.path.join(output_dir, 'peak_bed_files'), exist_ok=True)
 
 for sex in unique_sexes:
     sex = sex.lower()
     for celltype in unique_celltypes:
-        mean_grn_df_filtered_pruned = mean_grn_df_filtered_pruned_dict[sex][celltype]
+        #mean_grn_df_filtered_pruned = mean_grn_df_filtered_pruned_dict[sex][celltype]
+        #unique_peaks_df = mean_grn_df_filtered_pruned.drop_duplicates('enhancer')
 
-        unique_peaks_df = mean_grn_df_filtered_pruned.drop_duplicates('enhancer')
+        mean_grn_df_filtered = mean_grn_df_filtered_dict[sex][celltype]
+        unique_peaks_df = mean_grn_df_filtered.drop_duplicates('enhancer')
+
         peaks_bed = unique_peaks_df[['chrom','chromStart','chromEnd']]
-        peaks_bed.to_csv(os.path.join(output_dir, 'great_results', f'{sex}_{celltype}_peaks.bed'), sep='\t', header=False, index=False)
+        peaks_bed.to_csv(os.path.join(output_dir, 'peak_bed_files', f'{sex}_{celltype}_peaks.bed'), sep='\t', header=False, index=False)
 
 
 ## find shared TF-TG pairs across all celltypes and sexes
