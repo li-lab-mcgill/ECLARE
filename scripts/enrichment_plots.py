@@ -167,7 +167,7 @@ def get_enrs_mdd_dn_hits_df(enrs_dict, filtered_type='All LR'):
 
     return enrs_mdd_dn_hits_df
 
-def plot_enrichment_significance(enrs_mdd_dn_hits_df, figsize=(6, 2)):
+def plot_enrichment_significance(enrs_mdd_dn_hits_df, title='', figsize=(6, 2)):
 
     # Ensure x-axis is in alphabetical order
     enrs_mdd_dn_hits_df = enrs_mdd_dn_hits_df.sort_values('celltype')
@@ -205,7 +205,7 @@ def plot_enrichment_significance(enrs_mdd_dn_hits_df, figsize=(6, 2)):
     if len(sig_not_bonferroni_data) > 0:
         ax.scatter(sig_not_bonferroni_data['celltype'], sig_not_bonferroni_data['sex'], 
                    s=sig_not_bonferroni_data['size_ngenes'], c=sig_not_bonferroni_data['mlog10_padj'], 
-                   cmap=cmap, norm=norm, alpha=0.6, marker='o', hatch=3*'.', label='Significant (p<0.05)', edgecolors='black')
+                   cmap=cmap, norm=norm, alpha=0.6, marker='o', hatch=3*'//', edgecolors='white', label='Significant (p<0.05)')
 
     # Plot Bonferroni significant as stars
     if len(bonferroni_sig_data) > 0:
@@ -246,7 +246,7 @@ def plot_enrichment_significance(enrs_mdd_dn_hits_df, figsize=(6, 2)):
     ax.set_xticklabels(celltype_order, rotation=45, ha='right')
 
     fig.tight_layout()
-    fig.suptitle('EnrichR results for MDD-DN pathway', fontsize=10, y=0.96)
+    fig.suptitle(title, fontsize=10, y=0.96)
     
     return fig, ax
 
@@ -694,4 +694,6 @@ great_results_mdd_dn_df['ngenes'] = great_results_mdd_dn_df['ngenes'].fillna(0)
 great_results_mdd_dn_df['size_ngenes'] = (great_results_mdd_dn_df['ngenes']/great_results_mdd_dn_df['ngenes'].max())**2 * 500
 
 
-plot_enrichment_significance(great_results_mdd_dn_df)
+plot_enrichment_significance(great_results_mdd_dn_df, title='GREAT results for MDD-DN pathway')
+
+# %%
