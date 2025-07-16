@@ -2552,11 +2552,10 @@ def do_enrichr(lr_filtered_type, pathways, filter_var='Adjusted P-value', remove
         else:
             plt.show()
 
-        enr_sig_pathways_df = enr.res2d[enr.res2d[filter_var] < 0.05]
-        #enr_sig_pathways_padj = enr_sig_pathways_df['Adjusted P-value'].to_list()
-        #enr_sig_pathways = enr_sig_pathways_df['Term'].to_list()
-        #enr_sig_pathways_set = set(enr_sig_pathways) if enr_sig_pathways is not None else set()
-        #enr_sig_pathways_genes = enr_sig_pathways_df['Genes'].str.split(';').to_list()
+        if filter_var is not None:
+            enr_sig_pathways_df = enr.res2d[enr.res2d[filter_var] < 0.05]
+        else:
+            enr_sig_pathways_df = enr.res2d
 
         return enr_sig_pathways_df
     else:

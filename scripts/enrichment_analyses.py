@@ -469,137 +469,6 @@ with open(os.path.join(output_dir, 'enriched_TF_TG_pairs_dict.json'), 'w') as f:
     json.dump(enriched_TF_TG_pairs_dict, f)
 
 
-#%% investigate EGR1 and NR4A2
-
-TFs_of_EGR1 = mean_grn_df[mean_grn_df['TG'] == 'EGR1']['TF'].to_list()
-
-hit1 = 'NR4A2'
-assert hit1 in TFs_of_EGR1
-
-#NR4A2_targets_ExN_male = mean_grn_df_filtered_dict['male']['ExN'].loc[mean_grn_df_filtered_dict['male']['ExN']['TF'] == 'NR4A2']
-grn_female_exn = mean_grn_df_filtered_pruned_dict['female']['ExN']
-NR4A2_targets_ExN_female = grn_female_exn[grn_female_exn['TF']==hit1]
-EGR1_targets_ExN_female = grn_female_exn[grn_female_exn['TF']=='EGR1']
-SOX2_targets_ExN_female = grn_female_exn[grn_female_exn['TF']=='SOX2']
-
-hit2 = 'ABHD17B'
-assert hit2 in NR4A2_targets_ExN_female['TG'].to_list()
-
-enriched_TFs = np.array(list(enriched_TF_TG_pairs_dict.keys()))
-female_exn_TFs_of_ABHD17B = grn_female_exn[grn_female_exn['TG']==hit2]['TF'].values
-female_exn_enriched_TFs_of_ABHD17B = enriched_TFs[np.isin(enriched_TFs, female_exn_TFs_of_ABHD17B)]
-
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-import matplotlib.patches as mpatches
-import networkx as nx
-
-G = nx.DiGraph()
-
-edge_color_map = {
-    'a priori': 'gray',
-    'female_ExN': 'blue',
-    'all': 'green'
-}
-
-G.add_edge('NR4A2', 'EGR1', interaction='a priori', color=edge_color_map['a priori'])
-G.add_edge('NR4A2', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
-G.add_edge('EGR1', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
-G.add_edge('SOX2', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
-
-all_targets = []
-for tf in female_exn_enriched_TFs_of_ABHD17B:
-    tf_targets = enriched_TF_TG_pairs_dict[tf]
-    for tf_target in tf_targets:
-        G.add_edge(tf, tf_target, interaction='all', color=edge_color_map['all'])
-        all_targets.append(tf_target)
-
-# Assign layer information to each node
-for node in G.nodes():
-    if node == 'NR4A2':
-        G.nodes[node]['layer'] = 0
-    elif node in ['EGR1', 'SOX2']:
-        G.nodes[node]['layer'] = 1
-    elif node == 'ABHD17B':
-        G.nodes[node]['layer'] = 2
-    elif node in all_targets:
-        G.nodes[node]['layer'] = 3
-
-pos = nx.multipartite_layout(G, subset_key='layer', scale=2)
-
-for egr1_target in enriched_TF_TG_pairs_dict['EGR1']:
-    pos[egr1_target] += np.array([0, 0.4])
-
-colors = nx.get_edge_attributes(G, 'color').values()
-
-fig, ax = plt.subplots(figsize=(4, 4))
-
-nx.draw_networkx_nodes(G, pos,
-    node_size=1200,
-    node_color='lightgrey',
-    edgecolors='k',
-    ax=ax
-)
-nx.draw_networkx_edges(G, pos,
-    arrowstyle='-|>',
-    arrowsize=15,
-    width=2,
-    edge_color=list(nx.get_edge_attributes(G, 'color').values()),
-    min_source_margin=0.05,
-    min_target_margin=0.05,
-    ax=ax
-)
-
-# 2) Draw all labels *except* the special one at your default size
-labels = {n: n for n in G.nodes() if n != 'ABHD17B'}
-nx.draw_networkx_labels(G, pos, labels,
-    font_size=8,       # default for everyone else
-    font_color='black',
-    ax=ax
-)
-
-# 3) Finally, over‐draw the one with a custom fontsize:
-x, y = pos['ABHD17B']
-plt.text(
-    x, y,
-    'ABHD17B',
-    fontsize=6,        # big label
-    fontweight='bold',  # optional styling
-    ha='center',
-    va='center'
-)
-
-axins = inset_axes(ax,
-                   width="40%",    # width = 20% of parent_bbox width
-                   height="20%",   # height= 20%
-                   loc='lower left',
-                   borderpad=1)
-
-H = nx.DiGraph()
-H.add_edge('TF','TG')
-
-pos2 = {'TF': (0.4, 0.5),
-        'TG': (0.6, 0.5)}
-
-nx.draw_networkx_nodes(H, pos2, node_size=800, node_color='lightgrey', edgecolors='k', ax=axins)
-nx.draw_networkx_edges(H, pos2, arrowstyle='-|>', arrowsize=20, edge_color='k',min_source_margin=0.2, min_target_margin=0.2, ax=axins)
-nx.draw_networkx_labels(H, pos2, font_size=10, ax=axins)
-
-# Add legend
-legend_handles = [
-    mpatches.Patch(color=edge_color_map['a priori'], label='a priori'),
-    mpatches.Patch(color=edge_color_map['female_ExN'], label='female_ExN'),
-    mpatches.Patch(color=edge_color_map['all'], label='all')
-]
-ax.legend(handles=legend_handles, title='relevant group', loc='upper left')
-
-axins.set_xlim(0.3, 0.7)
-axins.set_ylim(0.3, 0.7)
-
-axins.axis('off')
-ax.axis('off')
-
-plt.tight_layout()
-plt.show()
 
 #%% plot genome track around
 
@@ -793,6 +662,75 @@ if len(pydeseq2_match_length_genes_shared) > 0:
     pydeseq2_match_length_genes_hits_df.to_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_hits_df.csv'), index=True, header=True)
     pydeseq2_match_length_genes_tfs_multiple_hits.to_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_tfs_multiple_hits.csv'), index=True, header=True)
 
-        
+## save filtered results
+with open(os.path.join(output_dir, 'broad_gene_series_dict.pkl'), 'wb') as f:
+    pickle.dump({
+        'enrs_mdd_dn_genes_series': enrs_mdd_dn_genes_series,
+        'all_sccompreg_genes_series': all_sccompreg_genes_series,
+        'pydeseq2_match_length_genes_series': pydeseq2_match_length_genes_series
+    }, f)
+
+#%% Compare number of enriched pathways per type of gene set
+
+## load filtered results
+enrs_mdd_dn_genes_series = pd.read_csv(os.path.join(output_dir, 'enrs_mdd_dn_genes_series.csv'), index_col=0)
+all_sccompreg_genes_series = pd.read_csv(os.path.join(output_dir, 'all_sccompreg_genes_series.csv'), index_col=0)
+pydeseq2_match_length_genes_series = pd.read_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_series.csv'), index_col=0)
+
+## enrichment of pooled gene sets, without filtering for p-value
+enrs_mdd_dn_genes_enrichr_all = do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
+all_sccompreg_genes_enrichr_all = do_enrichr(all_sccompreg_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
+pydeseq2_match_length_genes_enrichr_all = do_enrichr(pydeseq2_match_length_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
+
+results_to_index_mapper = {
+    #'mdd_dn_genes': enrs_mdd_dn_genes_enrichr_all,
+    'sc_compreg_all': all_sccompreg_genes_enrichr_all,
+    'pydeseq2_all': pydeseq2_match_length_genes_enrichr_all
+}
+
+## extract p-values to place into dataframe
+enrs_compare_mlog10_pval_df = pd.DataFrame(0, columns=brain_gmt_cortical.keys(), index=results_to_index_mapper.keys())
+
+for result_name, result_df in results_to_index_mapper.items():
+
+    for pathway in brain_gmt_cortical.keys():
+        if pathway in result_df['Term'].to_list():
+
+            result_pathway = result_df.set_index('Term').loc[pathway]
+            pval = result_pathway['Adjusted P-value']
+            mlog10_pval = -np.log10(pval)
+            enrs_compare_mlog10_pval_df.loc[result_name, pathway] = mlog10_pval
+
+enrs_compare_mlog10_pval_df.dropna(inplace=True)
+
+## extract topk pathways for each experiment type
+topk = 15
+topk_pathways_dict = {}
+for result_name, result_df in enrs_compare_mlog10_pval_df.iterrows():
+
+    topk_pathways = result_df.sort_values(ascending=False).head(topk).index.to_list()
+    topk_pathways_dict[result_name] = topk_pathways
+
+keep_pathways = np.hstack(list(topk_pathways_dict.values()))
+
+enrs_compare_mlog10_pval_ladder = enrs_compare_mlog10_pval_df[keep_pathways].T
+enrs_compare_mlog10_pval_ladder.drop_duplicates(keep='last', inplace=True)
+
+## plot heatmap of topk pathways
+fig, ax = plt.subplots(figsize=(3, 14))
+heatmap = sns.heatmap(enrs_compare_mlog10_pval_ladder, cmap='viridis', vmin=0, vmax=5, ax=ax, cbar_kws={'label': '$-log_{10}$(p-adj.)'})
+ax.set_xticklabels(ax.get_xticklabels(), rotation=30)
+
+# Add red stars where value > -log10(0.05)
+threshold = -np.log10(0.05)
+data = enrs_compare_mlog10_pval_ladder.values
+for y in range(data.shape[0]):
+    for x in range(data.shape[1]):
+        if data[y, x] > threshold:
+            ax.plot(x + 0.5, y + 0.5, marker='*', color='red', markersize=10, markeredgecolor='black')
+
+plt.savefig(os.path.join(output_dir, 'enrs_compare_mlog10_pval_ladder.png'), dpi=300, bbox_inches='tight')
+
+
 # %%
 print ('Done!')
