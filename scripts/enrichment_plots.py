@@ -30,8 +30,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import SymLogNorm, ListedColormap
 import json
+import seaborn as sns
 
-from eclare.post_hoc_utils import tree, get_brain_gmt
+from eclare.post_hoc_utils import tree, get_brain_gmt, do_enrichr
 
 ## Create dict for methods and job_ids
 methods_id_dict = {'eclare_mdd': ['16103846']}

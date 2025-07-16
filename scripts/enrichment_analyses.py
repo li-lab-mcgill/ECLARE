@@ -670,66 +670,64 @@ with open(os.path.join(output_dir, 'broad_gene_series_dict.pkl'), 'wb') as f:
         'pydeseq2_match_length_genes_series': pydeseq2_match_length_genes_series
     }, f)
 
-#%% Compare number of enriched pathways per type of gene set
 
-## load filtered results
-enrs_mdd_dn_genes_series = pd.read_csv(os.path.join(output_dir, 'enrs_mdd_dn_genes_series.csv'), index_col=0)
-all_sccompreg_genes_series = pd.read_csv(os.path.join(output_dir, 'all_sccompreg_genes_series.csv'), index_col=0)
-pydeseq2_match_length_genes_series = pd.read_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_series.csv'), index_col=0)
+#%% differential accessibility
 
-## enrichment of pooled gene sets, without filtering for p-value
-enrs_mdd_dn_genes_enrichr_all = do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
-all_sccompreg_genes_enrichr_all = do_enrichr(all_sccompreg_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
-pydeseq2_match_length_genes_enrichr_all = do_enrichr(pydeseq2_match_length_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
+from pybedtools import BedTool
 
-results_to_index_mapper = {
-    #'mdd_dn_genes': enrs_mdd_dn_genes_enrichr_all,
-    'sc_compreg_all': all_sccompreg_genes_enrichr_all,
-    'pydeseq2_all': pydeseq2_match_length_genes_enrichr_all
-}
+def get_dap_df(sex):
 
-## extract p-values to place into dataframe
-enrs_compare_mlog10_pval_df = pd.DataFrame(0, columns=brain_gmt_cortical.keys(), index=results_to_index_mapper.keys())
+    atac_case = X_atac_dict[sex]['ExN']['Case']
+    atac_control = X_atac_dict[sex]['ExN']['Control']
+    assert (atac_case.var_names == atac_control.var_names).all()
 
-for result_name, result_df in results_to_index_mapper.items():
+    ABHD17B_enhancers = ABHD17B_grn['enhancer']
 
-    for pathway in brain_gmt_cortical.keys():
-        if pathway in result_df['Term'].to_list():
+    ## get peaks from GRNs
+    peaks_df = pd.DataFrame(index=atac_case.var_names.str.split(':|-', expand=True)).reset_index()
+    peaks_bedtool = BedTool.from_dataframe(peaks_df)
 
-            result_pathway = result_df.set_index('Term').loc[pathway]
-            pval = result_pathway['Adjusted P-value']
-            mlog10_pval = -np.log10(pval)
-            enrs_compare_mlog10_pval_df.loc[result_name, pathway] = mlog10_pval
+    unique_peaks = pd.Series(ABHD17B_grn['enhancer'].unique())
+    grns_peaks_df = pd.DataFrame(unique_peaks.str.split(':|-', expand=True))
+    grns_peaks_bedtool = BedTool.from_dataframe(grns_peaks_df)
 
-enrs_compare_mlog10_pval_df.dropna(inplace=True)
+    # Get indices of ATAC peaks that overlap with GRN peaks
+    grn_peaks_in_data = peaks_bedtool.intersect(grns_peaks_bedtool, wa=True, wb=True)
+    grn_peaks_in_data_df = grn_peaks_in_data.to_dataframe()
 
-## extract topk pathways for each experiment type
-topk = 15
-topk_pathways_dict = {}
-for result_name, result_df in enrs_compare_mlog10_pval_df.iterrows():
+    # Get names of peaks to create mapper
+    atac_peak_names = grn_peaks_in_data_df.iloc[:,:3].astype(str).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1)
+    grn_peak_names = grn_peaks_in_data_df.iloc[:,3:].astype(str).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1)
+    peaks_names_mapper = dict(zip(atac_peak_names, grn_peak_names)) # not necessarly one-to-one map, can have many-to-one
 
-    topk_pathways = result_df.sort_values(ascending=False).head(topk).index.to_list()
-    topk_pathways_dict[result_name] = topk_pathways
+    dap_df = pd.DataFrame(index=atac_peak_names, columns=['tstat', 'pvalue', 'mlog10_pvalue', 'df', 'brainscope_coords'])
 
-keep_pathways = np.hstack(list(topk_pathways_dict.values()))
+    for enhancer_in_data in atac_peak_names:
 
-enrs_compare_mlog10_pval_ladder = enrs_compare_mlog10_pval_df[keep_pathways].T
-enrs_compare_mlog10_pval_ladder.drop_duplicates(keep='last', inplace=True)
+        idx_in_data = np.where(atac_case.var_names == enhancer_in_data)[0].item()
 
-## plot heatmap of topk pathways
-fig, ax = plt.subplots(figsize=(3, 14))
-heatmap = sns.heatmap(enrs_compare_mlog10_pval_ladder, cmap='viridis', vmin=0, vmax=5, ax=ax, cbar_kws={'label': '$-log_{10}$(p-adj.)'})
-ax.set_xticklabels(ax.get_xticklabels(), rotation=30)
+        atac_case_dat = atac_case.X[:, idx_in_data].toarray().flatten()
+        atac_control_dat = atac_control.X[:, idx_in_data].toarray().flatten()
 
-# Add red stars where value > -log10(0.05)
-threshold = -np.log10(0.05)
-data = enrs_compare_mlog10_pval_ladder.values
-for y in range(data.shape[0]):
-    for x in range(data.shape[1]):
-        if data[y, x] > threshold:
-            ax.plot(x + 0.5, y + 0.5, marker='*', color='red', markersize=10, markeredgecolor='black')
+        d1 = DescrStatsW(atac_case_dat, weights=atac_case.obs['proportion_of_cells'].values)
+        d2 = DescrStatsW(atac_control_dat, weights=atac_control.obs['proportion_of_cells'].values)
 
-plt.savefig(os.path.join(output_dir, 'enrs_compare_mlog10_pval_ladder.png'), dpi=300, bbox_inches='tight')
+        cm = d1.get_compare(d2)
+        tstat_comp, pvalue_comp, df_comp = cm.ttest_ind(usevar='unequal', alternative='two-sided')
+
+        dap_df.loc[enhancer_in_data, 'tstat'] = tstat_comp
+        dap_df.loc[enhancer_in_data, 'pvalue'] = pvalue_comp
+        dap_df.loc[enhancer_in_data, 'mlog10_pvalue'] = -np.log10(pvalue_comp)
+        dap_df.loc[enhancer_in_data, 'df'] = df_comp
+
+        dap_df.loc[enhancer_in_data, 'brainscope_coords'] = peaks_names_mapper[enhancer_in_data]
+
+    return dap_df
+
+dap_female_df = get_dap_df('female')
+dap_male_df = get_dap_df('male')
+
+
 
 
 # %%
