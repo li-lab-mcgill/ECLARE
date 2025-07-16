@@ -300,43 +300,56 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
     if ax is None:
         fig, ax = plt.subplots(figsize=(6, 2))
 
+    # Define thresholds
+    sig_threshold = -np.log10(0.05)
+    bonferroni_threshold = 0.05 / len(ttest_mdd_dn_df)
+    bonferroni_threshold_mlog10 = -np.log10(bonferroni_threshold)
+
     # Further filter to only include celltypes with significant FDR p-values by setting mlog10_pvalue to 0
-    ttest_mdd_dn_df.loc[ttest_mdd_dn_df['mlog10_pvalue'] < -np.log10(0.05), 'mlog10_pvalue'] = 0
-    ttest_mdd_dn_df.loc[ttest_mdd_dn_df['mlog10_pvalue'] < -np.log10(0.05), 'size_mlog10_pvalue'] = 0
+    ttest_mdd_dn_df.loc[ttest_mdd_dn_df['mlog10_pvalue'] < sig_threshold, 'mlog10_pvalue'] = 0
+    ttest_mdd_dn_df.loc[ttest_mdd_dn_df['mlog10_pvalue'] < sig_threshold, 'size_mlog10_pvalue'] = 0
 
     # Ensure x-axis is in alphabetical order
     ttest_mdd_dn_df = ttest_mdd_dn_df.sort_values('celltype')
+
+    # Split data by significance levels
+    non_sig_data = ttest_mdd_dn_df[ttest_mdd_dn_df['mlog10_pvalue'] == 0]
+    sig_not_bonferroni_data = ttest_mdd_dn_df[(ttest_mdd_dn_df['mlog10_pvalue'] > sig_threshold) & (ttest_mdd_dn_df['mlog10_pvalue'] <= bonferroni_threshold_mlog10)]
+    bonferroni_sig_data = ttest_mdd_dn_df[ttest_mdd_dn_df['mlog10_pvalue'] > bonferroni_threshold_mlog10]
+    sig_data = ttest_mdd_dn_df[ttest_mdd_dn_df['mlog10_pvalue'] > 0]
 
     # Empty scatter plot for colorbar
     ax.scatter(ttest_mdd_dn_df['celltype'], ttest_mdd_dn_df['sex'], alpha=0, s=0)
 
     # Plot non-significant as grey crosses
-    non_sig_data = ttest_mdd_dn_df[ttest_mdd_dn_df['mlog10_pvalue'] == 0]
     if len(non_sig_data) > 0:
         ax.scatter(non_sig_data['celltype'], non_sig_data['sex'], 
-                   color='grey', alpha=0.7, marker='+', linewidths=1)
+                   color='grey', alpha=0.7, marker='+', linewidths=1, label='Non-significant')
 
     # Create a diverging colormap with 0 centered
-
-    # Find min and max tstat for normalization
     vmax = max(abs(ttest_mdd_dn_df['tstat']))
     vmin = -vmax
     norm = SymLogNorm(linthresh=1.0, linscale=1.0, vmin=vmin, vmax=vmax)
     cmap = ListedColormap(['orange', 'purple']) # recreate PuOr colormap
 
-    # Main scatter plot
-    scatter = ax.scatter(ttest_mdd_dn_df['celltype'], ttest_mdd_dn_df['sex'], 
-               c=ttest_mdd_dn_df['tstat'], cmap=cmap, norm=norm, alpha=0.6, s=ttest_mdd_dn_df['size_mlog10_pvalue'], edgecolors='black')
-    
-    if pathway_name == 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN':
-        assert (ttest_mdd_dn_df['mlog10_pvalue'][ttest_mdd_dn_df['mlog10_pvalue']>0] > -np.log10(0.05)).all()
-        assert (ttest_mdd_dn_df['mlog10_pvalue'][ttest_mdd_dn_df['mlog10_pvalue']>0] > -np.log10(0.05 / len(ttest_mdd_dn_df))).all()
-    
+    # Plot significant but not Bonferroni as circles
+    if len(sig_not_bonferroni_data) > 0:
+        ax.scatter(sig_not_bonferroni_data['celltype'], sig_not_bonferroni_data['sex'], 
+                   s=sig_not_bonferroni_data['size_mlog10_pvalue'], c=sig_not_bonferroni_data['tstat'], 
+                   cmap=cmap, norm=norm, alpha=0.6, marker='s', hatch=3*'//', edgecolors='white', label='Significant (p<0.05)')
+
+    # Plot Bonferroni significant as stars
+    if len(bonferroni_sig_data) > 0:
+        ax.scatter(bonferroni_sig_data['celltype'], bonferroni_sig_data['sex'], 
+                   s=bonferroni_sig_data['size_mlog10_pvalue'], c=bonferroni_sig_data['tstat'], 
+                   cmap=cmap, norm=norm, alpha=0.8, marker='s', edgecolors='black',
+                   label=f'Bonferroni significant (p<{bonferroni_threshold:.3f})')
+
     ax.set_ylim(-0.5, 1.5)
 
     # Add colorbar for tstat
+    scatter = ax.scatter(sig_data['celltype'], sig_data['sex'], c=sig_data['tstat'], cmap=cmap, norm=norm, alpha=0.6, s=0)
     cbar = plt.colorbar(scatter, ax=ax)
-    #cbar.ax.set_title('t-stat', pad=10, fontsize=9)
     cbar.set_ticks([])  # Remove legend tick labels
 
     # Add "downregulated" and "upregulated" labels to colorbar
@@ -352,15 +365,13 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
     size_labels = np.array([sizes_describe.loc['min','mlog10_pvalue'], sizes_describe.loc['50%','mlog10_pvalue'], sizes_describe.loc['max','mlog10_pvalue']])
     size_labels = [f'{int(x)}' if x>=10 else f'{x:.2g}' for x in size_labels]
 
-    # Create a separate axis for the size legend
-    #ax2 = fig.add_axes([0.88, 0.1, 0.2, 0.8])  # Position for size legend
     ax2 = ax.inset_axes([1.0, 0.1, 0.4, 0.8])  # Position for size legend
     ax2.set_xlim(0, 1)
     ax2.set_ylim(-1.2, 2 * len(sizes))  # More vertical space
 
     for i, (size, label) in enumerate(zip(sizes, size_labels)):
         y = i * 2  # Spread out vertically
-        ax2.scatter(0.5, y, s=size, color='grey', alpha=0.7, edgecolors='black')
+        ax2.scatter(0.5, y, s=size, marker='s', color='grey', alpha=0.7, edgecolors='black')
         ax2.text(0.625, y, f'{label}', va='center', fontsize=8)
 
     ax2.set_title('$-log_{10}(p)$', fontsize=9, pad=0, loc='left', x=0.4, y=0.96)
@@ -383,7 +394,7 @@ ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df)
 pathways_of_interest = [
     "ASTON_MAJOR_DEPRESSIVE_DISORDER_DN",
     "Oligodendrocyte_Mature_Darmanis_PNAS_2015",
-    #"FAN_EMBRYONIC_CTX_OLIG",
+    "FAN_EMBRYONIC_CTX_OLIG",
     #"LEIN_OLIGODENDROCYTE_MARKERS",
     #"ZHONG_PFC_C4_PTGDS_POS_OPC",
     #"DESCARTES_FETAL_CEREBRUM_OLIGODENDROCYTES",
