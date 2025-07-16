@@ -393,20 +393,20 @@ ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df)
 
 pathways_of_interest = [
     "ASTON_MAJOR_DEPRESSIVE_DISORDER_DN",
-    "Oligodendrocyte_Mature_Darmanis_PNAS_2015",
     "FAN_EMBRYONIC_CTX_OLIG",
-    #"LEIN_OLIGODENDROCYTE_MARKERS",
-    #"ZHONG_PFC_C4_PTGDS_POS_OPC",
-    #"DESCARTES_FETAL_CEREBRUM_OLIGODENDROCYTES",
-    #"COLIN_PILOCYTIC_ASTROCYTOMA_VS_GLIOBLASTOMA_UP",
-    #"DESCARTES_MAIN_FETAL_OLIGODENDROCYTES",
-    #"DESCARTES_FETAL_CEREBELLUM_OLIGODENDROCYTES",
-    #"LU_AGING_BRAIN_UP",
-    #"DURANTE_ADULT_OLFACTORY_NEUROEPITHELIUM_OLFACTORY_ENSHEATHING_GLIA",
+    "Oligodendrocyte_Mature_Darmanis_PNAS_2015",
+    "LEIN_OLIGODENDROCYTE_MARKERS",
+    "ZHONG_PFC_C4_PTGDS_POS_OPC",
+    "DESCARTES_FETAL_CEREBRUM_OLIGODENDROCYTES",
+    "COLIN_PILOCYTIC_ASTROCYTOMA_VS_GLIOBLASTOMA_UP",
+    "DESCARTES_MAIN_FETAL_OLIGODENDROCYTES",
+    "DESCARTES_FETAL_CEREBELLUM_OLIGODENDROCYTES",
+    "LU_AGING_BRAIN_UP",
+    "DURANTE_ADULT_OLFACTORY_NEUROEPITHELIUM_OLFACTORY_ENSHEATHING_GLIA",
     #"DESCARTES_MAIN_FETAL_SCHWANN_CELLS",
     #"Oligodendrocyte_All_Zeisel_Science_2015",
     #"GOBERT_OLIGODENDROCYTE_DIFFERENTIATION_DN",
-    #"BLALOCK_ALZHEIMERS_DISEASE_UP"
+    "BLALOCK_ALZHEIMERS_DISEASE_UP"
 ]
 
 # Call the function
@@ -707,4 +707,67 @@ great_results_mdd_dn_df['size_ngenes'] = (great_results_mdd_dn_df['ngenes']/grea
 
 plot_enrichment_significance(great_results_mdd_dn_df, title='GREAT results for MDD-DN pathway')
 
-# %%
+#%% Compare number of enriched pathways per type of gene set
+
+## load filtered results
+with open(os.path.join(output_dir, 'broad_gene_series_dict.pkl'), 'rb') as f:
+    
+    gene_series_dict = pickle.load(f)
+
+    enrs_mdd_dn_genes_series = gene_series_dict['enrs_mdd_dn_genes_series']
+    all_sccompreg_genes_series = gene_series_dict['all_sccompreg_genes_series']
+    pydeseq2_match_length_genes_series = gene_series_dict['pydeseq2_match_length_genes_series']
+
+## enrichment of pooled gene sets, without filtering for p-value
+enrs_mdd_dn_genes_enrichr_all = do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
+all_sccompreg_genes_enrichr_all = do_enrichr(all_sccompreg_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
+pydeseq2_match_length_genes_enrichr_all = do_enrichr(pydeseq2_match_length_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
+
+results_to_index_mapper = {
+    #'mdd_dn_genes': enrs_mdd_dn_genes_enrichr_all,
+    'sc_compreg_all': all_sccompreg_genes_enrichr_all,
+    'pydeseq2_all': pydeseq2_match_length_genes_enrichr_all
+}
+
+## extract p-values to place into dataframe
+enrs_compare_mlog10_pval_df = pd.DataFrame(0, columns=brain_gmt_cortical.keys(), index=results_to_index_mapper.keys())
+
+for result_name, result_df in results_to_index_mapper.items():
+
+    for pathway in brain_gmt_cortical.keys():
+        if pathway in result_df['Term'].to_list():
+
+            result_pathway = result_df.set_index('Term').loc[pathway]
+            pval = result_pathway['Adjusted P-value']
+            mlog10_pval = -np.log10(pval)
+            enrs_compare_mlog10_pval_df.loc[result_name, pathway] = mlog10_pval
+
+enrs_compare_mlog10_pval_df.dropna(inplace=True)
+
+## extract topk pathways for each experiment type
+topk = 15
+topk_pathways_dict = {}
+for result_name, result_df in enrs_compare_mlog10_pval_df.iterrows():
+
+    topk_pathways = result_df.sort_values(ascending=False).head(topk).index.to_list()
+    topk_pathways_dict[result_name] = topk_pathways
+
+keep_pathways = np.hstack(list(topk_pathways_dict.values()))
+
+enrs_compare_mlog10_pval_ladder = enrs_compare_mlog10_pval_df[keep_pathways].T
+enrs_compare_mlog10_pval_ladder.drop_duplicates(keep='last', inplace=True)
+
+## plot heatmap of topk pathways
+fig, ax = plt.subplots(figsize=(3, 14))
+heatmap = sns.heatmap(enrs_compare_mlog10_pval_ladder, cmap='viridis', vmin=0, vmax=5, ax=ax, cbar_kws={'label': '$-log_{10}$(p-adj.)'})
+ax.set_xticklabels(ax.get_xticklabels(), rotation=30)
+
+# Add red stars where value > -log10(0.05)
+threshold = -np.log10(0.05)
+data = enrs_compare_mlog10_pval_ladder.values
+for y in range(data.shape[0]):
+    for x in range(data.shape[1]):
+        if data[y, x] > threshold:
+            ax.plot(x + 0.5, y + 0.5, marker='*', color='red', markersize=10, markeredgecolor='black')
+
+#plt.savefig(os.path.join(output_dir, 'enrs_compare_mlog10_pval_ladder.png'), dpi=300, bbox_inches='tight')
