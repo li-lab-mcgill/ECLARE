@@ -33,6 +33,8 @@ import mygene
 from venn import venn
 from datetime import datetime
 import subprocess
+import math
+from string import ascii_lowercase
 
 from eclare.models import load_CLIP_model
 from eclare.setup_utils import return_setup_func_from_dataset, mdd_setup
@@ -1346,7 +1348,7 @@ def metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets
             data=df,
             ax=ax,
             color="lightgray"
-        ).tick_params(axis='x', rotation=45)
+        ).tick_params(axis='x', rotation=60)
 
     else:
         sns.boxplot(
@@ -1360,7 +1362,7 @@ def metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets
             whiskerprops=dict(alpha=0.4),
             capprops=dict(alpha=0.4),
             medianprops=dict(alpha=0.7)
-        ).tick_params(axis='x', rotation=45)
+        ).tick_params(axis='x', rotation=60)
 
     ax.set_xlabel("method")
     ax.yaxis.set_minor_locator(plt.MultipleLocator(0.05))
@@ -1431,15 +1433,16 @@ def metric_boxplots(df, target_source_combinations=False, include_paired=True):
         source_to_marker = {source: 'o' for i, source in enumerate(unique_sources)}
 
     ## loop over metrics and plot
-    unpaired_metrics = ['multimodal_ilisi', 'ari', 'nmi', 'silhouette_celltype', 'batches_ilisi']
+    unpaired_metrics = ['multimodal_ilisi', 'ari', 'nmi', 'asw_ct']
     paired_metrics = ['1-foscttm']
     all_metrics = paired_metrics + unpaired_metrics if include_paired else unpaired_metrics
+    letters = np.array(list(ascii_lowercase))[:len(all_metrics)]
 
-    fig, axs = plt.subplots(1, len(all_metrics), figsize=(14, 4), sharex=True)
+    fig, axs = plt.subplots(1, len(all_metrics), figsize=(14, 5), sharex=True)
 
-    for metric, ax in zip(all_metrics, axs):
+    for metric, letter, ax in zip(all_metrics, letters, axs):
         metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets, unique_sources, ax=ax)
-        ax.set_title(metric)
+        ax.set_title(f"{letter}) {metric}")
         ax.set_ylabel('')
 
     # Create handles for color-coding by target
@@ -1508,8 +1511,14 @@ def metric_boxplots(df, target_source_combinations=False, include_paired=True):
         frameon=False
     )
 
+    # Remove x-axis titles from all subplots
+    for ax in axs:
+        ax.set_xlabel('')
+
     fig.tight_layout()
     fig.show()
+
+    return fig
 
 def project_mdd_nuclei_into_latent_space(mdd_rna, mdd_atac, rna_sex_key, atac_sex_key, rna_celltype_key, atac_celltype_key, rna_condition_key, atac_condition_key, eclare_student_model, kd_clip_student_model):
 
@@ -2921,7 +2930,7 @@ def perform_gene_set_enrichment(sex, celltype, scompreg_loglikelihoods_dict, tfr
     top_lr_filtered_wDeg, bottom_lr_filtered_wDeg, lr_filtered_woDeg = get_deg_gene_sets(LR, lr_filtered, lr_fitted_cdf, significant_genes_dict[sex][celltype])
 
     ## run MAGMA
-    magma_results_series, magma_results = run_magma(lr_filtered, Z, significant_genes_dict[sex][celltype], subdir, fuma_job_id='500') # set fuma_job_id to None to use MDD GWAS from H-MAGMA
+    magma_results_series, magma_results = run_magma(lr_filtered, Z, significant_genes_dict[sex][celltype], subdir, fuma_job_id=None) # set fuma_job_id to None to use MDD GWAS from H-MAGMA
 
     ## run EnrichR
     merged_dict = perform_enrichr_comparison(

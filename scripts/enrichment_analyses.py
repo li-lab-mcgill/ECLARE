@@ -111,7 +111,7 @@ eclare_student_model = eclare_student_model.train().to('cpu')
 #%% load data
 
 ## define decimation factor
-decimate_factor = 1
+decimate_factor = 5
 
 ## define args for mdd_setup
 args = SimpleNamespace(
@@ -675,13 +675,13 @@ with open(os.path.join(output_dir, 'broad_gene_series_dict.pkl'), 'wb') as f:
 
 from pybedtools import BedTool
 
+tss_abhd17b
+
 def get_dap_df(sex):
 
     atac_case = X_atac_dict[sex]['ExN']['Case']
     atac_control = X_atac_dict[sex]['ExN']['Control']
     assert (atac_case.var_names == atac_control.var_names).all()
-
-    ABHD17B_enhancers = ABHD17B_grn['enhancer']
 
     ## get peaks from GRNs
     peaks_df = pd.DataFrame(index=atac_case.var_names.str.split(':|-', expand=True)).reset_index()
