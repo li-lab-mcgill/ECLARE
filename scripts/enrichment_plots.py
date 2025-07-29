@@ -258,6 +258,7 @@ enrs_mdd_dn_hits_lr_fig, enrs_mdd_dn_hits_lr_ax = plot_enrichment_significance(e
 enrs_mdd_dn_hits_deg_df = get_enrs_mdd_dn_hits_df(enrs_dict, filtered_type='DEG (matched length)')
 #enrs_mdd_dn_hits_deg_fig, enrs_mdd_dn_hits_deg_ax = plot_enrichment_significance(enrs_mdd_dn_hits_deg_df)
 
+#enrs_mdd_dn_hits_lr_fig.savefig(os.path.join(output_dir, 'enrs_mdd_dn_hits_lr_fig.png'),  dpi=300, bbox_inches='tight')
 
 #%% Differential expression of MDD-DN pathway genes
 
@@ -394,25 +395,26 @@ ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df)
 
 pathways_of_interest = [
     "ASTON_MAJOR_DEPRESSIVE_DISORDER_DN",
-    "FAN_EMBRYONIC_CTX_OLIG",
+    #"FAN_EMBRYONIC_CTX_OLIG",
     "Oligodendrocyte_Mature_Darmanis_PNAS_2015",
-    "LEIN_OLIGODENDROCYTE_MARKERS",
-    "ZHONG_PFC_C4_PTGDS_POS_OPC",
-    "DESCARTES_FETAL_CEREBRUM_OLIGODENDROCYTES",
-    "COLIN_PILOCYTIC_ASTROCYTOMA_VS_GLIOBLASTOMA_UP",
-    "DESCARTES_MAIN_FETAL_OLIGODENDROCYTES",
-    "DESCARTES_FETAL_CEREBELLUM_OLIGODENDROCYTES",
-    "LU_AGING_BRAIN_UP",
-    "DURANTE_ADULT_OLFACTORY_NEUROEPITHELIUM_OLFACTORY_ENSHEATHING_GLIA",
+    #"LEIN_OLIGODENDROCYTE_MARKERS",
+    #"ZHONG_PFC_C4_PTGDS_POS_OPC",
+    #"DESCARTES_FETAL_CEREBRUM_OLIGODENDROCYTES",
+    #"COLIN_PILOCYTIC_ASTROCYTOMA_VS_GLIOBLASTOMA_UP",
+    #"DESCARTES_MAIN_FETAL_OLIGODENDROCYTES",
+    #"DESCARTES_FETAL_CEREBELLUM_OLIGODENDROCYTES",
+    #"LU_AGING_BRAIN_UP",
+    #"DURANTE_ADULT_OLFACTORY_NEUROEPITHELIUM_OLFACTORY_ENSHEATHING_GLIA",
     #"DESCARTES_MAIN_FETAL_SCHWANN_CELLS",
     #"Oligodendrocyte_All_Zeisel_Science_2015",
     #"GOBERT_OLIGODENDROCYTE_DIFFERENTIATION_DN",
-    "BLALOCK_ALZHEIMERS_DISEASE_UP"
+    #"BLALOCK_ALZHEIMERS_DISEASE_UP"
 ]
 
 # Call the function
 n = len(pathways_of_interest)
-fig, axes = plt.subplots(n, 1, figsize=(8, 2.25*n), sharex=True)
+#fig, axes = plt.subplots(n, 1, figsize=(8, 2.25*n), sharex=True)
+fig, axes = plt.subplots(n, 1, figsize=(6.5, 1.75*n), sharex=True)
 if n == 1:
     axes = [axes]
 
@@ -424,6 +426,8 @@ for i, pathway_name in enumerate(pathways_of_interest):
 #fig.suptitle('Pathway-level differential expression of genes identified from MDD pathway enrichment', fontsize=10, y=0.96)
 fig.tight_layout()
 plt.show()
+
+#fig.savefig(os.path.join(output_dir, 'ttest_mdd_dn_fig.png'),  dpi=300, bbox_inches='tight')
 
 #%% GRN plot of ABHD17B
 
@@ -465,14 +469,14 @@ edge_color_map = {
     'all': 'green'
 }
 
-G.add_edge('NR4A2', 'EGR1', interaction='a priori', color=edge_color_map['a priori'])
-G.add_edge('NR4A2', NR4A2_hit2, interaction='female_ExN', color=edge_color_map['female_ExN'])
-G.add_edge('EGR1', EGR1_hit2, interaction='female_ExN', color=edge_color_map['female_ExN'])
-G.add_edge(NR4A2_hit2, 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
-G.add_edge(EGR1_hit2, 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
-G.add_edge('SOX2', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
-#G.add_edge('NR4A2', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
-#G.add_edge('EGR1', 'ABHD17B', interaction='female_ExN', color=edge_color_map['female_ExN'])
+G.add_edge('NR4A2', 'EGR1', interaction='a priori (brainSCOPE)', color=edge_color_map['a priori (brainSCOPE)'])
+G.add_edge('NR4A2', NR4A2_hit2, interaction='female ExN', color=edge_color_map['female ExN'])
+G.add_edge('EGR1', EGR1_hit2, interaction='female ExN', color=edge_color_map['female ExN'])
+G.add_edge(NR4A2_hit2, 'ABHD17B', interaction='female ExN', color=edge_color_map['female ExN'])
+G.add_edge(EGR1_hit2, 'ABHD17B', interaction='female ExN', color=edge_color_map['female ExN'])
+G.add_edge('SOX2', 'ABHD17B', interaction='female ExN', color=edge_color_map['female ExN'])
+#G.add_edge('NR4A2', 'ABHD17B', interaction='female ExN', color=edge_color_map['female ExN'])
+#G.add_edge('EGR1', 'ABHD17B', interaction='female ExN', color=edge_color_map['female ExN'])
 
 all_targets = []
 for tf in female_exn_enriched_TFs_of_ABHD17B:
@@ -607,7 +611,7 @@ fig_legend.legend(legend_handles, legend_labels,
 fig_legend.subplots_adjust(left=0, right=1, top=1, bottom=0)
 fig_legend.savefig(os.path.join(output_dir, 'grn_legend_only.png'), 
                    bbox_inches='tight', 
-                   pad_inches=0.1, 
+                   pad_inches=0.1,
                    dpi=300)
 
 #nx.write_graphml(G, os.path.join(output_dir, "ABHD17B_GRN.graphml"))

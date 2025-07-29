@@ -45,7 +45,8 @@ from mlflow.tracking import MlflowClient
 import mlflow.pytorch
 from mlflow.models import Model
 
-from eclare.post_hoc_utils import get_latents, sample_proportional_celltypes_and_condition, plot_umap_embeddings, create_celltype_palette
+from eclare.post_hoc_utils import \
+    get_latents, sample_proportional_celltypes_and_condition, plot_umap_embeddings, create_celltype_palette, download_mlflow_runs, extract_target_source_replicate, metric_boxplots
 from eclare.data_utils import filter_mean_grn, get_scompreg_loglikelihood
 
 from ot import solve as ot_solve
@@ -303,20 +304,20 @@ ablation_clip_metrics_df = combined_metrics_df.loc[combined_metrics_df['dataset'
 ablation_clip_metrics_df = ablation_clip_metrics_df.loc[ablation_clip_metrics_df['source'].isin(['pbmc_10x', 'mouse_brain_10x'])]
 ablation_clip_metrics_df = ablation_clip_metrics_df.loc[~ablation_clip_metrics_df['target'].isin(['pbmc_10x', 'mouse_brain_10x'])]
 
-ablation_clip_metrics_df.loc[ablation_clip_metrics_df['source']=='pbmc_10x', 'dataset'] = 'pbmc (clip)'
-ablation_clip_metrics_df.loc[ablation_clip_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'mb (clip)'
+ablation_clip_metrics_df.loc[ablation_clip_metrics_df['source']=='pbmc_10x', 'dataset'] = 'clip (pbmc)'
+ablation_clip_metrics_df.loc[ablation_clip_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'clip (mb)'
 
 ## KD-CLIP
 ablation_kd_clip_metrics_df = combined_metrics_df.loc[combined_metrics_df['dataset'].isin(['kd_clip'])]
 ablation_kd_clip_metrics_df = ablation_kd_clip_metrics_df.loc[ablation_kd_clip_metrics_df['source'].isin(['pbmc_10x', 'mouse_brain_10x'])]
 ablation_kd_clip_metrics_df = ablation_kd_clip_metrics_df.loc[~ablation_kd_clip_metrics_df['target'].isin(['pbmc_10x', 'mouse_brain_10x'])]
 
-ablation_kd_clip_metrics_df.loc[ablation_kd_clip_metrics_df['source']=='pbmc_10x', 'dataset'] = 'pbmc (kd)'
-ablation_kd_clip_metrics_df.loc[ablation_kd_clip_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'mb (kd)'
+ablation_kd_clip_metrics_df.loc[ablation_kd_clip_metrics_df['source']=='pbmc_10x', 'dataset'] = 'kd-clip (pbmc)'
+ablation_kd_clip_metrics_df.loc[ablation_kd_clip_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'kd-clip (mb)'
 
 ## ECLARE
 ablation_eclare_metrics_df = combined_metrics_df.loc[combined_metrics_df['dataset'].isin(['eclare'])]
-ablation_eclare_metrics_df.loc[:, 'dataset'] = 'both'
+ablation_eclare_metrics_df.loc[:, 'dataset'] = 'eclare'
 
 ## Combined ablation
 ablation_metrics_df = pd.concat([
@@ -326,9 +327,16 @@ ablation_metrics_df = pd.concat([
     ])
 
 ## Reorder rows using "dataset" field
-ablation_metrics_df = ablation_metrics_df.sort_values('dataset')
+#ablation_metrics_df = ablation_metrics_df.sort_values('dataset')
 
-metric_boxplots(ablation_metrics_df, target_source_combinations=False, include_paired=True)
+## rename 'silhouette_celltype' by 'asw_ct'
+ablation_metrics_df = ablation_metrics_df.rename(columns={'silhouette_celltype': 'asw_ct'})
+
+datasets_order = ['eclare', 'kd-clip (mb)', 'clip (mb)', 'kd-clip (pbmc)', 'clip (pbmc)']
+order_map = {name: i for i, name in enumerate(datasets_order)}
+ablation_metrics_df = ablation_metrics_df.sort_values('dataset', key=lambda x: x.map(order_map))
+
+boxplots_fig = metric_boxplots(ablation_metrics_df, target_source_combinations=False, include_paired=True)
 
 ## MDD
 
@@ -337,20 +345,20 @@ ablation_clip_mdd_metrics_df = combined_mdd_metrics_df.loc[combined_mdd_metrics_
 ablation_clip_mdd_metrics_df = ablation_clip_mdd_metrics_df.loc[ablation_clip_mdd_metrics_df['source'].isin(['pbmc_10x', 'mouse_brain_10x'])]
 ablation_clip_mdd_metrics_df = ablation_clip_mdd_metrics_df.loc[~ablation_clip_mdd_metrics_df['target'].isin(['pbmc_10x', 'mouse_brain_10x'])]
 
-ablation_clip_mdd_metrics_df.loc[ablation_clip_mdd_metrics_df['source']=='pbmc_10x', 'dataset'] = 'pbmc (clip)'
-ablation_clip_mdd_metrics_df.loc[ablation_clip_mdd_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'mb (clip)'
+ablation_clip_mdd_metrics_df.loc[ablation_clip_mdd_metrics_df['source']=='pbmc_10x', 'dataset'] = 'clip (pbmc)'
+ablation_clip_mdd_metrics_df.loc[ablation_clip_mdd_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'clip (mb)'
 
 ## KD-CLIP
 ablation_kd_clip_mdd_metrics_df = combined_mdd_metrics_df.loc[combined_mdd_metrics_df['dataset'].isin(['kd_clip_mdd'])]
 ablation_kd_clip_mdd_metrics_df = ablation_kd_clip_mdd_metrics_df.loc[ablation_kd_clip_mdd_metrics_df['source'].isin(['pbmc_10x', 'mouse_brain_10x'])]
 ablation_kd_clip_mdd_metrics_df = ablation_kd_clip_mdd_metrics_df.loc[~ablation_kd_clip_mdd_metrics_df['target'].isin(['pbmc_10x', 'mouse_brain_10x'])]
 
-ablation_kd_clip_mdd_metrics_df.loc[ablation_kd_clip_mdd_metrics_df['source']=='pbmc_10x', 'dataset'] = 'pbmc (kd)'
-ablation_kd_clip_mdd_metrics_df.loc[ablation_kd_clip_mdd_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'mb (kd)'
+ablation_kd_clip_mdd_metrics_df.loc[ablation_kd_clip_mdd_metrics_df['source']=='pbmc_10x', 'dataset'] = 'kd-clip (pbmc)'
+ablation_kd_clip_mdd_metrics_df.loc[ablation_kd_clip_mdd_metrics_df['source']=='mouse_brain_10x', 'dataset'] = 'kd-clip (mb)'
 
 ## ECLARE
 ablation_eclare_mdd_metrics_df = combined_mdd_metrics_df.loc[combined_mdd_metrics_df['dataset'].isin(['eclare_mdd'])]
-ablation_eclare_mdd_metrics_df.loc[:, 'dataset'] = 'both'
+ablation_eclare_mdd_metrics_df.loc[:, 'dataset'] = 'eclare'
 
 ## Combined ablation
 ablation_mdd_metrics_df = pd.concat([
@@ -360,9 +368,19 @@ ablation_mdd_metrics_df = pd.concat([
     ])
 
 ## Reorder rows using "dataset" field
-ablation_mdd_metrics_df = ablation_mdd_metrics_df.sort_values('dataset')
+datasets_order = ['eclare', 'kd-clip (mb)', 'clip (mb)', 'kd-clip (pbmc)', 'clip (pbmc)']
+order_map = {name: i for i, name in enumerate(datasets_order)}
+ablation_mdd_metrics_df = ablation_mdd_metrics_df.sort_values('dataset', key=lambda x: x.map(order_map))
 
-metric_boxplots(ablation_mdd_metrics_df, target_source_combinations=True, include_paired=False)
+## rename 'silhouette_celltype' by 'asw_ct'
+ablation_mdd_metrics_df = ablation_mdd_metrics_df.rename(columns={'silhouette_celltype': 'asw_ct'})
+
+boxplots_mdd_fig = metric_boxplots(ablation_mdd_metrics_df, target_source_combinations=True, include_paired=False)
+
+## save boxplot figures as high-quality figures (300 dpi)
+figpath = "/Users/dmannk/OneDrive - McGill University/Doctorat/QLS/Li_Lab/ISMB_2025/figures"
+boxplots_fig.savefig(os.path.join(figpath, 'cross_tissue_species_metrics.png'), bbox_inches='tight', dpi=300)
+boxplots_mdd_fig.savefig(os.path.join(figpath, 'cross_tissue_species_mdd_metrics.png'), bbox_inches='tight', dpi=300)
 
 
 #%%
