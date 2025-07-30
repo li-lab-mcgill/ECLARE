@@ -1433,7 +1433,7 @@ def metric_boxplots(df, target_source_combinations=False, include_paired=True):
         source_to_marker = {source: 'o' for i, source in enumerate(unique_sources)}
 
     ## loop over metrics and plot
-    unpaired_metrics = ['multimodal_ilisi', 'ari', 'nmi', 'asw_ct']
+    unpaired_metrics = ['multimodal_ilisi', 'ari', 'nmi', 'silhouette_celltype']
     paired_metrics = ['1-foscttm']
     all_metrics = paired_metrics + unpaired_metrics if include_paired else unpaired_metrics
     letters = np.array(list(ascii_lowercase))[:len(all_metrics)]
