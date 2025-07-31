@@ -57,7 +57,7 @@ if __name__ == "__main__":
                         help='feature to run')
     parser.add_argument('--tune_hyperparameters', action='store_true', default=False,
                         help='tune hyperparameters')
-    parser.add_argument('--ignore_sources', nargs='+', type=str,
+    parser.add_argument('--ignore_sources', nargs='+', type=str, default=[None],
                         help='List of sources to ignore')
     args = parser.parse_args()
     #args = parser.parse_known_args()[0]
@@ -280,7 +280,7 @@ if __name__ == "__main__":
             atac_condition = ['nan'] * len(atac_celltypes)
 
             ## save umap embeddings
-            umap_embedding, umap_figure = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
+            umap_embedding, umap_figure, _ = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
             umap_figure.savefig(os.path.join(args.outdir, 'umap_embeddings.png'))
             mlflow.log_figure(umap_figure, 'umap_embeddings.png')
 

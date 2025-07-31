@@ -21,6 +21,9 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
+## Define datasets to be ignored as sources
+ignore_sources=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams")
+
 ## Preset target dataset
 target_dataset="MDD"
 
@@ -29,8 +32,8 @@ clip_job_id='16204608'
 total_epochs=100
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
-N_CORES=1
-N_REPLICATES=1
+N_CORES=3
+N_REPLICATES=3
 
 ## Define random state
 RANDOM=42

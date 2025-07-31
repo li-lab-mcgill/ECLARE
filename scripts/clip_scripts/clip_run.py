@@ -24,9 +24,9 @@ if __name__ == "__main__":
     parser = ArgumentParser(description='CLIP')
     parser.add_argument('--outdir', type=str, default=os.environ.get('OUTPATH', None),
                         help='output directory')
-    parser.add_argument('--source_dataset', type=str, default='AD_Anderson_et_al',
+    parser.add_argument('--source_dataset', type=str, default='DLPFC_Anderson',
                         help='current options: CAtlas_Tabula_Sapiens, pbmc_10x, pbmc_10x_setup, splatter_sim, toy_simulation')
-    parser.add_argument('--target_dataset', type=str, default='mdd',
+    parser.add_argument('--target_dataset', type=str, default='MDD',
                         help='current options: CAtlas_Tabula_Sapiens, pbmc_10x, pbmc_10x_setup, splatter_sim, toy_simulation')
     parser.add_argument('--genes_by_peaks_str', type=str, default='9918_by_43840',
                         help='indicator of peaks to genes mapping to skip processing')

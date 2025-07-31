@@ -21,12 +21,14 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
+source_datasets=("pbmc_10x" "mouse_brain_10x")
+
 ## Preset target dataset
 target_dataset="MDD"
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6 # only relevant for multi-replicate tasks
-N_REPLICATES=1
+N_REPLICATES=3
 
 ## Define random state
 RANDOM=42
@@ -151,7 +153,7 @@ client.create_run(experiment_id, run_name=run_name)
 
 ## Middle loop: iterate over datasets as the source_dataset
 source_dataset_idx=0
-for source_dataset in "${datasets[@]}"; do
+for source_dataset in "${source_datasets[@]}"; do
 
     # Skip the case where source and target datasets are the same
     if [ "$source_dataset" != "$target_dataset" ]; then
