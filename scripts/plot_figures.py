@@ -74,12 +74,12 @@ cuda_available = torch.cuda.is_available()
 #%%
 ## Create dict for methods and job_ids
 methods_id_dict = {
-    'clip': '21140748',
-    'kd_clip': '22222341',
-    'eclare': ['22222419'],
-    'clip_mdd': '15093733',
-    'kd_clip_mdd': '16105523',
-    'eclare_mdd': ['16103846'], #16105437
+    'clip': '30162704',
+    'kd_clip': '30193541',
+    'eclare': ['30213852'],
+    'clip_mdd': '30153403',
+    'kd_clip_mdd': '31092106',
+    'eclare_mdd': ['31092124'], #16105437
     'mojitoo': '20212916',
     'multiVI': '18175921',
     'glue': '18234131_19205223',
@@ -330,7 +330,7 @@ ablation_metrics_df = pd.concat([
 #ablation_metrics_df = ablation_metrics_df.sort_values('dataset')
 
 ## rename 'silhouette_celltype' by 'asw_ct'
-ablation_metrics_df = ablation_metrics_df.rename(columns={'silhouette_celltype': 'asw_ct'})
+#ablation_metrics_df = ablation_metrics_df.rename(columns={'silhouette_celltype': 'asw_ct'})
 
 datasets_order = ['eclare', 'kd-clip (mb)', 'clip (mb)', 'kd-clip (pbmc)', 'clip (pbmc)']
 order_map = {name: i for i, name in enumerate(datasets_order)}
@@ -373,7 +373,7 @@ order_map = {name: i for i, name in enumerate(datasets_order)}
 ablation_mdd_metrics_df = ablation_mdd_metrics_df.sort_values('dataset', key=lambda x: x.map(order_map))
 
 ## rename 'silhouette_celltype' by 'asw_ct'
-ablation_mdd_metrics_df = ablation_mdd_metrics_df.rename(columns={'silhouette_celltype': 'asw_ct'})
+#ablation_mdd_metrics_df = ablation_mdd_metrics_df.rename(columns={'silhouette_celltype': 'asw_ct'})
 
 boxplots_mdd_fig = metric_boxplots(ablation_mdd_metrics_df, target_source_combinations=True, include_paired=False)
 

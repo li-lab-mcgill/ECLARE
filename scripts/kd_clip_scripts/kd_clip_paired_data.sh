@@ -23,7 +23,7 @@ datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=3
-N_REPLICATES=1
+N_REPLICATES=3
 
 ## Define random state
 RANDOM=42
@@ -33,7 +33,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='06093251'
+clip_job_id='30162704'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
