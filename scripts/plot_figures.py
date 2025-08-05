@@ -74,12 +74,12 @@ cuda_available = torch.cuda.is_available()
 #%%
 ## Create dict for methods and job_ids
 methods_id_dict = {
-    'clip': '30162704',
-    'kd_clip': '30193541',
-    'eclare': ['30213852'],
+    'clip': '30132540',
+    'kd_clip': '04101801',
+    'eclare': ['04101834'],
     'clip_mdd': '30153403',
-    'kd_clip_mdd': '31092106',
-    'eclare_mdd': ['31092124'], #16105437
+    'kd_clip_mdd': '31212024',
+    'eclare_mdd': ['31212021'], #16105437
     'mojitoo': '20212916',
     'multiVI': '18175921',
     'glue': '18234131_19205223',
@@ -165,7 +165,7 @@ combined_metrics_df.loc[:, 'source'] = combined_metrics_df['source'].str.replace
 combined_metrics_df.loc[:, 'target'] = combined_metrics_df['target'].str.replace('multiome', '10x')
 
 ## only keep runs with 'FINISHED' status
-combined_metrics_df = combined_metrics_df[combined_metrics_df['status'] == 'FINISHED']
+#combined_metrics_df = combined_metrics_df[combined_metrics_df['status'] == 'FINISHED']
 
 ## plot boxplots
 #metric_boxplots(combined_metrics_df.loc[combined_metrics_df['dataset'].isin(['eclare', 'kd_clip', 'clip'])])
@@ -238,7 +238,7 @@ combined_mdd_metrics_df.loc[:, 'source'] = combined_mdd_metrics_df['source'].str
 combined_mdd_metrics_df.loc[:, 'target'] = combined_mdd_metrics_df['target'].str.replace('multiome', '10x')
 
 ## only keep runs with 'FINISHED' status
-combined_mdd_metrics_df = combined_mdd_metrics_df[combined_mdd_metrics_df['status'] == 'FINISHED']
+#combined_mdd_metrics_df = combined_mdd_metrics_df[combined_mdd_metrics_df['status'] == 'FINISHED']
 
 ## plot boxplots for main models
 metric_boxplots(combined_mdd_metrics_df.loc[combined_mdd_metrics_df['dataset'].isin(['eclare_mdd', 'kd_clip_mdd', 'clip_mdd'])], 

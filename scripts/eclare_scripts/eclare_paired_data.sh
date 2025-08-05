@@ -22,10 +22,10 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
 ## Define datasets to be ignored as sources
-ignore_sources=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams")
+ignore_sources=("PFC_Zhu" "DLPFC_Anderson" "Midbrain_Adams" "pbmc_10x")
 
 ## Define target datasets
-target_datasets=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams")
+target_datasets=("DLPFC_Anderson")
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6
@@ -39,7 +39,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='30162704'
+clip_job_id='04201018'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
@@ -179,7 +179,8 @@ for target_dataset in "${target_datasets[@]}"; do
         mkdir -p $TMPDIR/$target_dataset/$task_idx
         
         # Assign task to an idle GPU
-        gpu_id=${idle_gpus[$((target_datasets_idx % ${#idle_gpus[@]}))]}
+        gpu_id=${idle_gpus[$(((target_datasets_idx * N_REPLICATES + task_idx) % ${#idle_gpus[@]}))]}
+        
         ignore_sources_str=$(IFS=, ; echo "${ignore_sources[*]}")
         run_eclare_task_on_gpu $clip_job_id $JOB_ID $gpu_id $target_dataset "$ignore_sources_str" $task_idx $random_state $genes_by_peaks_str $feature
     done

@@ -1,11 +1,11 @@
 #!/bin/bash -l
 #SBATCH --job-name=process_datasets_paired_data
 #SBATCH --account=ctb-liyue
-#SBATCH --time=4:00:0
+#SBATCH --time=2:00:0
 #SBATCH --nodes=1
 #SBATCH --tasks-per-node=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=62G
+#SBATCH --mem=400G
 #SBATCH --mail-user=dylan.mann-krzisnik@mail.mcgill.ca
 #SBATCH --mail-type=ALL
 
@@ -14,7 +14,7 @@ conda activate eclare_env
 cd $ECLARE_ROOT
 
 ## Define all paired datasets
-datasets=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" "mouse_brain_10x" "pbmc_10x")  # exclude SEA-AD
+datasets=("DLPFC_Anderson" "DLPFC_Ma" "mouse_brain_10x")
 
 ## Outer loop: iterate over datasets as the target_dataset
 for target_dataset in "${datasets[@]}"; do

@@ -28,7 +28,7 @@ ignore_sources=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams")
 target_dataset="MDD"
 
 ## Define total number of epochs
-clip_job_id='16204608'
+clip_job_id='30153403'
 total_epochs=100
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
@@ -131,7 +131,7 @@ run_eclare_task_on_gpu() {
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="'$feature'" \
-    --distil_lambda=0.1 #&
+    --distil_lambda=0.1 &
 }
 
 ## Create experiment ID (or detect if it already exists)

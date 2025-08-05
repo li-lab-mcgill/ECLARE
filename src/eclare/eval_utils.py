@@ -57,8 +57,11 @@ def unpaired_metrics(latents, labels, modalities, batches, k=30):
 
     ## multimodal & batch integration
     multimodal_ilisi = ilisi_knn(neighbors, modalities, scale=True)
+
+    ## subsample neighbors & batches to non-nan batches
+    notna_batches = ~np.equal(batches.astype(str), 'nan')
     batches_ilisi = ilisi_knn(neighbors, batches, scale=True)
-    batches_kbet_acceptance_rate, _, _ = kbet(neighbors, batches) if ~np.any(np.equal(batches.astype(str), 'nan')) else (np.nan, np.nan, np.nan)
+    batches_kbet_acceptance_rate, _, _ = kbet(neighbors, batches) if notna_batches.any() else (np.nan, np.nan, np.nan)
 
     ## update nmi_ari_dict to include other metrics
     unpaired_metrics.update({
