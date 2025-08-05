@@ -120,7 +120,7 @@ if __name__ == "__main__":
     
     ## Setup teachers
     datasets, models, teacher_rna_train_loaders, teacher_atac_train_loaders, teacher_rna_valid_loaders, teacher_atac_valid_loaders = \
-        teachers_setup(model_uri_paths, args)
+        teachers_setup(model_uri_paths, args, device)
     
 
     run_args = {

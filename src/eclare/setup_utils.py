@@ -1121,7 +1121,7 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
       
-def dlpfc_anderson_setup(args, cell_group='predicted.id', batch_group='Sub.batch', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Anderson'):
+def dlpfc_anderson_setup(args, cell_group='predicted.id', batch_group='id', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Anderson'):
         
     atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Anderson', 'snMultiome')
 
@@ -1168,20 +1168,25 @@ def dlpfc_anderson_setup(args, cell_group='predicted.id', batch_group='Sub.batch
         if return_raw_data and return_type == 'data':
             return rna.to_memory(), atac.to_memory(), cell_group, None, None, atac_datapath, rna_datapath
 
+        ## Normalize data
+        ac.pp.tfidf(atac, scale_factor=1e4)
+        sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(atac)
+
+        sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(rna)
+
         ## Subset to variable features
         if hvg_only:
-            ac.pp.tfidf(atac, scale_factor=1e4)
-            sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
-            sc.pp.log1p(atac)
             sc.pp.highly_variable_genes(atac, n_top_genes=200000) # sc.pl.highly_variable_genes(atac)
-            sc.pp.scale(atac, zero_center=False, max_value=10) # min-max scaling
             atac = atac[:, atac.var['highly_variable'].astype(bool)].to_memory()
 
-            sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
-            sc.pp.log1p(rna)
             sc.pp.highly_variable_genes(rna, n_top_genes=10000) # sc.pl.highly_variable_genes(rna)
-            sc.pp.scale(rna, zero_center=False,  max_value=10) # min-max scaling
             rna = rna[:, rna.var['highly_variable'].astype(bool)].to_memory()
+
+        # min-max scaling
+        sc.pp.scale(atac, zero_center=False, max_value=10)
+        sc.pp.scale(rna, zero_center=False,  max_value=10)
 
         ## Save dummy-encoded overlapping intervals, use later as mask
         genes_to_peaks_binary_mask_path = os.path.join(atac_datapath, f'genes_to_peaks_binary_mask_{rna.n_vars}_by_{atac.n_vars}.npz')
@@ -1230,6 +1235,8 @@ def dlpfc_anderson_setup(args, cell_group='predicted.id', batch_group='Sub.batch
         print('Genes match:', (rna.var.index == genes_peaks_dict['genes']).all())
         print('Peaks match:', (atac.var.index == genes_peaks_dict['peaks']).all())
 
+    ## check if batches are non-nan
+    assert (atac.obs[batch_group].notna().all() or rna.obs[batch_group].notna().all())
         
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
@@ -1446,20 +1453,25 @@ def dlpfc_ma_setup(args, cell_group='subclass', batch_group='samplename', hvg_on
         if return_raw_data and return_type == 'data':
             return rna.to_memory(), atac.to_memory(), cell_group, None, None, atac_datapath, rna_datapath
 
+        ## Normalize data
+        ac.pp.tfidf(atac, scale_factor=1e4)
+        sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(atac)
+
+        sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(rna)
+
         ## Subset to variable features
         if hvg_only:
-            ac.pp.tfidf(atac, scale_factor=1e4)
-            sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
-            sc.pp.log1p(atac)
             sc.pp.highly_variable_genes(atac, n_top_genes=200000) # sc.pl.highly_variable_genes(atac)
-            sc.pp.scale(atac, zero_center=False, max_value=10) # min-max scaling
             atac = atac[:, atac.var['highly_variable'].astype(bool)].to_memory()
 
-            sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
-            sc.pp.log1p(rna)
             sc.pp.highly_variable_genes(rna, n_top_genes=10000) # sc.pl.highly_variable_genes(rna)
-            sc.pp.scale(rna, zero_center=False,  max_value=10) # min-max scaling
             rna = rna[:, rna.var['highly_variable'].astype(bool)].to_memory()
+
+        # min-max scaling
+        sc.pp.scale(atac, zero_center=False, max_value=10)
+        sc.pp.scale(rna, zero_center=False,  max_value=10)
 
         ## Save dummy-encoded overlapping intervals, use later as mask
         genes_to_peaks_binary_mask_path = os.path.join(datapath, f'genes_to_peaks_binary_mask_{rna.n_vars}_by_{atac.n_vars}.npz')
@@ -1619,7 +1631,7 @@ def get_genes_by_peaks_str(datasets = ["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", 
     genes_by_peaks_str_timestamp_df.to_csv(os.path.join(datapath, 'genes_by_peaks_str_timestamp.csv'))
 
 
-def teachers_setup(model_paths, args, dataset_idx_dict=None):
+def teachers_setup(model_paths, args, device, dataset_idx_dict=None):
     
     datasets = []
     models = {}
@@ -1637,7 +1649,6 @@ def teachers_setup(model_paths, args, dataset_idx_dict=None):
             model_uris = f.read().strip().splitlines()
             model_uri = model_uris[0]
         
-
         ## Get metadata and determine the dataset
         model_metadata = Model.load(model_uri)
         dataset = model_metadata.metadata['source_dataset']
@@ -1655,8 +1666,7 @@ def teachers_setup(model_paths, args, dataset_idx_dict=None):
             continue
 
         ## Load the model
-        model = mlflow.pytorch.load_model(model_uri)
-
+        model = mlflow.pytorch.load_model(model_uri, device=device)
 
         print(dataset)
         datasets.append(dataset)
@@ -1825,20 +1835,24 @@ def mouse_brain_10x_setup(args, cell_group='GEX Graph-based', batch_group=None, 
         if return_raw_data and return_type == 'data':
             return rna.to_memory(), atac.to_memory(), cell_group, None, None, atac_datapath, rna_datapath
 
+        ## Normalize data
+        ac.pp.tfidf(atac, scale_factor=1e4)
+        sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(atac)
+        sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(rna)
+
         ## Subset to variable features
         if hvg_only:
-            ac.pp.tfidf(atac, scale_factor=1e4)
-            sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
-            sc.pp.log1p(atac)
             sc.pp.highly_variable_genes(atac, n_top_genes=200000) # sc.pl.highly_variable_genes(atac)
-            sc.pp.scale(atac, zero_center=False, max_value=10) # min-max scaling
             atac = atac[:, atac.var['highly_variable'].astype(bool)].to_memory()
 
-            sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
-            sc.pp.log1p(rna)
             sc.pp.highly_variable_genes(rna, n_top_genes=10000) # sc.pl.highly_variable_genes(rna)
-            sc.pp.scale(rna, zero_center=False,  max_value=10) # min-max scaling
             rna = rna[:, rna.var['highly_variable'].astype(bool)].to_memory()
+
+        # min-max scaling
+        sc.pp.scale(atac, zero_center=False, max_value=10)
+        sc.pp.scale(rna, zero_center=False,  max_value=10)
 
         ## Save dummy-encoded overlapping intervals, use later as mask
         genes_to_peaks_binary_mask_path = os.path.join(atac_datapath, f'genes_to_peaks_binary_mask_{rna.n_vars}_by_{atac.n_vars}.npz')

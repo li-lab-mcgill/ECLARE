@@ -21,12 +21,12 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-source_datasets=("pbmc_10x" "mouse_brain_10x")
-target_datasets=("DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" "PFC_Zhu")
+source_datasets=("DLPFC_Ma" "mouse_brain_10x")
+target_datasets=("DLPFC_Anderson")
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6 # only relevant for multi-replicate tasks
-N_REPLICATES=3
+N_REPLICATES=2
 
 ## Define random state
 RANDOM=42
@@ -177,8 +177,8 @@ for target_dataset in "${target_datasets[@]}"; do
                 ## Make new sub-sub-directory for source dataset
                 mkdir -p $TMPDIR/$target_dataset/$source_dataset/$task_idx
                 
-                # Assign task to an idle GPU
-                gpu_id=${idle_gpus[$((source_dataset_idx % ${#idle_gpus[@]}))]}
+                # Assign task to an idle GPU, ensuring both source_dataset_idx and task_idx are used for load balancing
+                gpu_id=${idle_gpus[$(((source_dataset_idx * N_REPLICATES + task_idx) % ${#idle_gpus[@]}))]}
 
                 # Run CLIP task on idle GPU
                 run_clip_task_on_gpu $gpu_id $target_dataset $source_dataset $task_idx $random_state $genes_by_peaks_str $feature

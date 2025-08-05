@@ -1336,8 +1336,24 @@ def metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets
     # Try to convert the metric column to float, replacing errors with NaN
     df[metric] = pd.to_numeric(df[metric], errors='coerce')
 
+    # Check if there are NaN values in the metric
+    has_nans = df[metric].isna().any()
+    
+    # Filter out rows where the metric is NaN to avoid plotting issues
+    df_plot = df.dropna(subset=[metric])
+    
+    # If no data remains after filtering, return early
+    if df_plot.empty:
+        ax.set_xlabel("method")
+        ax.set_ylabel(metric)
+        ax.text(0.5, 0.5, 'No valid data', ha='center', va='center', transform=ax.transAxes)
+        return
+    
+    # Find which datasets have NaN values
+    datasets_with_nans = df[df[metric].isna()]['dataset'].unique()
+
     # Check if there's only one row for any dataset-metric combination
-    dataset_metric_counts = df.groupby(['dataset']).size()
+    dataset_metric_counts = df_plot.groupby(['dataset']).size()
     has_single_values = (dataset_metric_counts == 1).all()
     
     if has_single_values:
@@ -1345,7 +1361,7 @@ def metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets
         sns.barplot(
             x="dataset",
             y=metric,
-            data=df,
+            data=df_plot,
             ax=ax,
             color="lightgray"
         ).tick_params(axis='x', rotation=60)
@@ -1354,7 +1370,7 @@ def metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets
         sns.boxplot(
             x="dataset",
             y=metric,
-            data=df,
+            data=df_plot,
             ax=ax,
             color="lightgray",
             showfliers=False,
@@ -1368,7 +1384,7 @@ def metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets
     ax.yaxis.set_minor_locator(plt.MultipleLocator(0.05))
 
     # Add scatter points with jitter
-    dataset_positions = df["dataset"].unique()
+    dataset_positions = df_plot["dataset"].unique()
     position_mapping = {dataset: i for i, dataset in enumerate(dataset_positions)}
 
     for target in unique_targets:
@@ -1376,40 +1392,58 @@ def metric_boxplot(df, metric, target_to_color, source_to_marker, unique_targets
             for source in unique_sources:
 
                 if pd.isna(source):
-                    subset = df[(df["target"] == target) &
-                                (df["source"].isna()) &
-                                (df["dataset"] == dataset)]
-                    x_position = position_mapping[dataset]
-                    jitter = np.random.uniform(-0.15, 0.15, size=len(subset))
-                    jittered_positions = x_position + jitter
-                    ax.scatter(
-                        x=jittered_positions,
-                        y=subset[metric],
-                        color=target_to_color[target],
-                        marker='o',
-                        edgecolor=None,
-                        s=50,
-                        zorder=10,
-                        alpha=0.4
-                    )
+                    subset = df_plot[(df_plot["target"] == target) &
+                                    (df_plot["source"].isna()) &
+                                    (df_plot["dataset"] == dataset)]
+                    if not subset.empty:
+                        x_position = position_mapping[dataset]
+                        jitter = np.random.uniform(-0.15, 0.15, size=len(subset))
+                        jittered_positions = x_position + jitter
+                        ax.scatter(
+                            x=jittered_positions,
+                            y=subset[metric],
+                            color=target_to_color[target],
+                            marker='o',
+                            edgecolor=None,
+                            s=50,
+                            zorder=10,
+                            alpha=0.4
+                        )
 
                 else:
-                    subset = df[(df["source"] == source) &
-                                (df["target"] == target) &
-                                (df["dataset"] == dataset)]
-                    x_position = position_mapping[dataset]
-                    jitter = np.random.uniform(-0.15, 0.15, size=len(subset))
-                    jittered_positions = x_position + jitter
-                    ax.scatter(
-                        x=jittered_positions,
-                        y=subset[metric],
-                        color=target_to_color[target],
-                        marker=source_to_marker[source],
-                        edgecolor=None,
-                        s=50 if source_to_marker[source] == '*' else 50,
-                        zorder=10,
-                        alpha=0.4
-                    )
+                    subset = df_plot[(df_plot["source"] == source) &
+                                    (df_plot["target"] == target) &
+                                    (df_plot["dataset"] == dataset)]
+                    if not subset.empty:
+                        x_position = position_mapping[dataset]
+                        jitter = np.random.uniform(-0.15, 0.15, size=len(subset))
+                        jittered_positions = x_position + jitter
+                        ax.scatter(
+                            x=jittered_positions,
+                            y=subset[metric],
+                            color=target_to_color[target],
+                            marker=source_to_marker[source],
+                            edgecolor=None,
+                            s=50 if source_to_marker[source] == '*' else 50,
+                            zorder=10,
+                            alpha=0.4
+                        )
+    
+    # Add exclamation marks above datasets with NaN values
+    if has_nans:
+        dataset_positions = df_plot["dataset"].unique()
+        position_mapping = {dataset: i for i, dataset in enumerate(dataset_positions)}
+        
+        for dataset in datasets_with_nans:
+            if dataset in position_mapping:
+                x_pos = position_mapping[dataset]
+                # Position exclamation mark just above the x-axis tick labels
+                y_min, y_max = ax.get_ylim()
+                y_pos = y_min + 0.035  # Position just above x-axis
+                
+                ax.text(x_pos, y_pos, '!', fontsize=10, fontweight='bold', 
+                       color='red', ha='center', va='top')
+    
 
 def metric_boxplots(df, target_source_combinations=False, include_paired=True):
 
@@ -1424,7 +1458,7 @@ def metric_boxplots(df, target_source_combinations=False, include_paired=True):
     #target_to_color = {target: colors[i] if len(unique_targets)>1 else 'black' for i, target in enumerate(unique_targets)}
     if len(unique_targets) > 1:
         target_to_color = {hue_order[i]: colors[i] if len(unique_targets)>1 else 'black' for i in range(len(unique_targets))}
-    elif unique_targets[0] == 'MDD':
+    elif (unique_targets[0] == 'MDD') or len(unique_targets) == 1:
         target_to_color = {unique_targets[0]: sns.color_palette("Dark2", 8)[6]}
 
     if target_source_combinations:

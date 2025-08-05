@@ -21,9 +21,15 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
+## Define source datasets
+source_datasets=("DLPFC_Ma" "mouse_brain_10x")
+
+## Define target dataset
+target_datasets=("DLPFC_Anderson")
+
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=3
-N_REPLICATES=3
+N_REPLICATES=2
 
 ## Define random state
 RANDOM=42
@@ -33,7 +39,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='30162704'
+clip_job_id='04201018'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
@@ -155,14 +161,14 @@ client.create_run(experiment_id, run_name=run_name)
 
 ## Outer loop: iterate over datasets as the target_dataset
 target_datasets_idx=0
-for target_dataset in "${datasets[@]}"; do
+for target_dataset in "${target_datasets[@]}"; do
 
     ## Extract the value of `genes_by_peaks_str` for the current target
     genes_by_peaks_str=$(extract_genes_by_peaks_str "$csv_file" "$target_dataset" "MDD")
 
     ## Middle loop: iterate over datasets as the source_dataset
     source_datasets_idx=0
-    for source_dataset in "${datasets[@]}"; do
+    for source_dataset in "${source_datasets[@]}"; do
 
         # Skip the case where source and target datasets are the same
         if [ "$source_dataset" != "$target_dataset" ]; then
@@ -183,7 +189,7 @@ for target_dataset in "${datasets[@]}"; do
                 mkdir -p $TMPDIR/$target_dataset/$source_dataset/$task_idx
                 
                 # Assign task to an idle GPU
-                gpu_id=${idle_gpus[$((source_datasets_idx % ${#idle_gpus[@]}))]}
+                gpu_id=${idle_gpus[$(((source_datasets_idx * N_REPLICATES + task_idx) % ${#idle_gpus[@]}))]}
 
                 # Run ECLARE task on idle GPU
                 run_eclare_task_on_gpu $clip_job_id $JOB_ID $gpu_id $source_dataset $target_dataset $task_idx $random_state $genes_by_peaks_str $feature

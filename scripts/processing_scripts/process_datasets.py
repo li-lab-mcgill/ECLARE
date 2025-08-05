@@ -35,10 +35,10 @@ if __name__ == "__main__":
     print('Extracting data')
 
     source_rna, source_atac, source_cell_group, _, _, source_atac_datapath, source_rna_datapath \
-        = source_setup_func(args, return_type='data')
+        = source_setup_func(args, hvg_only=False, return_type='data')
 
     target_rna, target_atac, target_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, target_atac_datapath, target_rna_datapath \
-        = target_setup_func(args, return_type='data')
+        = target_setup_func(args, hvg_only=False, return_type='data')
     
     ## delete atac.raw if it exists
     if (args.target_dataset=='MDD') and ('raw' in target_atac.uns.keys()):
@@ -55,11 +55,11 @@ if __name__ == "__main__":
         source_rna, target_rna, source_atac, target_atac, target_genes_to_peaks_binary_mask, target_genes_peaks_dict \
             = retain_feature_overlap(args, source_rna, target_rna, source_atac, target_atac, source_cell_group, target_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, return_type='data')
         
+        ## save data
         print('Saving source data')
         source_rna.write_h5ad(os.path.join(source_rna_datapath, f'rna_{source_rna.n_vars}_by_{source_atac.n_vars}_aligned_target_{args.target_dataset}.h5ad'))
         source_atac.write_h5ad(os.path.join(source_atac_datapath, f'atac_{source_rna.n_vars}_by_{source_atac.n_vars}_aligned_target_{args.target_dataset}.h5ad'))
 
-        ## save data
         print('Saving target data')
         target_rna.write_h5ad(os.path.join(target_rna_datapath, f'rna_{target_rna.n_vars}_by_{target_atac.n_vars}_aligned_source_{args.source_dataset}.h5ad'))
         target_atac.write_h5ad(os.path.join(target_atac_datapath, f'atac_{target_rna.n_vars}_by_{target_atac.n_vars}_aligned_source_{args.source_dataset}.h5ad'))
