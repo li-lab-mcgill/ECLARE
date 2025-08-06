@@ -131,6 +131,9 @@ if __name__ == "__main__":
             hyperparameters = get_clip_hparams()
             default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
 
+            ## manually set num_layers to 1 (for teacher model)
+            default_hyperparameters['num_layers'] = 1
+
             ## Run training loops
             if (not args.tune_hyperparameters):
 

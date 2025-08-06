@@ -237,7 +237,7 @@ def get_genes_by_peaks(rna, atac, genes_to_peaks_mask_path, window_size = 1e6, f
         ## Save mask
         if genes_to_peaks_mask_path:
             genes_to_peaks_distance_mask = csr_matrix(genes_to_peaks_distance_mask)
-            save_npz(genes_to_peaks_distance_mask_path, genes_to_peaks_distance_mask)
+            save_npz(genes_to_peaks_mask_path, genes_to_peaks_distance_mask)
 
             pkl_path = os.path.splitext(genes_to_peaks_mask_path)[0] + '.pkl'
             with open(pkl_path, 'wb') as f: pkl_dump(genes_peaks_dict, f)
@@ -1127,7 +1127,7 @@ def dlpfc_anderson_setup(args, cell_group='predicted.id', batch_group='id', hvg_
 
     if args.genes_by_peaks_str is not None:
 
-        if args.source_dataset == dataset:
+        if (args.source_dataset == dataset) and (args.target_dataset is not None):
             RNA_file = f"rna_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
             ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
             binary_mask_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.npz"
@@ -1138,9 +1138,14 @@ def dlpfc_anderson_setup(args, cell_group='predicted.id', batch_group='id', hvg_
             pkl_path = os.path.join(datapath, genes_peaks_dict_file)
             with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
 
-        elif args.target_dataset == dataset:
+        elif (args.target_dataset == dataset) and (args.source_dataset is not None):
             RNA_file = f"rna_{args.genes_by_peaks_str}_aligned_source_{args.source_dataset}.h5ad"
             ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_source_{args.source_dataset}.h5ad"
+            binary_mask_file = genes_peaks_dict_file = genes_to_peaks_binary_mask = genes_peaks_dict = None
+
+        elif (args.source_dataset == dataset) and (args.target_dataset is None):
+            RNA_file = f"rna_{args.genes_by_peaks_str}.h5ad"
+            ATAC_file = f"atac_{args.genes_by_peaks_str}.h5ad"
             binary_mask_file = genes_peaks_dict_file = genes_to_peaks_binary_mask = genes_peaks_dict = None
 
         atac_fullpath = os.path.join(datapath, ATAC_file)
