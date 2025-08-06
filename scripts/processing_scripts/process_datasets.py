@@ -25,18 +25,11 @@ if __name__ == "__main__":
     parser.add_argument('--feature', type=str, default=None)
     args = parser.parse_args()
 
-    ## SOURCE dataset setup function
-    source_setup_func = return_setup_func_from_dataset(args.source_dataset)
-
     ## TARGET dataset setup function
     target_setup_func = return_setup_func_from_dataset(args.target_dataset)
 
     ## extract data
-    print('Extracting data')
-
-    source_rna, source_atac, source_cell_group, _, _, source_atac_datapath, source_rna_datapath \
-        = source_setup_func(args, hvg_only=False, return_type='data')
-
+    print('Extracting target data')
     target_rna, target_atac, target_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, target_atac_datapath, target_rna_datapath \
         = target_setup_func(args, hvg_only=False, return_type='data')
     
@@ -49,6 +42,13 @@ if __name__ == "__main__":
     #source_rna_datapath = source_atac_datapath = target_rna_datapath = target_atac_datapath = '/home/dmannk/scratch'
 
     if args.source_dataset is not None:
+
+        ## SOURCE dataset setup function
+        print('Extracting source data')
+        source_setup_func = return_setup_func_from_dataset(args.source_dataset)
+
+        source_rna, source_atac, source_cell_group, _, _, source_atac_datapath, source_rna_datapath \
+            = source_setup_func(args, hvg_only=False, return_type='data')
 
         ## harmonize data
         print('Harmonizing data')
