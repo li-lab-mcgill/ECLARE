@@ -202,6 +202,9 @@ if __name__ == "__main__":
             hyperparameters = get_clip_hparams()
             default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
 
+            ## manually set num_layers to 2 (for student model)
+            default_hyperparameters['num_layers'] = 2
+
             if not args.tune_hyperparameters:
 
                 student_model, metrics_dict = run_ECLARE(**run_args, params=default_hyperparameters, device=device)

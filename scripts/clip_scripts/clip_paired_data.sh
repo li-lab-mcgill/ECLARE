@@ -26,7 +26,7 @@ target_datasets=("DLPFC_Anderson")
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6 # only relevant for multi-replicate tasks
-N_REPLICATES=2
+N_REPLICATES=3
 
 ## Define random state
 RANDOM=42
