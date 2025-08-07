@@ -265,14 +265,14 @@ def create_loaders(
 
     return train_loader, valid_loader, valid_idx, train_num_batches, valid_num_batches, train_n_batches_str_length, valid_n_batches_str_length, train_n_epochs_str_length, valid_n_epochs_str_length
 
-def fetch_data_from_loader_light(loader, subsample=2000, label_key='cell_type', batch_key='batch'):
+def fetch_data_from_loader_light(loader, subsample=2000, label_key='cell_type', batch_key='batch', shuffle=True):
 
     n_cells = loader.dataset.shape[0]
     n_splits = np.ceil(n_cells / subsample).astype(int)
 
     ## if more cells than subsample, use stratified k-fold to sample
     if n_cells > subsample:
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True)
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=shuffle)
         _, cells_idx = next(skf.split(np.zeros_like(loader.dataset.obs[label_key].values), loader.dataset.obs[label_key].values))
     else:
         cells_idx = np.arange(n_cells)
