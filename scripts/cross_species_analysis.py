@@ -1,30 +1,6 @@
 #%% set env variables
-import os
-import sys
-
-# Check if environment variables are already set
-eclare_root = os.environ.get('ECLARE_ROOT')
-outpath = os.environ.get('OUTPATH')
-datapath = os.environ.get('DATAPATH')
-
-# Print status of environment variables
-if all([eclare_root, outpath, datapath]):
-    print(f"Environment variables already set:")
-    print(f"ECLARE_ROOT: {eclare_root}")
-    print(f"OUTPATH: {outpath}")
-    print(f"DATAPATH: {datapath}")
-else:
-    print(f"Missing environment variables")
-
-    config_path = '../config'
-    sys.path.insert(0, config_path)
-
-    from export_env_variables import export_env_variables
-    export_env_variables(config_path)
-
-    eclare_root = os.environ.get('ECLARE_ROOT')
-    outpath = os.environ.get('OUTPATH')
-    datapath = os.environ.get('DATAPATH')
+from eclare import set_env_variables
+set_env_variables(config_path='../config')
 
 #%%
 import os
@@ -55,13 +31,10 @@ from glob import glob
 
 from eclare.post_hoc_utils import \
     extract_target_source_replicate, metric_boxplots, get_next_version_dir, load_model_and_metadata, \
-    set_env_variables, download_mlflow_runs
+    download_mlflow_runs
 
 from eclare.setup_utils import teachers_setup, return_setup_func_from_dataset
 from eclare.data_utils import fetch_data_from_loader_light
-
-
-set_env_variables()
 
 cuda_available = torch.cuda.is_available()
 n_cudas = torch.cuda.device_count()
@@ -93,6 +66,18 @@ search_strings_to_dataset = {
 base_output_dir = os.path.join(os.environ['OUTPATH'], f"cross_species_analysis_{methods_id_dict['eclare'][0]}")
 output_dir = get_next_version_dir(base_output_dir)
 os.makedirs(output_dir, exist_ok=True)
+
+#%% get BICCN similarity matrices
+import pickle
+
+sim_mat_path = os.path.join(os.environ['DATAPATH'], 'biccn_dend_to_matrix.pkl')
+with open(sim_mat_path, 'rb') as f:
+    sim_mat_dict, celltype_map_dict = pickle.load(f)
+
+import pandas as pd
+
+# Compute the mean of the DataFrames in sim_mat_dict, keeping the DataFrame format
+sim_mat_mean_df = pd.concat(sim_mat_dict.values()).groupby(level=0).mean()
 
 #%% paired data
 experiment_name = f"clip_{methods_id_dict['clip']}"
@@ -176,6 +161,7 @@ best_eclare     = str(ECLARE_metrics_df['multimodal_ilisi'].argmax())
 eclare_student_model, eclare_student_model_metadata     = load_model_and_metadata(f'eclare_{methods_id_dict["eclare"][0]}', best_eclare, device, target_dataset=target_dataset)
 eclare_student_model = eclare_student_model.eval().to(device=device)
 
+'''
 ## Load KD_CLIP student model
 best_kd_clip = '0'
 kd_clip_student_models = {}
@@ -183,11 +169,11 @@ kd_clip_student_models = {}
 for source_dataset in source_datasets:
     kd_clip_student_model, kd_clip_student_model_metadata     = load_model_and_metadata(f'kd_clip_{methods_id_dict["kd_clip"]}', best_kd_clip, device, target_dataset=os.path.join(target_dataset, source_dataset))
     kd_clip_student_models[source_dataset] = kd_clip_student_model
-
+'''
 
 # %% Setup student and teachers
 model_uri_paths_str = f"clip_*{methods_id_dict['clip']}/{target_dataset}/**/{best_eclare}/model_uri.txt"
-model_uri_paths = glob(os.path.join(outpath, model_uri_paths_str))
+model_uri_paths = glob(os.path.join(os.environ['OUTPATH'], model_uri_paths_str))
 
 genes_by_peaks_path = os.path.join(os.environ['DATAPATH'], 'genes_by_peaks_str.csv')
 genes_by_peaks_df = pd.read_csv(genes_by_peaks_path, index_col=0)
@@ -310,6 +296,7 @@ for s, source_dataset in enumerate(source_datasets):
     sns.heatmap(mean_cosine_similarity_by_label_atac, ax=ax1[1, s + 1]); ax1[1, s + 1].set_xlabel(''); ax1[1, s + 1].set_ylabel('')
     ax1[0, s + 1].set_title(f'Teacher: {source_dataset}')
 
+    '''
     ## project data through KD_CLIP student model to get latents
     kd_clip_rna_latents, _ = kd_clip_student_models[source_dataset](student_rna_cells.to(device=device), modality=0)
     kd_clip_atac_latents, _ = kd_clip_student_models[source_dataset](student_atac_cells.to(device=device), modality=1)
@@ -321,12 +308,13 @@ for s, source_dataset in enumerate(source_datasets):
     sns.heatmap(mean_cosine_similarity_by_label_rna, ax=ax2[0, s + 1]); ax2[0, s + 1].set_xlabel(''); ax2[0, s + 1].set_ylabel('')
     sns.heatmap(mean_cosine_similarity_by_label_atac, ax=ax2[1, s + 1]); ax2[1, s + 1].set_xlabel(''); ax2[1, s + 1].set_ylabel('')
     ax2[0, s + 1].set_title(f'Student (KD_CLIP): {source_dataset}')
+    '''
 
 fig1.suptitle(f'Mean cosine similarity between cell types - {target_dataset}')
 fig1.tight_layout()
 
-fig2.suptitle(f'Mean cosine similarity between cell types - {target_dataset}')
-fig2.tight_layout()
+#fig2.suptitle(f'Mean cosine similarity between cell types - {target_dataset}')
+#fig2.tight_layout()
 
 # Prepare data for barplot: melt the DataFrame to long format for seaborn
 df_sim_reset = df_sim.reset_index().rename(columns={'index': 'Model'})
