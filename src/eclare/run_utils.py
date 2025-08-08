@@ -498,8 +498,8 @@ def eclare_pass(
         epoch_align_loss[target_dataset_og]     += align_loss_scaled.item()
 
         for d, dataset in enumerate(datasets):
-            epoch_teacher_weights[dataset]    += teacher_weights[d].item()
-            epoch_teacher_T_weights[dataset]  += teacher_T_weights[d].item()
+            epoch_teacher_weights[dataset]    += teacher_weights[d].mean().item()
+            epoch_teacher_T_weights[dataset]  += teacher_T_weights[d].mean().item()
 
         if (optimizer is not None):
             optimizer.zero_grad()
@@ -516,8 +516,9 @@ def eclare_pass(
         metrics_dict[f'distil_loss_{dataset}']  = epoch_distil_loss[dataset] / num_batches
         metrics_dict[f'align_loss_{dataset}']   = epoch_align_loss[dataset] / num_batches # could ignore non-teacher datasets since constant value across epochs
 
-        metrics_dict[f'teacher_weights_{dataset}']    = epoch_teacher_weights[dataset] / num_batches
-        metrics_dict[f'teacher_T_weights_{dataset}']  = epoch_teacher_T_weights[dataset] / num_batches
+        if dataset != target_dataset_og:
+            metrics_dict[f'teacher_weights_{dataset}']    = epoch_teacher_weights[dataset] / num_batches
+            metrics_dict[f'teacher_T_weights_{dataset}']  = epoch_teacher_T_weights[dataset] / num_batches
             
     return metrics_dict
 
