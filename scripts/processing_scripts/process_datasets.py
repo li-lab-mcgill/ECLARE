@@ -1,12 +1,9 @@
 from argparse import ArgumentParser
 from scipy.sparse import save_npz
 from pickle import dump as pkl_dump
-from anndata import read_h5ad
-import numpy as np
 import os
 
-from eclare import return_setup_func_from_dataset
-from eclare.setup_utils import retain_feature_overlap
+from eclare.setup_utils import retain_feature_overlap, return_setup_func_from_dataset
 
 
 if __name__ == "__main__":
