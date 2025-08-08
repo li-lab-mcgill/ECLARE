@@ -25,7 +25,7 @@ class CLIP(nn.Module):
         },
         'num_layers': {
             'suggest_distribution': CategoricalDistribution(choices=[1, 2]),
-            'default': 2
+            'default': 1
         },
         'dropout_p': {
             'suggest_distribution': FloatDistribution(low=0.1, high=0.9),

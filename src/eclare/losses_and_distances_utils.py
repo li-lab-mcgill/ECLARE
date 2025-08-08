@@ -132,8 +132,8 @@ def clip_loss_split_by_ct(atac_latents, rna_latents, atac_celltypes, rna_celltyp
     loss_dict = {}
 
     for celltype in all_celltypes:
-        atac_latents_ct = atac_latents[atac_celltypes == celltype]
-        rna_latents_ct = rna_latents[rna_celltypes == celltype]
+        atac_latents_ct = atac_latents[np.array(atac_celltypes) == celltype]
+        rna_latents_ct = rna_latents[np.array(rna_celltypes) == celltype]
 
         rna_celltypes_ct = [celltype] * len(rna_latents_ct)
         atac_celltypes_ct = [celltype] * len(atac_latents_ct)
@@ -284,4 +284,4 @@ class Knowledge_distillation_fn(torch.nn.Module):
 
         #align_loss_scaled   = 0.5 * torch.stack([align_losses_scaled_offset, align_losses_T_scaled_offset]).sum(0).mean()
 
-        return distil_loss
+        return distil_loss, align_losses_weights, align_losses_T_weights
