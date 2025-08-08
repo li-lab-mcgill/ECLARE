@@ -1044,20 +1044,25 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         if return_raw_data and return_type == 'data':
             return rna.to_memory(), atac.to_memory(), cell_group, None, None, atac_datapath, rna_datapath
 
+        ## Normalize data
+        ac.pp.tfidf(atac, scale_factor=1e4)
+        sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(atac)
+
+        sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(rna)
+
         ## Subset to variable features
         if hvg_only:
-            ac.pp.tfidf(atac, scale_factor=1e4)
-            sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
-            sc.pp.log1p(atac)
             sc.pp.highly_variable_genes(atac, n_top_genes=200000) # sc.pl.highly_variable_genes(atac)
-            sc.pp.scale(atac, zero_center=False, max_value=10) # min-max scaling
             atac = atac[:, atac.var['highly_variable'].astype(bool)].to_memory()
 
-            sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
-            sc.pp.log1p(rna)
             sc.pp.highly_variable_genes(rna, n_top_genes=10000) # sc.pl.highly_variable_genes(rna)
-            sc.pp.scale(rna, zero_center=False,  max_value=10) # min-max scaling
             rna = rna[:, rna.var['highly_variable'].astype(bool)].to_memory()
+
+        # min-max scaling
+        sc.pp.scale(atac, zero_center=False, max_value=10)
+        sc.pp.scale(rna, zero_center=False,  max_value=10)
 
         ## Save dummy-encoded overlapping intervals, use later as mask
         genes_to_peaks_binary_mask_path = os.path.join(datapath, 'atac', f'genes_to_peaks_binary_mask_{rna.n_vars}_by_{atac.n_vars}.npz')
@@ -1302,24 +1307,25 @@ def midbrain_adams_setup(args, cell_group='cell_type', batch_group='subject', hv
         if return_raw_data and return_type == 'data':
             return rna.to_memory(), atac.to_memory(), cell_group, None, None, atac_datapath, rna_datapath
 
+        ## Normalize data
+        ac.pp.tfidf(atac, scale_factor=1e4)
+        sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(atac)
+
+        sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(rna)
+
         ## Subset to variable features
         if hvg_only:
-            ac.pp.tfidf(atac, scale_factor=1e4)
-            sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
-            sc.pp.log1p(atac)
             sc.pp.highly_variable_genes(atac, n_top_genes=200000) # sc.pl.highly_variable_genes(atac)
-            sc.pp.scale(atac, zero_center=False, max_value=10) # min-max scaling
             atac = atac[:, atac.var['highly_variable'].astype(bool)].to_memory()
 
-            sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
-            sc.pp.log1p(rna)
-
-            predictions = celltypist.annotate(rna, majority_voting=False, model=celltypist_model_path)
-
             sc.pp.highly_variable_genes(rna, n_top_genes=10000) # sc.pl.highly_variable_genes(rna)
-            sc.pp.scale(rna, zero_center=False,  max_value=10) # min-max scaling
             rna = rna[:, rna.var['highly_variable'].astype(bool)].to_memory()
 
+        predictions = celltypist.annotate(rna, majority_voting=False, model=celltypist_model_path)
+        sc.pp.scale(atac, zero_center=False, max_value=10) # min-max scaling
+        sc.pp.scale(rna, zero_center=False,  max_value=10) # min-max scaling
 
         ## Use celltypist to annotate cells by cell types
         #sc.pp.scale(atac, zero_center=False, max_value=10)
