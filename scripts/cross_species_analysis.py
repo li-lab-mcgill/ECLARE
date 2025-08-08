@@ -222,8 +222,10 @@ args = SimpleNamespace(
 datasets, models, teacher_rna_train_loaders, teacher_atac_train_loaders, teacher_rna_valid_loaders, teacher_atac_valid_loaders = \
     teachers_setup(model_uri_paths, args, device)
 
+#%% extract latents for analysis
+
 ## approximate number of cells to subsample
-subsample = 2000
+subsample = 5000
 
 ## project data through student model
 student_rna_cells, student_rna_labels, student_rna_batches = fetch_data_from_loader_light(student_rna_valid_loader, subsample=subsample, shuffle=False)
@@ -475,3 +477,132 @@ ax.axhline(ALL_teacher2_loss, color='green', linestyle=':', linewidth=2, label=f
 
 plt.tight_layout()
 plt.show()
+
+#%% load source datasets
+
+for source_dataset in source_datasets:
+
+    source_setup_func = return_setup_func_from_dataset(source_dataset)
+    genes_by_peaks_str = genes_by_peaks_df.loc[source_dataset, target_dataset[0]]
+
+    args = SimpleNamespace(
+        source_dataset=source_dataset,
+        target_dataset=target_dataset[0],
+        genes_by_peaks_str=genes_by_peaks_str,
+    )
+
+    ## get data loaders
+    rna, atac, cell_group, _, _, _, _ = source_setup_func(args, return_type='data')
+
+    olig2_x = rna[:,rna.var_names == 'OLIG2'].X.toarray().flatten()
+    gfap_x = rna[:,rna.var_names == 'GFAP'].X.toarray().flatten()
+    X_df = pd.DataFrame({'OLIG2': olig2_x, 'GFAP': gfap_x, 'celltype': rna.obs[cell_group].values})
+    
+    X_trunc_df = X_df[X_df['celltype'].isin(['Astro','OPC'])].copy()
+    X_trunc_df['celltype'] = X_trunc_df['celltype'].astype('category')
+    X_trunc_df['celltype'] = X_trunc_df['celltype'].cat.remove_unused_categories()
+
+    plt.figure(figsize=(10, 6))
+    sns.violinplot(x='celltype', y='OLIG2', data=X_trunc_df, inner='box')
+    plt.title(f"OLIG2 Expression by Cell Type in {source_dataset}")
+    plt.xlabel("Cell Type")
+    plt.ylabel("OLIG2 Expression")
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(10, 6))
+    sns.violinplot(x='celltype', y='GFAP', data=X_trunc_df, inner='box')
+    plt.title(f"GFAP Expression by Cell Type in {source_dataset}")
+    plt.xlabel("Cell Type")
+    plt.ylabel("GFAP Expression")
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.show()
+
+umap_embedding, umap_figure, rna_atac_df_umap = plot_umap_embeddings(student_rna_latents.cpu().detach().numpy(), student_atac_latents.cpu().detach().numpy(), student_rna_labels, student_atac_labels, ['nan'] * len(student_rna_labels), ['nan'] * len(student_atac_labels), color_map_ct)
+rna_atac_df_umap.drop(columns=['condition'], inplace=True)
+
+olig2_flag = student_rna_valid_loader.dataset.adatas[0].var_names == 'OLIG2'
+gfap_flag = student_rna_valid_loader.dataset.adatas[0].var_names == 'GFAP'
+
+olig2_expr = student_rna_cells[:, olig2_flag].detach().cpu().numpy().flatten()
+gfap_expr = student_rna_cells[:, gfap_flag].detach().cpu().numpy().flatten()
+
+rna_df_umap = rna_atac_df_umap[rna_atac_df_umap['modality'] == 'RNA'].copy()
+rna_df_umap['OLIG2_expr'] = np.log1p(olig2_expr)
+rna_df_umap['GFAP_expr'] = np.log1p(gfap_expr)
+
+
+# Plot UMAP embeddings colored by OLIG2, GFAP expression, and celltype in subplots
+fig, axes = plt.subplots(1, 3, figsize=(21, 6))
+
+# Determine shared colorbar limits for expression
+vmin = min(rna_df_umap['OLIG2_expr'].min(), rna_df_umap['GFAP_expr'].min())
+vmax = max(rna_df_umap['OLIG2_expr'].max(), rna_df_umap['GFAP_expr'].max())
+
+# OLIG2 subplot
+sc_olig2 = axes[0].scatter(
+    rna_df_umap['umap_1'], rna_df_umap['umap_2'],
+    c=rna_df_umap['OLIG2_expr'], cmap='magma', s=4, alpha=0.1, vmin=vmin, vmax=vmax
+)
+alpha_olig2 = (rna_df_umap['OLIG2_expr']/rna_df_umap['OLIG2_expr'].max())
+sc_olig2 = axes[0].scatter(
+    rna_df_umap['umap_1'], rna_df_umap['umap_2'],
+    c=rna_df_umap['OLIG2_expr'], cmap='magma', s=25, alpha=alpha_olig2, vmin=vmin, vmax=vmax
+)
+axes[0].set_title("UMAP: RNA cells colored by OLIG2 expression")
+axes[0].set_xlabel("UMAP 1")
+axes[0].set_ylabel("UMAP 2")
+
+# GFAP subplot
+sc_gfap = axes[1].scatter(
+    rna_df_umap['umap_1'], rna_df_umap['umap_2'],
+    c=rna_df_umap['GFAP_expr'], cmap='magma', s=4, alpha=0.1, vmin=vmin, vmax=vmax
+)
+alpha_gfap = (rna_df_umap['GFAP_expr']/rna_df_umap['GFAP_expr'].max())
+sc_gfap = axes[1].scatter(
+    rna_df_umap['umap_1'], rna_df_umap['umap_2'],
+    c=rna_df_umap['GFAP_expr'], cmap='magma', s=25, alpha=alpha_gfap, vmin=vmin, vmax=vmax
+)
+axes[1].set_title("UMAP: RNA cells colored by GFAP expression")
+axes[1].set_xlabel("UMAP 1")
+axes[1].set_ylabel("UMAP 2")
+
+# Celltype subplot
+import matplotlib
+celltypes = rna_df_umap['celltypes'].astype(str)
+unique_celltypes = celltypes.unique()
+# Use tab20 or tab10 if few celltypes, otherwise fallback to 'hsv'
+if len(unique_celltypes) <= 10:
+    cmap = plt.get_cmap('tab10')
+elif len(unique_celltypes) <= 20:
+    cmap = plt.get_cmap('tab20')
+else:
+    cmap = plt.get_cmap('hsv', len(unique_celltypes))
+celltype_colors = {ct: cmap(i) for i, ct in enumerate(unique_celltypes)}
+colors = celltypes.map(celltype_colors)
+
+sc_celltype = axes[2].scatter(
+    rna_df_umap['umap_1'], rna_df_umap['umap_2'],
+    c=colors, s=25, alpha=0.8
+)
+axes[2].set_title("UMAP: RNA cells colored by celltype")
+axes[2].set_xlabel("UMAP 1")
+axes[2].set_ylabel("UMAP 2")
+
+# Add colorbars to each expression subplot with same limits
+cbar_olig2 = fig.colorbar(sc_olig2, ax=axes[0], fraction=0.046, pad=0.04)
+cbar_olig2.set_label('Expression (log1p)')
+cbar_gfap = fig.colorbar(sc_gfap, ax=axes[1], fraction=0.046, pad=0.04)
+cbar_gfap.set_label('Expression (log1p)')
+
+# Add legend for celltype subplot
+handles = [matplotlib.lines.Line2D([0], [0], marker='o', color='w', label=ct,
+                                   markerfacecolor=celltype_colors[ct], markersize=8)
+           for ct in unique_celltypes]
+axes[2].legend(handles=handles, title='Celltype', bbox_to_anchor=(1.05, 1))
+
+plt.tight_layout()
+plt.show()
+
