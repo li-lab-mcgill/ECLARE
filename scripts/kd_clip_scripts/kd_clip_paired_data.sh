@@ -29,7 +29,7 @@ target_datasets=("DLPFC_Anderson")
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=3
-N_REPLICATES=2
+N_REPLICATES=3
 
 ## Define random state
 RANDOM=42
@@ -39,7 +39,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='04201018'
+clip_job_id='05151710'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run

@@ -393,6 +393,7 @@ def eclare_pass(
 
     # Initialize dictionaries to accumulate losses
     epoch_total_losses, epoch_align_loss, epoch_distil_loss = [{dataset: 0.0 for dataset in datasets+[target_dataset_og]} for _ in range(3)]
+    epoch_teacher_weights, epoch_teacher_T_weights = [{dataset: 0.0 for dataset in datasets} for _ in range(2)]
 
     for outer in tqdm(outer_iterable):
 
@@ -481,7 +482,7 @@ def eclare_pass(
         offsets_T = torch.stack(offsets_T)
 
         ## Compute distillation loss weighted by alignment loss, if more than one teacher
-        mean_distil_loss = \
+        mean_distil_loss, teacher_weights, teacher_T_weights = \
             knowledge_distillation_fn.distil_loss_weighting( distil_losses, distil_losses_T, (offsets - align_losses), (offsets_T - align_losses_T))
 
         ## Get student align loss
@@ -495,6 +496,10 @@ def eclare_pass(
         epoch_total_losses[target_dataset_og]   += total_loss.item()
         epoch_distil_loss[target_dataset_og]    += mean_distil_loss.item()
         epoch_align_loss[target_dataset_og]     += align_loss_scaled.item()
+
+        for d, dataset in enumerate(datasets):
+            epoch_teacher_weights[dataset]    += teacher_weights[d].mean().item()
+            epoch_teacher_T_weights[dataset]  += teacher_T_weights[d].mean().item()
 
         if (optimizer is not None):
             optimizer.zero_grad()
@@ -510,6 +515,10 @@ def eclare_pass(
         metrics_dict[f'total_loss_{dataset}']   = epoch_total_losses[dataset] / num_batches
         metrics_dict[f'distil_loss_{dataset}']  = epoch_distil_loss[dataset] / num_batches
         metrics_dict[f'align_loss_{dataset}']   = epoch_align_loss[dataset] / num_batches # could ignore non-teacher datasets since constant value across epochs
+
+        if dataset != target_dataset_og:
+            metrics_dict[f'teacher_weights_{dataset}']    = epoch_teacher_weights[dataset] / num_batches
+            metrics_dict[f'teacher_T_weights_{dataset}']  = epoch_teacher_T_weights[dataset] / num_batches
             
     return metrics_dict
 
