@@ -3012,26 +3012,7 @@ def find_hits_overlap(gene_list, enrs, shared_TF_TG_pairs_df):
 
     return hits_df, tfs_multiple_hits
 
-def set_env_variables(config_path='../config'):
 
-    # Check if environment variables are already set
-    eclare_root = os.environ.get('ECLARE_ROOT')
-    outpath = os.environ.get('OUTPATH')
-    datapath = os.environ.get('DATAPATH')
-
-    # Print status of environment variables
-    if all([eclare_root, outpath, datapath]):
-        print(f"Environment variables already set:")
-        print(f"ECLARE_ROOT: {eclare_root}")
-        print(f"OUTPATH: {outpath}")
-        print(f"DATAPATH: {datapath}")
-    else:
-        print(f"Missing environment variables")
-
-        sys.path.insert(0, config_path)
-
-        from export_env_variables import export_env_variables
-        export_env_variables(config_path)
 
 def download_mlflow_runs(experiment_name):
     

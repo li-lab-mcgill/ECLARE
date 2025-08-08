@@ -59,8 +59,9 @@ import threading
 
 from eclare.post_hoc_utils import \
     extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, compute_LR_grns, do_enrichr, find_hits_overlap, \
-    set_env_variables, download_mlflow_runs,\
+    download_mlflow_runs,\
     tree
+from ECLARE import set_env_variables
 
 set_env_variables()
 
