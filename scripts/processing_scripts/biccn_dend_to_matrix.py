@@ -135,10 +135,10 @@ for filename in filenames:
     celltype_map_dict[filename_no_ext] = celltype_mapping
 
 
-dicts_to_save = {
-    'sim_matrix_dict': sim_matrix_dict,
-    'celltype_map_dict': celltype_map_dict
-}
+dicts_to_save = [
+    sim_matrix_dict,
+    celltype_map_dict
+]
 
 import pickle
 with open(os.path.join(os.environ['DATAPATH'], 'biccn_dend_to_matrix.pkl'), 'wb') as f:
