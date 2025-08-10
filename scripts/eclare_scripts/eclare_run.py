@@ -13,7 +13,7 @@ from mlflow.pytorch import log_model
 from mlflow.models.signature import ModelSignature
 from mlflow.types import Schema, TensorSpec
 
-from eclare import return_setup_func_from_dataset, teachers_setup
+from eclare.setup_utils import return_setup_func_from_dataset, teachers_setup
 from eclare.models import get_clip_hparams
 from eclare.run_utils import get_or_create_experiment, run_ECLARE
 from eclare.tune_utils import tune_ECLARE

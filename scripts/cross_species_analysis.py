@@ -11,8 +11,9 @@ import seaborn as sns
 
 # Set matplotlib to use a thread-safe backend
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
+matplotlib.use('inline')
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 
 # Add logging for better debugging
 import logging
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 from types import SimpleNamespace
 from glob import glob
+import pickle
 
 from eclare.post_hoc_utils import \
     extract_target_source_replicate, metric_boxplots, get_next_version_dir, load_model_and_metadata, \
@@ -36,15 +38,49 @@ from eclare.post_hoc_utils import \
 from eclare.setup_utils import teachers_setup, return_setup_func_from_dataset
 from eclare.data_utils import fetch_data_from_loader_light
 
+def mean_cosine_similarities(x, y, x_celltypes, y_celltypes):
+
+    similarity = torch.matmul(x, y.T).cpu().detach().numpy()
+
+    x_celltypes = np.array(x_celltypes)
+    y_celltypes = np.array(y_celltypes)
+
+    df_rna = pd.DataFrame({
+        'celltype_x': np.repeat(x_celltypes, len(x_celltypes)),
+        'celltype_y': np.tile(y_celltypes, len(y_celltypes)),
+        'similarity': similarity.flatten(),
+    })
+
+    mean_cosine_similarity_by_label = df_rna.groupby(['celltype_x', 'celltype_y'])['similarity'].mean().unstack(fill_value=float('nan'))
+    
+    return mean_cosine_similarity_by_label
+
+def get_cmap(name: str = "light_pubugn") -> LinearSegmentedColormap:
+    """
+    Return a PuBuGn-inspired colormap where:
+      - 0 is near-white cream,
+      - 0.01 is pale lavender,
+      - values ramp through blue to teal-green.
+    """
+    stops = [
+        (0.00, "#fffff0"),  # very light cream
+        (0.05, "#ece2f0"),  # pale lavender
+        (0.20, "#a6bddb"),  # light blue
+        (0.50, "#3690c0"),  # mid blue
+        (0.75, "#1c9099"),  # teal
+        (1.00, "#016c59"),  # deep green-teal
+    ]
+    return LinearSegmentedColormap.from_list(name, stops)
+
 cuda_available = torch.cuda.is_available()
 n_cudas = torch.cuda.device_count()
 device = torch.device(f'cuda:{n_cudas - 1}') if cuda_available else 'cpu'
 
 ## Create dict for methods and job_ids
 methods_id_dict = {
-    'clip': '05151710',
-    'kd_clip': '06082442',
-    'eclare': ['06083053'],
+    'clip': '09114308',
+    'kd_clip': '09140533',
+    'eclare': ['09140535'],
 }
 
 ## define search strings
@@ -68,13 +104,10 @@ output_dir = get_next_version_dir(base_output_dir)
 os.makedirs(output_dir, exist_ok=True)
 
 #%% get BICCN similarity matrices
-import pickle
 
 sim_mat_path = os.path.join(os.environ['DATAPATH'], 'biccn_dend_to_matrix.pkl')
 with open(sim_mat_path, 'rb') as f:
     sim_mat_dict, celltype_map_dict = pickle.load(f)
-
-import pandas as pd
 
 # Compute the mean of the DataFrames in sim_mat_dict, keeping the DataFrame format
 sim_mat_mean_df = pd.concat(sim_mat_dict.values()).groupby(level=0).mean()
@@ -154,14 +187,13 @@ if len(methods_id_dict['eclare']) > 1:
 #%% Load ECLARE student model and source datasets
 
 target_dataset = 'DLPFC_Anderson'
-source_datasets = ['DLPFC_Ma', 'mouse_brain_10x']
+source_datasets = ['DLPFC_Ma', 'Midbrain_Adams', 'PFC_Zhu']
 
 ## Find path to best ECLARE model
 best_eclare     = str(ECLARE_metrics_df['multimodal_ilisi'].argmax())
 eclare_student_model, eclare_student_model_metadata     = load_model_and_metadata(f'eclare_{methods_id_dict["eclare"][0]}', best_eclare, device, target_dataset=target_dataset)
 eclare_student_model = eclare_student_model.eval().to(device=device)
 
-'''
 ## Load KD_CLIP student model
 best_kd_clip = '0'
 kd_clip_student_models = {}
@@ -169,14 +201,11 @@ kd_clip_student_models = {}
 for source_dataset in source_datasets:
     kd_clip_student_model, kd_clip_student_model_metadata     = load_model_and_metadata(f'kd_clip_{methods_id_dict["kd_clip"]}', best_kd_clip, device, target_dataset=os.path.join(target_dataset, source_dataset))
     kd_clip_student_models[source_dataset] = kd_clip_student_model
-'''
 
-# %% Setup student and teachers
+
+# %% Setup student
 model_uri_paths_str = f"clip_*{methods_id_dict['clip']}/{target_dataset}/**/{best_eclare}/model_uri.txt"
 model_uri_paths = glob(os.path.join(os.environ['OUTPATH'], model_uri_paths_str))
-
-genes_by_peaks_path = os.path.join(os.environ['DATAPATH'], 'genes_by_peaks_str.csv')
-genes_by_peaks_df = pd.read_csv(genes_by_peaks_path, index_col=0)
 
 ## Setup student
 student_setup_func = return_setup_func_from_dataset(target_dataset)
@@ -186,7 +215,7 @@ args = SimpleNamespace(
     source_dataset=target_dataset,
     target_dataset=None,
     genes_by_peaks_str='17987_by_127358',
-    ignore_sources=['Midbrain_Adams', 'pbmc_10x', 'PFC_Zhu'],
+    ignore_sources=[None],
     source_dataset_embedder=None,
     batch_size=1000,
     total_epochs=0,
@@ -195,18 +224,106 @@ args = SimpleNamespace(
 student_rna_train_loader, student_atac_train_loader, student_atac_train_num_batches, student_atac_train_n_batches_str_length, student_atac_train_total_epochs_str_length, student_rna_valid_loader, student_atac_valid_loader, student_atac_valid_num_batches, student_atac_valid_n_batches_str_length, student_atac_valid_total_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
     student_setup_func(args, return_type='loaders')
 
-## Setup teachers
-args = SimpleNamespace(
-    source_dataset=None,
-    target_dataset=target_dataset,
-    genes_by_peaks_str=None,
-    ignore_sources=['Midbrain_Adams', 'pbmc_10x', 'PFC_Zhu'],
-    source_dataset_embedder=None,
-    batch_size=1000,
-    total_epochs=0,
+#%% 
+
+from scglue.genomics import Bed, window_graph
+from scglue.data import get_gene_annotation
+import anndata
+import networkx as nx
+from sklearn.model_selection import StratifiedKFold
+import scanpy as sc
+
+rna, atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath = \
+    student_setup_func(args, return_type='data', hvg_only=True)
+
+gene_ad = anndata.AnnData(var=pd.DataFrame(index=rna.var_names.to_list()))
+get_gene_annotation(gene_ad, gtf=os.path.join(os.environ['DATAPATH'], 'gencode.v48.annotation.gtf.gz'), gtf_by='gene_name')
+gene_ad = gene_ad[:,gene_ad.var['chromStart'].notna()]
+rna = rna[:,gene_ad.var_names]
+
+peak_coords = atac.var['interval'].str.split('[:-]', expand=True).rename(columns={0: 'chrom', 1: 'chromStart', 2: 'chromEnd'}).astype({'chrom': 'category', 'chromStart': 'int32', 'chromEnd': 'int32'})
+
+genes_bed = Bed(gene_ad.var.assign(name=gene_ad.var_names)).expand(2e3, 0)
+peaks_bed = Bed(peak_coords.assign(name=atac.var_names))
+
+graph = window_graph(
+    genes_bed,
+    peaks_bed,
+    window_size=0, attr_fn=lambda l, r, d: {"weight": 1.0, "sign": 1}
 )
-datasets, models, teacher_rna_train_loaders, teacher_atac_train_loaders, teacher_rna_valid_loaders, teacher_atac_valid_loaders = \
-    teachers_setup(model_uri_paths, args, device)
+
+biadj = nx.algorithms.bipartite.biadjacency_matrix(graph, gene_ad.var.index, peak_coords.index)
+atac2rna = anndata.AnnData(X=atac.X @ biadj.T, obs=atac.obs, var=rna.var, uns=atac.uns)
+
+## run scanpy PCA pipeline to RNA and ATAC2RNA
+sc.tl.pca(rna, svd_solver='arpack')
+sc.tl.pca(atac2rna, svd_solver='arpack')
+
+## plot umap of PCA embeddings
+sc.pp.neighbors(rna)
+sc.tl.umap(rna)
+sc.pl.umap(rna, color=cell_group)
+
+sc.pp.neighbors(atac2rna)
+sc.tl.umap(atac2rna)
+sc.pl.umap(atac2rna, color=cell_group)
+
+## subsample data
+n_cells = rna.shape[0]
+n_splits = np.ceil(n_cells / subsample).astype(int)
+skf = StratifiedKFold(n_splits=n_splits, shuffle=False)
+_, cells_idx = next(skf.split(np.zeros_like(rna.obs[cell_group].to_list()), rna.obs[cell_group].to_list()))
+
+x = torch.from_numpy(rna[cells_idx].obsm['X_pca']).to(device=device)
+y = torch.from_numpy(atac2rna[cells_idx].obsm['X_pca']).to(device=device)
+
+x = torch.nn.functional.normalize(x, dim=1)
+y = torch.nn.functional.normalize(y, dim=1)
+
+x_celltypes = rna[cells_idx].obs[cell_group].to_list()
+y_celltypes = atac2rna[cells_idx].obs[cell_group].to_list()
+
+pca_sim_rna = mean_cosine_similarities(x, x, x_celltypes, x_celltypes)
+pca_sim_atac = mean_cosine_similarities(y, y, y_celltypes, y_celltypes)
+pca_sim_rna_atac = mean_cosine_similarities(x, y, x_celltypes, y_celltypes)
+
+import muon as mu
+mdata = mu.MuData({'rna': rna[cells_idx], 'atac': atac2rna[cells_idx]})
+mu.tl.mofa(mdata)
+x_mofa = mdata.obsm['X_mofa']
+x_mofa = torch.from_numpy(x_mofa).to(device=device)
+x_mofa = torch.nn.functional.normalize(x_mofa, dim=1)
+mofa_sim_rna_atac = mean_cosine_similarities(x_mofa, x_mofa, x_celltypes, x_celltypes)
+
+import mojitoo
+import episcanpy as epi
+def mojitoo_process_data(rna, atac):
+    ## Preprocess ATAC data (MOJITOO documentation)
+    epi.pp.cal_var(atac)
+    epi.pp.select_var_feature(atac, nb_features=5000)
+    epi.tl.tfidf(atac)
+    epi.tl.lsi(atac, n_components=50)
+
+    ## Preprocess RNA data (MOJITOO documentation)
+    sc.pp.normalize_total(rna, target_sum=1e4)
+    #sc.pp.log1p(rna)
+    sc.pp.scale(rna, max_value=10)
+    sc.tl.pca(rna, svd_solver='arpack')
+
+    ## Create MuData object
+    mdata = mu.MuData({"atac": atac, "rna": rna})
+    mdata.obsm["pca"] = rna.obsm["X_pca"]
+    mdata.obsm["lsi"] = atac.obsm["X_lsi"]
+
+    return mdata
+
+mdata = mojitoo_process_data(rna, atac2rna)
+mdata = mdata[cells_idx].copy()
+mojitoo.mojitoo(mdata, reduction_list=["pca", "lsi"],  dims_list=(range(50), range(1,50)),reduction_name='mojitoo', overwrite=True)
+x_mojitoo = mdata.obsm['mojitoo']
+x_mojitoo = torch.from_numpy(x_mojitoo).to(device=device)
+x_mojitoo = torch.nn.functional.normalize(x_mojitoo, dim=1)
+mojitoo_sim_rna_atac = mean_cosine_similarities(x_mojitoo, x_mojitoo, x_celltypes, x_celltypes)
 
 #%% extract latents for analysis
 
@@ -216,58 +333,53 @@ subsample = 5000
 ## project data through student model
 student_rna_cells, student_rna_labels, student_rna_batches = fetch_data_from_loader_light(student_rna_valid_loader, subsample=subsample, shuffle=False)
 student_atac_cells, student_atac_labels, student_atac_batches = fetch_data_from_loader_light(student_atac_valid_loader, subsample=subsample, shuffle=False)
+
 student_rna_latents, _ = eclare_student_model(student_rna_cells.to(device=device), modality=0)
 student_atac_latents, _ = eclare_student_model(student_atac_cells.to(device=device), modality=1)
-
-def mean_cosine_similarities(rna_latents, atac_latents, rna_celltypes, atac_celltypes):
-
-    rna_similarity = torch.matmul(rna_latents, rna_latents.T).cpu().detach().numpy()
-    atac_similarity = torch.matmul(atac_latents, atac_latents.T).cpu().detach().numpy()
-
-    rna_celltypes = np.array(rna_celltypes)
-    atac_celltypes = np.array(atac_celltypes)
-
-    df_rna = pd.DataFrame({
-        'rna_celltype_x': np.repeat(rna_celltypes, len(rna_celltypes)),
-        'rna_celltype_y': np.tile(rna_celltypes, len(rna_celltypes)),
-        'rna_similarity': rna_similarity.flatten(),
-    })
-
-    df_atac = pd.DataFrame({
-        'atac_celltype_x': np.repeat(atac_celltypes, len(atac_celltypes)),
-        'atac_celltype_y': np.tile(atac_celltypes, len(atac_celltypes)),
-        'atac_similarity': atac_similarity.flatten()
-    })
-
-    mean_cosine_similarity_by_label_rna = df_rna.groupby(['rna_celltype_x', 'rna_celltype_y'])['rna_similarity'].mean().unstack(fill_value=float('nan'))
-    mean_cosine_similarity_by_label_atac = df_atac.groupby(['atac_celltype_x', 'atac_celltype_y'])['atac_similarity'].mean().unstack(fill_value=float('nan'))
-    
-    return mean_cosine_similarity_by_label_rna, mean_cosine_similarity_by_label_atac
 
 ## init dict to save specific similarity combinations
 celltypes_list = ['OPCs', 'Astrocytes']
 df_sim = pd.DataFrame(index=['student', f'teacher ({source_datasets[0]})', f'teacher ({source_datasets[1]})'], columns=['RNA', 'ATAC'])
 
-fig1, ax1 = plt.subplots(2, 3, figsize=(12, 8))
-fig2, ax2 = plt.subplots(2, 3, figsize=(12, 8))
+cmap = get_cmap('light_pubugn')
 
 ## get mean cosine similarity between teachers and student
-mean_cosine_similarity_by_label_rna, mean_cosine_similarity_by_label_atac = mean_cosine_similarities(student_rna_latents, student_atac_latents, student_rna_labels, student_atac_labels)
-df_sim.loc['student', 'RNA'] = mean_cosine_similarity_by_label_rna.loc[celltypes_list[0], celltypes_list[1]]
-df_sim.loc['student', 'ATAC'] = mean_cosine_similarity_by_label_atac.loc[celltypes_list[0], celltypes_list[1]]
+eclare_sim_rna = mean_cosine_similarities(student_rna_latents, student_rna_latents, student_rna_labels, student_rna_labels)
+eclare_sim_atac = mean_cosine_similarities(student_atac_latents, student_atac_latents, student_atac_labels, student_atac_labels)
+eclare_sim_rna_atac = mean_cosine_similarities(student_rna_latents, student_atac_latents, student_rna_labels, student_atac_labels)
 
-sns.heatmap(mean_cosine_similarity_by_label_rna, ax=ax1[0, 0]); ax1[0, 0].set_xlabel(''); ax1[0, 0].set_ylabel('')
-sns.heatmap(mean_cosine_similarity_by_label_atac, ax=ax1[1, 0]); ax1[1, 0].set_xlabel(''); ax1[1, 0].set_ylabel('')
-ax1[0, 0].set_title(f'Student: {target_dataset}'); ax1[0, 0].set_ylabel('RNA'); ax1[1, 0].set_ylabel('ATAC')
-sns.heatmap(mean_cosine_similarity_by_label_rna, ax=ax2[0, 0]); ax2[0, 0].set_xlabel(''); ax2[0, 0].set_ylabel('')
-sns.heatmap(mean_cosine_similarity_by_label_atac, ax=ax2[1, 0]); ax2[1, 0].set_xlabel(''); ax2[1, 0].set_ylabel('')
-ax2[0, 0].set_title(f'Student: {target_dataset}'); ax2[0, 0].set_ylabel('RNA'); ax2[1, 0].set_ylabel('ATAC')
+df_sim.loc['student', 'RNA'] = eclare_sim_rna.loc[celltypes_list[0], celltypes_list[1]]
+df_sim.loc['student', 'ATAC'] = eclare_sim_atac.loc[celltypes_list[0], celltypes_list[1]]
+df_sim.loc['student', 'RNA_ATAC'] = eclare_sim_rna_atac.loc[celltypes_list[0], celltypes_list[1]]
+
+#%% ECLARE & teachers plot
+
+## Setup teachers
+if not ('datasets' in locals() or 'datasets' in globals()):
+
+    args = SimpleNamespace(
+        source_dataset=None,
+        target_dataset=target_dataset,
+        genes_by_peaks_str=None,
+        ignore_sources=[None],
+        source_dataset_embedder=None,
+        batch_size=1000,
+        total_epochs=0,
+    )
+    datasets, models, teacher_rna_train_loaders, teacher_atac_train_loaders, teacher_rna_valid_loaders, teacher_atac_valid_loaders = \
+        teachers_setup(model_uri_paths, args, device)
+
+## init figures
+fig1, ax1 = plt.subplots(3, len(source_datasets) + 1, figsize=(4*(len(source_datasets) + 1), 12))
+
+sns.heatmap(eclare_sim_rna, cmap=cmap, ax=ax1[0, 0]); ax1[0, 0].set_xlabel(''); ax1[0, 0].set_ylabel('')
+sns.heatmap(eclare_sim_atac, cmap=cmap, ax=ax1[1, 0]); ax1[1, 0].set_xlabel(''); ax1[1, 0].set_ylabel('')
+sns.heatmap(eclare_sim_rna_atac, cmap=cmap, ax=ax1[2, 0]); ax1[2, 0].set_xlabel(''); ax1[2, 0].set_ylabel('')
+ax1[0, 0].set_title(f'Student: {target_dataset}'); ax1[0, 0].set_ylabel('RNA'); ax1[1, 0].set_ylabel('ATAC'); ax1[2, 0].set_ylabel('RNA & ATAC')
 
 ## get data & latents
 all_teachers_rna_latents = {}
 all_teachers_atac_latents = {}
-all_kd_clip_rna_latents = {}
-all_kd_clip_atac_latents = {}
 
 for s, source_dataset in enumerate(source_datasets):
 
@@ -288,15 +400,174 @@ for s, source_dataset in enumerate(source_datasets):
     all_teachers_atac_latents[source_dataset] = teacher_atac_latents
 
     ## get mean cosine similarity between cell types
-    mean_cosine_similarity_by_label_rna, mean_cosine_similarity_by_label_atac = mean_cosine_similarities(teacher_rna_latents, teacher_atac_latents, teacher_rna_labels, teacher_atac_labels)
+    mean_cosine_similarity_by_label_rna = mean_cosine_similarities(teacher_rna_latents, teacher_rna_latents, teacher_rna_labels, teacher_rna_labels)
+    mean_cosine_similarity_by_label_atac = mean_cosine_similarities(teacher_atac_latents, teacher_atac_latents, teacher_atac_labels, teacher_atac_labels)
+    mean_cosine_similarity_by_label_rna_atac = mean_cosine_similarities(teacher_rna_latents, teacher_atac_latents, teacher_rna_labels, teacher_atac_labels)
+
     df_sim.loc[f'teacher ({source_dataset})', 'RNA'] = mean_cosine_similarity_by_label_rna.loc[celltypes_list[0], celltypes_list[1]]
     df_sim.loc[f'teacher ({source_dataset})', 'ATAC'] = mean_cosine_similarity_by_label_atac.loc[celltypes_list[0], celltypes_list[1]]
+    df_sim.loc[f'teacher ({source_dataset})', 'RNA_ATAC'] = mean_cosine_similarity_by_label_rna_atac.loc[celltypes_list[0], celltypes_list[1]]
 
-    sns.heatmap(mean_cosine_similarity_by_label_rna, ax=ax1[0, s + 1]); ax1[0, s + 1].set_xlabel(''); ax1[0, s + 1].set_ylabel('')
-    sns.heatmap(mean_cosine_similarity_by_label_atac, ax=ax1[1, s + 1]); ax1[1, s + 1].set_xlabel(''); ax1[1, s + 1].set_ylabel('')
+    sns.heatmap(mean_cosine_similarity_by_label_rna, cmap=cmap, ax=ax1[0, s + 1]); ax1[0, s + 1].set_xlabel(''); ax1[0, s + 1].set_ylabel('')
+    sns.heatmap(mean_cosine_similarity_by_label_atac, cmap=cmap, ax=ax1[1, s + 1]); ax1[1, s + 1].set_xlabel(''); ax1[1, s + 1].set_ylabel('')
+    sns.heatmap(mean_cosine_similarity_by_label_rna_atac, cmap=cmap, ax=ax1[2, s + 1]); ax1[2, s + 1].set_xlabel(''); ax1[2, s + 1].set_ylabel('')
     ax1[0, s + 1].set_title(f'Teacher: {source_dataset}')
 
-    '''
+fig1.suptitle(f'Mean cosine similarity between cell types - {target_dataset}')
+fig1.tight_layout()
+
+## erase from device data used to produce plots
+del rna_valid_loader, atac_valid_loader, model, teacher_rna_cells, teacher_atac_cells, teacher_rna_latents, teacher_atac_latents, teacher_rna_labels, teacher_atac_labels, teacher_rna_batches, teacher_atac_batches
+import torch
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+
+#%% Get source datasets
+
+genes_by_peaks_path = os.path.join(os.environ['DATAPATH'], 'genes_by_peaks_full_str.csv')
+genes_by_peaks_df = pd.read_csv(genes_by_peaks_path, index_col=0)
+
+celltype_proportions_dict = {}
+
+print(f'Processing {target_dataset}...')
+
+setup_func = return_setup_func_from_dataset(target_dataset)
+genes_by_peaks_str = '17987_by_127358'
+
+args = SimpleNamespace(
+    source_dataset=target_dataset,
+    target_dataset=None,
+    genes_by_peaks_str=genes_by_peaks_str,
+)
+
+rna, atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath = \
+    setup_func(args, return_type='data')
+
+celltype_proportions_rna = rna.obs[cell_group].value_counts(normalize=True)
+celltype_proportions_atac = atac.obs[cell_group].value_counts(normalize=True)
+assert celltype_proportions_rna.equals(celltype_proportions_atac)
+
+celltype_proportions_dict[target_dataset] = celltype_proportions_rna
+
+del rna, atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath, celltype_proportions_rna, celltype_proportions_atac
+
+for source_dataset in source_datasets:
+
+    print(f'Processing {source_dataset}...')
+
+    setup_func = return_setup_func_from_dataset(source_dataset)
+    genes_by_peaks_str = genes_by_peaks_df.loc[source_dataset, target_dataset]
+
+    args = SimpleNamespace(
+        source_dataset=source_dataset,
+        target_dataset=target_dataset,
+        genes_by_peaks_str=genes_by_peaks_str,
+    )
+
+    rna, atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath = \
+        setup_func(args, return_type='data')
+
+    celltype_proportions_rna = rna.obs[cell_group].value_counts(normalize=True)
+    celltype_proportions_atac = atac.obs[cell_group].value_counts(normalize=True)
+    assert celltype_proportions_rna.equals(celltype_proportions_atac)
+
+    celltype_proportions_dict[source_dataset] = celltype_proportions_rna
+
+    del rna, atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath, celltype_proportions_rna, celltype_proportions_atac
+
+## draw pie charts of celltype proportions
+# Reference classes:
+# ['Excitatory', 'Oligodendrocytes', 'Astrocytes', 'Inhibitory', 'OPCs', 'Microglia', 'Endothelial', 'Pericytes']
+
+mapper_set1 = {
+    'L2_3_IT': 'Excitatory',       # IT = intratelencephalic pyramidal neurons (layers 2/3) → excitatory
+    'L3_5_IT_1': 'Excitatory',     # IT pyramidal subclasses (layers 3–5) → excitatory
+    'L3_5_IT_2': 'Excitatory',     # same rationale as above
+    'L3_5_IT_3': 'Excitatory',     # same rationale as above
+    'L6_IT_1': 'Excitatory',       # layer 6 IT pyramidal → excitatory
+    'L6_IT_2': 'Excitatory',       # layer 6 IT pyramidal → excitatory
+    'L6_CT': 'Excitatory',         # corticothalamic pyramidal → excitatory
+    'L6b': 'Excitatory',           # layer 6b pyramidal-like neurons → excitatory
+    'L5_6_NP': 'Excitatory',       # near-projecting pyramidal subclass → excitatory
+    'L5_PT': 'Excitatory',         # pyramidal tract (subcortical-projecting) → excitatory
+
+    'VIP': 'Inhibitory',           # VIP is a canonical interneuron marker → inhibitory
+    'SST': 'Inhibitory',           # somatostatin interneuron class → inhibitory
+    'SST_NPY': 'Inhibitory',       # SST/NPY interneuron subclass → inhibitory
+    'PVALB': 'Inhibitory',         # parvalbumin basket/chandelier lineage → inhibitory
+    'PVALB_CHC': 'Inhibitory',     # chandelier cells (PVALB+) → inhibitory
+    'LAMP5_RELN': 'Inhibitory',    # LAMP5/RELN neurogliaform/ivy interneurons → inhibitory
+    'LAMP5_LHX6': 'Inhibitory',    # LAMP5 lineage interneuron variant → inhibitory
+    'TH': 'Inhibitory',            # cortical TH+ (dopaminergic-like) interneurons → inhibitory
+    'ADARB2': 'Inhibitory',        # CGE-related interneuron marker; map to inhibitory (flip if your dataset uses ADARB2 for excitatory L2 IT)
+
+    'Oligo': 'Oligodendrocytes',   # short for oligodendrocytes
+    'Astro': 'Astrocytes',         # short for astrocytes
+    'OPC': 'OPCs',                 # oligodendrocyte precursor cells
+    'Micro': 'Microglia',          # shorthand for microglia
+    'immune': 'Microglia',         # brain-resident immune cluster typically microglia/macrophages → map to Microglia
+
+    'Endo': 'Endothelial',         # endothelial cell shorthand
+
+    'PC': 'Pericytes',             # pericyte shorthand → mural/perivascular class
+    'SMC': 'Pericytes',            # smooth muscle cells grouped under mural/perivascular → pericytes bucket
+    'VLMC': 'Pericytes',           # vascular leptomeningeal cells; coarse-grained as mural/perivascular → pericytes
+}
+
+mapper_set2 = {
+    'Astrocytes': 'Astrocytes',    # identical label → same class
+    'Oligodendrocytes': 'Oligodendrocytes',  # identical label → same class
+    'OPC': 'OPCs',                 # oligodendrocyte precursor cells
+    'Microglia': 'Microglia',      # identical label → same class
+
+    'EN': 'Excitatory',            # EN = excitatory neurons → excitatory
+    'IPC': 'Excitatory',           # intermediate progenitor cells (glutamatergic lineage) → excitatory bucket
+
+    'IN-MGE': 'Inhibitory',        # MGE-derived interneurons (PVALB/SST lineages) → inhibitory
+    'IN-CGE': 'Inhibitory',        # CGE-derived interneurons (VIP/LAMP5) → inhibitory
+
+    'Endothelial': 'Endothelial',  # identical label → same class
+
+    'Pericytes': 'Pericytes',      # identical label → same class
+    'VSMC': 'Pericytes',           # vascular smooth muscle cells; mural/perivascular → pericytes bucket
+
+    'RG': 'Astrocytes',            # radial glia; coarse harmonization with astroglial lineage
+}
+
+celltype_mapper = {**mapper_set1, **mapper_set2}
+plot_source_datasets = [target_dataset] + [source_dataset for source_dataset in source_datasets if source_dataset != 'Midbrain_Adams']
+
+fig1, ax1 = plt.subplots(1, len(plot_source_datasets), figsize=(10*len(plot_source_datasets), 10))
+fig2, ax2 = plt.subplots(1, len(plot_source_datasets), figsize=(10*len(plot_source_datasets), 10))
+
+for s, source_dataset in enumerate(plot_source_datasets):
+
+    celltype_proportions = celltype_proportions_dict[source_dataset]
+    celltype_proportions.plot.pie(autopct='%1.1f%%', ax=ax1[s])
+    ax1[s].set_title(source_dataset)
+
+    celltype_proportions_mapped = celltype_proportions.rename(celltype_mapper)
+    celltype_proportions_mapped = celltype_proportions_mapped.groupby(celltype_proportions_mapped.index).sum()
+    celltype_proportions_mapped.plot.pie(autopct='%1.1f%%', ax=ax2[s])
+    ax2[s].set_title(source_dataset)
+
+
+#%% ECLARE & KD-CLIP students plot
+
+## init figures
+fig2, ax2 = plt.subplots(3, len(source_datasets) + 1, figsize=(4*(len(source_datasets) + 1), 12))
+
+sns.heatmap(eclare_sim_rna, cmap=cmap, ax=ax2[0, 0]); ax2[0, 0].set_xlabel(''); ax2[0, 0].set_ylabel('')
+sns.heatmap(eclare_sim_atac, cmap=cmap, ax=ax2[1, 0]); ax2[1, 0].set_xlabel(''); ax2[1, 0].set_ylabel('')
+sns.heatmap(eclare_sim_rna_atac, cmap=cmap, ax=ax2[2, 0]); ax2[2, 0].set_xlabel(''); ax2[2, 0].set_ylabel('')
+ax2[0, 0].set_title(f'Student: {target_dataset}'); ax2[0, 0].set_ylabel('RNA'); ax2[1, 0].set_ylabel('ATAC'); ax2[2, 0].set_ylabel('RNA & ATAC')
+
+## get data & latents
+all_kd_clip_rna_latents = {}
+all_kd_clip_atac_latents = {}
+
+for s, source_dataset in enumerate(source_datasets):
+
     ## project data through KD_CLIP student model to get latents
     kd_clip_rna_latents, _ = kd_clip_student_models[source_dataset](student_rna_cells.to(device=device), modality=0)
     kd_clip_atac_latents, _ = kd_clip_student_models[source_dataset](student_atac_cells.to(device=device), modality=1)
@@ -304,17 +575,21 @@ for s, source_dataset in enumerate(source_datasets):
     all_kd_clip_rna_latents[source_dataset] = kd_clip_rna_latents
     all_kd_clip_atac_latents[source_dataset] = kd_clip_atac_latents
 
-    mean_cosine_similarity_by_label_rna, mean_cosine_similarity_by_label_atac = mean_cosine_similarities(kd_clip_rna_latents, kd_clip_atac_latents, student_rna_labels, student_atac_labels)
-    sns.heatmap(mean_cosine_similarity_by_label_rna, ax=ax2[0, s + 1]); ax2[0, s + 1].set_xlabel(''); ax2[0, s + 1].set_ylabel('')
-    sns.heatmap(mean_cosine_similarity_by_label_atac, ax=ax2[1, s + 1]); ax2[1, s + 1].set_xlabel(''); ax2[1, s + 1].set_ylabel('')
+    mean_cosine_similarity_by_label_rna = mean_cosine_similarities(kd_clip_rna_latents, kd_clip_rna_latents, student_rna_labels, student_rna_labels)
+    mean_cosine_similarity_by_label_atac = mean_cosine_similarities(kd_clip_atac_latents, kd_clip_atac_latents, student_atac_labels, student_atac_labels)
+    mean_cosine_similarity_by_label_rna_atac = mean_cosine_similarities(kd_clip_rna_latents, kd_clip_atac_latents, student_rna_labels, student_atac_labels)
+
+    sns.heatmap(mean_cosine_similarity_by_label_rna, ax=ax2[0, s + 1], cmap=cmap); ax2[0, s + 1].set_xlabel(''); ax2[0, s + 1].set_ylabel('')
+    sns.heatmap(mean_cosine_similarity_by_label_atac, ax=ax2[1, s + 1], cmap=cmap); ax2[1, s + 1].set_xlabel(''); ax2[1, s + 1].set_ylabel('')
+    sns.heatmap(mean_cosine_similarity_by_label_rna_atac, ax=ax2[2, s + 1], cmap=cmap); ax2[2, s + 1].set_xlabel(''); ax2[2, s + 1].set_ylabel('')
     ax2[0, s + 1].set_title(f'Student (KD_CLIP): {source_dataset}')
-    '''
 
-fig1.suptitle(f'Mean cosine similarity between cell types - {target_dataset}')
-fig1.tight_layout()
 
-#fig2.suptitle(f'Mean cosine similarity between cell types - {target_dataset}')
-#fig2.tight_layout()
+fig2.suptitle(f'Mean cosine similarity between cell types - {target_dataset}')
+fig2.tight_layout()
+
+
+#%% barplot
 
 # Prepare data for barplot: melt the DataFrame to long format for seaborn
 df_sim_reset = df_sim.reset_index().rename(columns={'index': 'Model'})

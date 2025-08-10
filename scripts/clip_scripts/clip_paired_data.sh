@@ -16,17 +16,17 @@ export NCCL_BLOCKING_WAIT=1  #Set this environment variable if you wish to use t
 export MASTER_ADDR=$(hostname)
   
 ## Set path to CSV file containing genes-by-peaks strings to match datasets
-csv_file=${DATAPATH}/genes_by_peaks_str.csv
+csv_file=${DATAPATH}/genes_by_peaks_full_str.csv
  
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-source_datasets=("DLPFC_Ma" "mouse_brain_10x")
+source_datasets=("PFC_Zhu" "DLPFC_Ma" "Midbrain_Adams")
 target_datasets=("DLPFC_Anderson")
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6 # only relevant for multi-replicate tasks
-N_REPLICATES=3
+N_REPLICATES=1
 
 ## Define random state
 RANDOM=42

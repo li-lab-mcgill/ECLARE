@@ -22,14 +22,14 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
 ## Define datasets to be ignored as sources
-ignore_sources=("PFC_Zhu" "DLPFC_Anderson" "Midbrain_Adams" "pbmc_10x")
+ignore_sources=("Midbrain_Adams")
 
 ## Define target datasets
 target_datasets=("DLPFC_Anderson")
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6
-N_REPLICATES=3
+N_REPLICATES=1
 
 ## Define random state
 RANDOM=42
@@ -39,7 +39,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='05151710'
+clip_job_id='09114308'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
@@ -98,7 +98,7 @@ run_eclare_task_on_gpu() {
     --experiment_job_id=$experiment_job_id \
     --target_dataset=$target_dataset \
     --ignore_sources=$ignore_sources \
-    --genes_by_peaks_str=$genes_by_peaks_str \
+    --genes_by_peaks_str="17987_by_127358" \
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="'$feature'" \
