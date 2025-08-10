@@ -12,10 +12,10 @@ from mlflow.pytorch import log_model
 from mlflow.models.signature import ModelSignature
 from mlflow.types import Schema, TensorSpec, ParamSchema, ParamSpec
 
-from eclare import return_setup_func_from_dataset
 from eclare.tune_utils import tune_CLIP
 from eclare.run_utils import run_CLIP, get_or_create_experiment
 from eclare.models import get_clip_hparams
+from eclare.setup_utils import return_setup_func_from_dataset
 from eclare.post_hoc_utils import plot_umap_embeddings, create_celltype_palette, get_latents
 
 
