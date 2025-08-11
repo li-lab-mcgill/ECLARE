@@ -189,7 +189,8 @@ class Knowledge_distillation_fn(torch.nn.Module):
         if (student_logits is not None):
 
             ## obtain teacher weights - without temperature scaling, teacher weights very uniform
-            ot_clip_loss_logits = (1 - torch.stack(self.all_teacher_ot_values)) / self.weights_temperature
+            weights_temperature = F.softplus(self.weights_temperature)
+            ot_clip_loss_logits = (1 - torch.stack(self.all_teacher_ot_values)) / weights_temperature
             ot_clip_loss_weights = ot_clip_loss_logits.softmax(dim=0).to(device=self.device)  # in principle, would also have values & weights for plan_T
             ot_clip_loss = torch.zeros(len(student_logits), device=self.device)
             ot_clip_loss_T = torch.zeros(len(student_logits), device=self.device)
@@ -269,8 +270,9 @@ class Knowledge_distillation_fn(torch.nn.Module):
     def distil_loss_weighting(self, distil_losses, distil_losses_T, align_losses_scaled_offset, align_losses_T_scaled_offset):
 
         ## for 'batch' or 'sample', gets overwritten if its 'none'
-        align_losses_weights = torch.softmax(align_losses_scaled_offset / self.weights_temperature, dim=0)
-        align_losses_T_weights = torch.softmax(align_losses_T_scaled_offset / self.weights_temperature, dim=0)
+        weights_temperature = F.softplus(self.weights_temperature)
+        align_losses_weights = torch.softmax(align_losses_scaled_offset / weights_temperature, dim=0)
+        align_losses_T_weights = torch.softmax(align_losses_T_scaled_offset / weights_temperature, dim=0)
 
         if self.weigh_distil_by_align_type == 'none': # in reality, no need to create uniform weights, but leads to losses on more similar scales than other align types
             distil_loss = 0.5 * torch.stack([distil_losses, distil_losses_T]).sum(0).mean()  # close to 'batchmean' reduction of KL divergence, but not identical
