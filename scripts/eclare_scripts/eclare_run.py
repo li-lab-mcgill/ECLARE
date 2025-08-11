@@ -57,6 +57,10 @@ if __name__ == "__main__":
                         help='feature to run')
     parser.add_argument('--tune_hyperparameters', action='store_true', default=False,
                         help='tune hyperparameters')
+    parser.add_argument('--n_trials', type=int, default=10, metavar='N',
+                        help='number of trials for hyperparameter tuning')
+    parser.add_argument('--metric_to_optimize', type=str, default='nmi_ari', metavar='M',
+                        help='metric to optimize during hyperparameter tuning')
     parser.add_argument('--ignore_sources', nargs='+', type=str, default=[None],
                         help='List of sources to ignore')
     args = parser.parse_args()
@@ -216,7 +220,7 @@ if __name__ == "__main__":
 
             else:
                 optuna.logging.set_verbosity(optuna.logging.ERROR)
-                best_params = tune_ECLARE(args, experiment_name)
+                best_params = tune_ECLARE(args, experiment_name, run_args)
 
                 ## run best model
                 run_args['trial'] = None
