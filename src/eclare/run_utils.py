@@ -519,6 +519,9 @@ def eclare_pass(
         if dataset != target_dataset_og:
             metrics_dict[f'teacher_weights_{dataset}']    = epoch_teacher_weights[dataset] / num_batches
             metrics_dict[f'teacher_T_weights_{dataset}']  = epoch_teacher_T_weights[dataset] / num_batches
+    
+    # Add weights_temperature to metrics
+    metrics_dict['weights_temperature'] = knowledge_distillation_fn.weights_temperature.item()
             
     return metrics_dict
 
@@ -545,11 +548,15 @@ def run_ECLARE(
 
     # Instantiate student model with optimized parameters
     student_model = CLIP(n_peaks=n_peaks, n_genes=n_genes, **params).to(device=device)
-    optimizer = torch.optim.AdamW(student_model.parameters(), lr=1e-3, weight_decay=0.01)
-
+    
     # Instantiate the knowledge distillation loss function
     paired = (args.target_dataset != 'MDD')
-    knowledge_distillation_fn = Knowledge_distillation_fn(device=device, student_temperature=1, teacher_temperature=1, paired=paired, weigh_distil_by_align_type='sample')
+    weights_temperature = params.get('weights_temperature', 0.01)
+    knowledge_distillation_fn = Knowledge_distillation_fn(device=device, student_temperature=1, teacher_temperature=1, paired=paired, weigh_distil_by_align_type='sample', weights_temperature=weights_temperature)
+    
+    # Create optimizer that includes both model and knowledge distillation function parameters
+    all_params = list(student_model.parameters()) + list(knowledge_distillation_fn.parameters())
+    optimizer = torch.optim.AdamW(all_params, lr=1e-3, weight_decay=0.01)
 
     # Define loop_order parameter
     loop_order = args.loop_order  # 'datasets_first' or 'batches_first'
@@ -560,6 +567,7 @@ def run_ECLARE(
     mlflow.log_param("loop_order", loop_order)
     mlflow.log_param("n_genes", n_genes)
     mlflow.log_param("n_peaks", n_peaks)
+    mlflow.log_param("weights_temperature", weights_temperature)
 
     # Define loop_order parameter
     loop_order = args.loop_order  # 'datasets_first' or 'batches_first'

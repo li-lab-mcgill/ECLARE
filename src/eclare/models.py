@@ -35,6 +35,10 @@ class CLIP(nn.Module):
             'suggest_distribution': FloatDistribution(low=0.01, high=5),
             'default': 1
         },
+        'weights_temperature': {
+            'suggest_distribution': FloatDistribution(low=0.001, high=1.0),
+            'default': 0.1
+        },
         'decoder_loss': {
             'suggest_distribution': CategoricalDistribution(
                 choices=[
