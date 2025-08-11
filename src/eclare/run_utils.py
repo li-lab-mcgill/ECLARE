@@ -519,7 +519,7 @@ def eclare_pass(
         if dataset != target_dataset_og:
             metrics_dict[f'teacher_weights_{dataset}']    = epoch_teacher_weights[dataset] / num_batches
             metrics_dict[f'teacher_T_weights_{dataset}']  = epoch_teacher_T_weights[dataset] / num_batches
-    
+            
     # Add weights_temperature to metrics
     metrics_dict['weights_temperature'] = knowledge_distillation_fn.weights_temperature.item()
             
@@ -548,7 +548,7 @@ def run_ECLARE(
 
     # Instantiate student model with optimized parameters
     student_model = CLIP(n_peaks=n_peaks, n_genes=n_genes, **params).to(device=device)
-    
+
     # Instantiate the knowledge distillation loss function
     paired = (args.target_dataset != 'MDD')
     weights_temperature = params.get('weights_temperature', 0.01)
