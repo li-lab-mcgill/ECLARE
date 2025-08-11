@@ -12,7 +12,7 @@ from eclare.run_utils import run_spatial_CLIP, get_or_create_experiment
 from eclare.tune_utils import Optuna_propose_hyperparameters, champion_callback
 from eclare.models import get_spatial_clip_hparams
 
-def tune_spatial_CLIP(args, experiment_id):
+def tune_spatial_CLIP(args, experiment_id, run_args):
 
     suggested_hyperparameters = get_spatial_clip_hparams()
 
@@ -129,7 +129,7 @@ if __name__ == "__main__":
         optuna.logging.set_verbosity(optuna.logging.ERROR)
         with mlflow.start_run(experiment_id=experiment_id, run_name=args.feature if args.feature else 'Hyperparameter tuning'):
 
-            best_params = tune_spatial_CLIP(args, experiment_id)
+            best_params = tune_spatial_CLIP(args, experiment_id, run_args)
 
             ## run best model
             run_args['trial'] = None

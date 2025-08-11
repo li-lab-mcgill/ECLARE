@@ -144,7 +144,7 @@ if __name__ == "__main__":
 
                 optuna.logging.set_verbosity(optuna.logging.ERROR)
 
-                best_params = tune_CLIP(args, experiment_id)
+                best_params = tune_CLIP(args, experiment_id, run_args)
 
                 ## run best model
                 run_args['trial'] = None

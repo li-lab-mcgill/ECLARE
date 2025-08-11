@@ -67,7 +67,7 @@ def champion_callback(study, frozen_trial):
           print(f"Initial trial {frozen_trial.number} achieved value: {frozen_trial.value}")
 
 
-def tune_CLIP(args, experiment_id):
+def tune_CLIP(args, experiment_id, run_args):
 
     suggested_hyperparameters = get_clip_hparams()
 
@@ -110,7 +110,7 @@ def tune_CLIP(args, experiment_id):
     return study.best_params
     
 
-def tune_ECLARE(args, experiment_name):
+def tune_ECLARE(args, experiment_name, run_args):
     suggested_hyperparameters = get_clip_hparams()
 
     def run_CLIP_wrapper(trial, run_args):
