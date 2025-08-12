@@ -157,11 +157,11 @@ class Knowledge_distillation_fn(torch.nn.Module):
         #if weigh_distil_by_align_type == 'sample':
         #    assert paired, "Cannot use sample-based weighting if dataset is not paired"
 
-        ## lower temperature = lower entropy, and vice versa
-        self.student_temperature = torch.tensor(student_temperature, requires_grad=False).to(device)
+        ## fixed temperature parameters
         self.teacher_temperature = torch.tensor(teacher_temperature, requires_grad=False).to(device)
         
-        ## make weights_temperature a learnable parameter
+        ## learnable temperature parameters
+        self.student_temperature = torch.nn.Parameter(torch.tensor(student_temperature, requires_grad=True).to(device))
         self.weights_temperature = torch.nn.Parameter(torch.tensor(weights_temperature, requires_grad=True).to(device))
 
         self.all_teacher_ot_plans = []
@@ -189,7 +189,7 @@ class Knowledge_distillation_fn(torch.nn.Module):
         if (student_logits is not None):
 
             ## obtain teacher weights - without temperature scaling, teacher weights very uniform
-            weights_temperature = F.softplus(self.weights_temperature)
+            weights_temperature = self.get_temperature_scaling(self.weights_temperature)
             ot_clip_loss_logits = (1 - torch.stack(self.all_teacher_ot_values)) / weights_temperature
             ot_clip_loss_weights = ot_clip_loss_logits.softmax(dim=0).to(device=self.device)  # in principle, would also have values & weights for plan_T
             ot_clip_loss = torch.zeros(len(student_logits), device=self.device)
@@ -238,8 +238,10 @@ class Knowledge_distillation_fn(torch.nn.Module):
     def forward(self, student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, teacher_or_student, dataset_embedding=None):
 
         ## get logits
-        student_logits = torch.matmul(student_atac_latents, student_rna_latents.T) * torch.exp(1/self.student_temperature)
-        target_logits = torch.matmul(target_atac_latents, target_rna_latents.T) * torch.exp(1/self.teacher_temperature)
+        student_temperature = self.get_temperature_scaling(self.student_temperature)
+        teacher_temperature = self.get_temperature_scaling(self.teacher_temperature)
+        student_logits = torch.matmul(student_atac_latents, student_rna_latents.T) * torch.exp(1/student_temperature)
+        target_logits = torch.matmul(target_atac_latents, target_rna_latents.T) * torch.exp(1/teacher_temperature)
 
         ## get distillation loss
         distil_loss, distil_loss_T = self.kl_forward(student_logits, target_logits)
@@ -270,7 +272,7 @@ class Knowledge_distillation_fn(torch.nn.Module):
     def distil_loss_weighting(self, distil_losses, distil_losses_T, align_losses_scaled_offset, align_losses_T_scaled_offset):
 
         ## for 'batch' or 'sample', gets overwritten if its 'none'
-        weights_temperature = F.softplus(self.weights_temperature)
+        weights_temperature = self.get_temperature_scaling(self.weights_temperature)
         align_losses_weights = torch.softmax(align_losses_scaled_offset / weights_temperature, dim=0)
         align_losses_T_weights = torch.softmax(align_losses_T_scaled_offset / weights_temperature, dim=0)
 
@@ -290,3 +292,8 @@ class Knowledge_distillation_fn(torch.nn.Module):
         #align_loss_scaled   = 0.5 * torch.stack([align_losses_scaled_offset, align_losses_T_scaled_offset]).sum(0).mean()
 
         return distil_loss, align_losses_weights, align_losses_T_weights
+
+    def get_temperature_scaling(self, temperature, beta=1., Tmin=1e-4, Tmax=5.0):
+        T = F.softplus(temperature, beta=beta, threshold=20.)
+        T = torch.clamp(T, min=Tmin, max=Tmax)
+        return T

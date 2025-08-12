@@ -552,7 +552,9 @@ def run_ECLARE(
     # Instantiate the knowledge distillation loss function
     paired = (args.target_dataset != 'MDD')
     weights_temperature = params.get('weights_temperature', 0.01)
-    knowledge_distillation_fn = Knowledge_distillation_fn(device=device, student_temperature=1, teacher_temperature=1, paired=paired, weigh_distil_by_align_type='sample', weights_temperature=weights_temperature)
+    student_temperature = params.get('student_temperature', 1)
+    teacher_temperature = params.get('teacher_temperature', 1)
+    knowledge_distillation_fn = Knowledge_distillation_fn(device=device, student_temperature=student_temperature, teacher_temperature=teacher_temperature, paired=paired, weigh_distil_by_align_type='sample', weights_temperature=weights_temperature)
     
     # Create optimizer that includes both model and knowledge distillation function parameters
     all_params = list(student_model.parameters()) + list(knowledge_distillation_fn.parameters())
@@ -660,7 +662,7 @@ def run_ECLARE(
 
         ## early stopping with Optuna pruner
         if trial is not None:
-            metric_to_optimize = metrics.get('nmi_ari', 0)  # Default to nmi_ari if not specified
+            metric_to_optimize = metrics[args.metric_to_optimize]
             trial.report(metric_to_optimize, step=epoch+1)
             if trial.should_prune():
                 raise TrialPruned()

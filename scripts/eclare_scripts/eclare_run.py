@@ -18,6 +18,7 @@ from eclare.models import get_clip_hparams
 from eclare.run_utils import get_or_create_experiment, run_ECLARE
 from eclare.tune_utils import tune_ECLARE
 from eclare.post_hoc_utils import plot_umap_embeddings, create_celltype_palette, get_latents
+from eclare.data_utils import fetch_data_from_loader_light
 
 
 if __name__ == "__main__":
@@ -59,7 +60,7 @@ if __name__ == "__main__":
                         help='tune hyperparameters')
     parser.add_argument('--n_trials', type=int, default=10, metavar='N',
                         help='number of trials for hyperparameter tuning')
-    parser.add_argument('--metric_to_optimize', type=str, default='nmi_ari', metavar='M',
+    parser.add_argument('--metric_to_optimize', type=str, default='compound_metric', metavar='M',
                         help='metric to optimize during hyperparameter tuning')
     parser.add_argument('--ignore_sources', nargs='+', type=str, default=[None],
                         help='List of sources to ignore')
@@ -207,11 +208,8 @@ if __name__ == "__main__":
             mlflow.set_tag("outdir", args.outdir)
             mlflow.set_tag("hostname", socket.gethostname())
 
-            hyperparameters = get_clip_hparams()
+            hyperparameters = get_clip_hparams(context='student')
             default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
-
-            ## manually set num_layers to 2 (for student model)
-            default_hyperparameters['num_layers'] = 2
 
             if not args.tune_hyperparameters:
 
@@ -220,7 +218,7 @@ if __name__ == "__main__":
 
             else:
                 optuna.logging.set_verbosity(optuna.logging.ERROR)
-                best_params = tune_ECLARE(args, experiment_name, run_args)
+                best_params = tune_ECLARE(args, experiment_id, run_args, device)
 
                 ## run best model
                 run_args['trial'] = None
@@ -273,7 +271,23 @@ if __name__ == "__main__":
                 f.write(f"{runs_uri}\n")
                 f.write(f"{file_uri}\n")
 
+            ## clear some memory in device
+            del models
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             ## create umap embeddings
+            student_rna_cells, student_rna_labels, student_rna_batches = fetch_data_from_loader_light(student_rna_valid_loader, subsample=args.valid_subsample, shuffle=False)
+            student_atac_cells, student_atac_labels, student_atac_batches = fetch_data_from_loader_light(student_atac_valid_loader, subsample=args.valid_subsample, shuffle=False)
+
+            rna_latents = student_model(student_rna_cells.to(device), modality=0)[0].detach().cpu().numpy()
+            atac_latents = student_model(student_atac_cells.to(device), modality=1)[0].detach().cpu().numpy()
+
+            color_map_ct = create_celltype_palette(student_rna_labels, student_atac_labels, plot_color_palette=False)
+
+            rna_condition = ['nan'] * len(student_rna_labels)
+            atac_condition = ['nan'] * len(student_atac_labels)
+            '''
             student_rna_valid_adata = student_rna_valid_loader.dataset.adatas[0]
             student_atac_valid_adata = student_atac_valid_loader.dataset.adatas[0]
 
@@ -289,9 +303,11 @@ if __name__ == "__main__":
 
             rna_condition = ['nan'] * len(rna_celltypes)
             atac_condition = ['nan'] * len(atac_celltypes)
+            '''
 
             ## save umap embeddings
-            umap_embedding, umap_figure, _ = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
+            umap_embedding, umap_figure, _ = plot_umap_embeddings(rna_latents, atac_latents, student_rna_labels, student_atac_labels, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
+            umap_figure.suptitle(f'UMAP embeddings of ECLARE model based on {args.valid_subsample} cells')
             umap_figure.savefig(os.path.join(args.outdir, 'umap_embeddings.png'))
             mlflow.log_figure(umap_figure, 'umap_embeddings.png')
 
