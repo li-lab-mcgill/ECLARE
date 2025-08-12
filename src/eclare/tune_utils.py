@@ -24,16 +24,18 @@ def study_summary(study):
         print("    {}: {}".format(key, value))
 
 
-def Optuna_propose_hyperparameters(trial, suggested_hyperparameters):
+def Optuna_propose_hyperparameters(trial, suggested_hyperparameters, override_with_default=['teacher_temperature']):
     """
     Objective function for Optuna hyperparameter tuning.
-    Uses run_spatial_CLIP with parameters proposed by Optuna.
     """
     # Suggest hyperparameters
     tuned_hyperparameters = {
         param_name: trial._suggest(param_name, param_info['suggest_distribution'])
         for param_name, param_info in suggested_hyperparameters.items()
     }
+
+    for param_name in override_with_default:
+        tuned_hyperparameters[param_name] = suggested_hyperparameters[param_name]['default']
 
     #assert set(tuned_hyperparameters.keys()) in set(default_hyperparameters_keys), \
     #    "Tuned hyperparameters keys must match default hyperparameters keys"
@@ -69,7 +71,7 @@ def champion_callback(study, frozen_trial):
 
 def tune_CLIP(args, experiment_id, run_args):
 
-    suggested_hyperparameters = get_clip_hparams()
+    suggested_hyperparameters = get_clip_hparams(context='teacher')
 
     def run_CLIP_wrapper(trial, run_args):
         with mlflow.start_run(experiment_id=experiment_id, run_name=f'Trial {trial.number}', nested=True):
@@ -110,17 +112,18 @@ def tune_CLIP(args, experiment_id, run_args):
     return study.best_params
     
 
-def tune_ECLARE(args, experiment_name, run_args):
-    suggested_hyperparameters = get_clip_hparams()
+def tune_ECLARE(args, experiment_id, run_args, device):
+    suggested_hyperparameters = get_clip_hparams(context='student')
 
     def run_CLIP_wrapper(trial, run_args):
-        with mlflow.start_run(experiment_id=experiment_name, run_name=f'Trial {trial.number}', nested=True):
+        with mlflow.start_run(experiment_id=experiment_id, run_name=f'Trial {trial.number}', nested=True):
 
             params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
             run_args['trial'] = trial
 
             mlflow.log_params(params)
-            _, metric_to_optimize = run_ECLARE(**run_args, params=params)
+            _, metrics = run_ECLARE(**run_args, params=params, device=device)
+            metric_to_optimize = metrics[args.metric_to_optimize]
 
             return metric_to_optimize
 

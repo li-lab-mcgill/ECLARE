@@ -41,8 +41,19 @@ def get_metrics(model, rna_valid_loader, atac_valid_loader, device, paired=True)
         foscttm_score = foscttm_moscot(rna_latents.detach().cpu().numpy(), atac_latents.detach().cpu().numpy()).mean().item()
         one_minus_foscttm_score = 1 - foscttm_score # the higher the better
         metrics['1-foscttm'] = one_minus_foscttm_score
+        metrics['compound_metric'] = compound_metric(metrics, weights_dict={'1-foscttm':0.25, 'multimodal_ilisi':0.25, 'nmi':0.25, 'ari':0.25})
+    else:
+        metrics['compound_metric'] = compound_metric(metrics, weights_dict={'multimodal_ilisi':0.5, 'nmi':0.25, 'ari':0.25})
 
     return metrics
+
+def compound_metric(metrics, weights_dict={'multimodal_ilisi':0.5, 'nmi':0.25, 'ari':0.25}):
+
+    compound_metric_value = 0
+    for metric, weight in weights_dict.items():
+        compound_metric_value += metrics[metric] * weight
+
+    return compound_metric_value
 
 def unpaired_metrics(latents, labels, modalities, batches, k=30):
 

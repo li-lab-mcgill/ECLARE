@@ -16,7 +16,8 @@ from eclare.tune_utils import tune_CLIP
 from eclare.run_utils import run_CLIP, get_or_create_experiment
 from eclare.models import get_clip_hparams
 from eclare.setup_utils import return_setup_func_from_dataset
-from eclare.post_hoc_utils import plot_umap_embeddings, create_celltype_palette, get_latents
+from eclare.post_hoc_utils import plot_umap_embeddings, create_celltype_palette
+from eclare.data_utils import fetch_data_from_loader_light
 
 
 if __name__ == "__main__":
@@ -38,7 +39,7 @@ if __name__ == "__main__":
                         help='Distinctive feature for current job')
     parser.add_argument('--tune_hyperparameters', action='store_true', default=False,
                         help='tune hyperparameters using Optuna')
-    parser.add_argument('--metric_to_optimize', type=str, default='1-foscttm', metavar='M',
+    parser.add_argument('--metric_to_optimize', type=str, default='compound_metric', metavar='M',
                         help='metric to optimize')
     parser.add_argument('--n_trials', type=int, default=1, metavar='R',
                         help='number of trials used for hyperparameter search')
@@ -128,11 +129,8 @@ if __name__ == "__main__":
             mlflow.set_tag("outdir", args.outdir)
             mlflow.set_tag("hostname", socket.gethostname())
 
-            hyperparameters = get_clip_hparams()
+            hyperparameters = get_clip_hparams(context='teacher')
             default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
-
-            ## manually set num_layers to 1 (for teacher model)
-            default_hyperparameters['num_layers'] = 1
 
             ## Run training loops
             if (not args.tune_hyperparameters):
@@ -197,37 +195,24 @@ if __name__ == "__main__":
                 f.write(f"{runs_uri}\n")
                 f.write(f"{file_uri}\n")
 
-            ## UMAP: source dataset
-            rna_latents, atac_latents = get_latents(model, rna_valid_loader.dataset.adatas[0], atac_valid_loader.dataset.adatas[0], return_tensor=False)
+            ## create umap embeddings for source dataset
+            rna_cells, rna_labels, rna_batches = fetch_data_from_loader_light(rna_valid_loader, subsample=args.valid_subsample, shuffle=False)
+            atac_cells, atac_labels, atac_batches = fetch_data_from_loader_light(atac_valid_loader, subsample=args.valid_subsample, shuffle=False)
 
-            rna_celltypes = rna_valid_loader.dataset.adatas[0].obs['cell_type'].values
-            atac_celltypes = atac_valid_loader.dataset.adatas[0].obs['cell_type'].values
-            color_map_ct = create_celltype_palette(rna_celltypes.categories, atac_celltypes.categories, plot_color_palette=False)
+            rna_latents = model(rna_cells.to(model.device) if hasattr(model, 'device') else rna_cells.to('cuda' if torch.cuda.is_available() else 'cpu'), modality=0)[0].detach().cpu().numpy()
+            atac_latents = model(atac_cells.to(model.device) if hasattr(model, 'device') else atac_cells.to('cuda' if torch.cuda.is_available() else 'cpu'), modality=1)[0].detach().cpu().numpy()
 
-            rna_condition = ['nan'] * len(rna_celltypes)
-            atac_condition = ['nan'] * len(atac_celltypes)
+            color_map_ct = create_celltype_palette(rna_labels, atac_labels, plot_color_palette=False)
 
-            umap_embedding, umap_figure, _ = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
-            umap_figure.suptitle(f"source dataset: {args.source_dataset}", fontsize=14, y=0.98)
-            umap_figure.tight_layout()
+            rna_condition = ['nan'] * len(rna_labels)
+            atac_condition = ['nan'] * len(atac_labels)
+
+            umap_embedding, umap_figure, _ = plot_umap_embeddings(
+                rna_latents, atac_latents, rna_labels, atac_labels, rna_condition, atac_condition, color_map_ct, umap_embedding=None
+            )
+            umap_figure.suptitle(f'UMAP embeddings of CLIP model (source: {args.source_dataset}) based on {args.valid_subsample} cells')
             umap_figure.savefig(os.path.join(args.outdir, 'source_umap_embeddings.png'))
             mlflow.log_figure(umap_figure, 'source_umap_embeddings.png')
-
-            ## UMAP: target dataset
-            rna_latents, atac_latents = get_latents(model, target_rna_valid_loader.dataset.adatas[0], target_atac_valid_loader.dataset.adatas[0], return_tensor=False)
-
-            rna_celltypes = target_rna_valid_loader.dataset.adatas[0].obs['cell_type'].values
-            atac_celltypes = target_atac_valid_loader.dataset.adatas[0].obs['cell_type'].values
-            color_map_ct = create_celltype_palette(rna_celltypes.categories, atac_celltypes.categories, plot_color_palette=False)
-
-            rna_condition = ['nan'] * len(rna_celltypes)
-            atac_condition = ['nan'] * len(atac_celltypes)
-            
-            umap_embedding, umap_figure, _ = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, color_map_ct, umap_embedding=None)
-            umap_figure.suptitle(f"target dataset: {args.target_dataset}", fontsize=14, y=0.98)
-            umap_figure.tight_layout()
-            umap_figure.savefig(os.path.join(args.outdir, 'target_umap_embeddings.png'))
-            mlflow.log_figure(umap_figure, 'target_umap_embeddings.png')
 
             ## print output directory
             print('\n', args.outdir)

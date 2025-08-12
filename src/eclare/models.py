@@ -6,7 +6,6 @@ import numpy as np
 from copy import deepcopy
 import glob
 
-import sys
 import os
 
 from eclare.data_utils import PrintableLambda
@@ -18,26 +17,36 @@ class MCDropout(nn.Dropout):
 
 class CLIP(nn.Module):
 
+    inv_softplus = lambda x, beta=1.0: 1/beta * np.log(np.exp(beta*x) - 1)
+
     HPARAMS = {
         'num_units': {
             'suggest_distribution': CategoricalDistribution(choices=[128, 256, 512]),
             'default': 256
         },
-        'num_layers': {
+        '_teacher_num_layers': {
             'suggest_distribution': CategoricalDistribution(choices=[1, 2]),
             'default': 1
+        },
+        '_student_num_layers': {
+            'suggest_distribution': CategoricalDistribution(choices=[1, 2]),
+            'default': 2
         },
         'dropout_p': {
             'suggest_distribution': FloatDistribution(low=0.1, high=0.9),
             'default': 0.3
         },
-        'temperature': {
-            'suggest_distribution': FloatDistribution(low=0.01, high=5),
-            'default': 1
+        'teacher_temperature': {
+            'suggest_distribution': FloatDistribution(low=inv_softplus(0.01), high=inv_softplus(5)),
+            'default': inv_softplus(1.)
+        },
+        'student_temperature': {
+            'suggest_distribution': FloatDistribution(low=inv_softplus(0.01), high=inv_softplus(5)),
+            'default': inv_softplus(1.)
         },
         'weights_temperature': {
-            'suggest_distribution': FloatDistribution(low=0.001, high=1.0),
-            'default': 0.1
+            'suggest_distribution': FloatDistribution(low=inv_softplus(0.01), high=inv_softplus(5)),
+            'default': inv_softplus(1.)
         },
         'decoder_loss': {
             'suggest_distribution': CategoricalDistribution(
@@ -57,7 +66,6 @@ class CLIP(nn.Module):
         self.paired = paired
 
         ## hyperparameters
-        self.temperature    = hparams['temperature']
         self.decoder_loss   = hparams['decoder_loss']
         num_units           = hparams['num_units']
         num_layers          = hparams['num_layers']
@@ -79,8 +87,16 @@ class CLIP(nn.Module):
             self.core_to_atac = nn.Sequential(*atac_decoder)
 
     @classmethod
-    def get_hparams(cls, key=None):
-        return cls.HPARAMS[key] if key else cls.HPARAMS
+    def get_hparams(cls, context='student', key=None):
+
+        hparams = cls.HPARAMS[key].copy() if key else cls.HPARAMS.copy()
+
+        context_hparam_key = f'_{context}_num_layers'
+        if context_hparam_key in hparams.keys():
+            hparams['num_layers'] = hparams[context_hparam_key].copy()
+            del hparams[f'_student_num_layers'], hparams[f'_teacher_num_layers'] # don't need neither of these anymore
+            
+        return hparams
 
     def forward(self, x, modality: int, normalize: int = 1):
 
@@ -152,7 +168,6 @@ class SpatialCLIP(nn.Module):
 
         self.n_genes = n_genes
 
-        self.temperature    = hparams['temperature']
         num_units           = hparams['num_units']
         num_layers          = hparams['num_layers']
         dropout_p           = hparams['dropout_p']
