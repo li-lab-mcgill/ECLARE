@@ -60,8 +60,16 @@ if __name__ == "__main__":
                         help='number of trials for hyperparameter tuning')
     parser.add_argument('--metric_to_optimize', type=str, default='compound_metric', metavar='M',
                         help='metric to optimize during hyperparameter tuning')
-    parser.add_argument('--ignore_sources', nargs='+', type=str, default=[None],
-                        help='List of sources to ignore')
+    parser.add_argument('--ignore_sources', nargs='+', action='append', default=None,
+                        help='List of sources to ignore (option may be repeated)')
+    parser.add_argument('--study_name', type=str, default=None,
+                        help='Optuna study name shared by all workers')
+    parser.add_argument('--storage', type=str, default=None,
+                        help='Optuna storage URL, e.g., sqlite:///optuna.db or postgresql://user:pw@host/db')
+    parser.add_argument('--timeout', type=int, default=0,
+                        help='Global wall-clock seconds for tuning; 0 disables')
+    parser.add_argument('--global_n_trials', type=int, default=None,
+                        help='Global number of COMPLETE trials across all workers')
     args = parser.parse_args()
     #args = parser.parse_known_args()[0]
 
@@ -72,6 +80,18 @@ if __name__ == "__main__":
     else:
         print('CUDA not available, set default to CPU')
         device   = 'cpu'
+
+    # Normalize ignore_sources into a flat list
+    if args.ignore_sources is None:
+        args.ignore_sources = []
+    else:
+        args.ignore_sources = [s for group in args.ignore_sources for s in group]
+
+    # Prevent CPU oversubscription when multiple GPU workers run
+    try:
+        torch.set_num_threads(1)
+    except Exception:
+        pass
 
     ## Check number of cpus (does not work in interactive SALLOC environment)
     cpus_per_task = os.environ.get('SLURM_CPUS_PER_TASK')
@@ -216,9 +236,38 @@ if __name__ == "__main__":
 
             else:
                 optuna.logging.set_verbosity(optuna.logging.ERROR)
-                best_params = tune_ECLARE(args, experiment_id, run_args, device)
 
-                ## run best model
+                # Decide direction from metric name (edit if you want a fixed direction)
+                metric = (args.metric_to_optimize or "").lower()
+                direction = "minimize" if any(k in metric for k in ["loss", "error", "compound"]) else "maximize"
+
+                # Create/load the shared study (all workers must use the same study_name + storage)
+                if args.study_name and args.storage:
+                    study = optuna.create_study(
+                        study_name=args.study_name,
+                        storage=args.storage,
+                        load_if_exists=True,
+                        direction=direction,
+                    )
+                else:
+                    study = optuna.create_study(direction=direction)
+
+                # Cap TOTAL COMPLETE trials across ALL workers
+                from optuna.study import MaxTrialsCallback
+                from optuna.trial import TrialState
+                global_cap = args.global_n_trials if args.global_n_trials is not None else args.n_trials
+                callbacks = [MaxTrialsCallback(global_cap, states=(TrialState.COMPLETE,))]
+
+                # Hand the shared study + callbacks to the tuner; keep n_jobs=1 per process
+                best_params = tune_ECLARE(
+                    args, experiment_id, run_args, device,
+                    study=study,
+                    callbacks=callbacks,
+                    timeout=(args.timeout if args.timeout and args.timeout > 0 else None),
+                    n_jobs=1,
+                )
+
+                # run best model exactly as before
                 run_args['trial'] = None
                 run_args['args'].total_epochs = 100
                 student_model, _ = run_ECLARE(**run_args, params=best_params, device=device)

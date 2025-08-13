@@ -112,7 +112,17 @@ def tune_CLIP(args, experiment_id, run_args):
     return study.best_params
     
 
-def tune_ECLARE(args, experiment_id, run_args, device):
+def tune_ECLARE(args, experiment_id, run_args, device,
+                study=None, callbacks=None, timeout=None, n_jobs=1):
+    """
+    Args:
+        study: (optional) an existing Optuna Study (shared by all workers). If None, create a new one.
+        callbacks: (optional) list of Optuna callbacks; use MaxTrialsCallback for global cap.
+        timeout: (optional) global wall-clock budget (seconds).
+        n_jobs: parallel workers inside THIS process (keep at 1 when using multi-process per GPU).
+    """
+    import optuna, gc, torch
+    
     suggested_hyperparameters = get_clip_hparams(context='student')
 
     def run_CLIP_wrapper(trial, run_args):
@@ -125,23 +135,46 @@ def tune_ECLARE(args, experiment_id, run_args, device):
             _, metrics = run_ECLARE(**run_args, params=params, device=device)
             metric_to_optimize = metrics[args.metric_to_optimize]
 
+            # --- CRITICAL for multi-trial processes on GPU: free memory ---
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            gc.collect()
+
             return metric_to_optimize
 
-    ## create study and run optimization
-    study = optuna.create_study(
-        direction='maximize',
-        sampler=optuna.samplers.TPESampler(
-            consider_prior=False,  # not recommended when sampling from categorical variables
-            n_startup_trials=0,
-        ),
-        pruner=optuna.pruners.MedianPruner(
-            n_startup_trials=3,  # Don't prune until this many trials have completed
-            n_warmup_steps=20,   # Don't prune until this many steps in each trial
-            interval_steps=1,     # Check for pruning every this many steps
+    # If the caller didn't pass a study, create a local one (single-process fallback)
+    if study is None:
+        # Direction can be derived the same way as in eclare_run.py if you prefer
+        study = optuna.create_study(
+            direction='maximize',
+            sampler=optuna.samplers.TPESampler(
+                consider_prior=False,  # not recommended when sampling from categorical variables
+                n_startup_trials=0,
+            ),
+            pruner=optuna.pruners.MedianPruner(
+                n_startup_trials=3,  # Don't prune until this many trials have completed
+                n_warmup_steps=20,   # Don't prune until this many steps in each trial
+                interval_steps=1,     # Check for pruning every this many steps
+            )
         )
-    )
+    
+    # Combine callbacks (champion_callback + any passed in)
+    all_callbacks = [champion_callback]
+    if callbacks:
+        all_callbacks.extend(callbacks)
+    
     Optuna_objective = lambda trial: run_CLIP_wrapper(trial, run_args)
-    study.optimize(Optuna_objective, n_trials=args.n_trials, callbacks=[champion_callback])
+    
+    # Use "run until stopped" pattern - let external callback/timeout stop the swarm
+    study.optimize(
+        Optuna_objective,
+        n_trials=10**9,                 # effectively "unbounded"; external callback/timeout stops it
+        n_jobs=n_jobs,                  # keep at 1; parallelism comes from processes per GPU
+        callbacks=all_callbacks,
+        timeout=timeout
+    )
 
     ## log best trial
     mlflow.log_params(study.best_params)
