@@ -31,8 +31,6 @@ def get_parser():
                         help='genes by peaks string')
     parser.add_argument('--source_dataset_embedder', action='store_true', default=False,
                         help='use a dataset embedder')
-    parser.add_argument('--distil_lambda', type=float, default=0.1,
-                        help='lambda value for MobileCLIP loss')
     parser.add_argument('--valid_subsample', type=int, default=5000,
                         help='number of nuclei to subsample for validation')
     parser.add_argument('--source_dataset', type=str, default=None,

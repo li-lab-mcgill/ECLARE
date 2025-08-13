@@ -48,6 +48,10 @@ class CLIP(nn.Module):
             'suggest_distribution': FloatDistribution(low=inv_softplus(0.01), high=inv_softplus(5)),
             'default': inv_softplus(1.)
         },
+        'distil_lambda': {
+            'suggest_distribution': FloatDistribution(low=0.01, high=0.99),
+            'default': 0.1
+        },
         'decoder_loss': {
             'suggest_distribution': CategoricalDistribution(
                 choices=[

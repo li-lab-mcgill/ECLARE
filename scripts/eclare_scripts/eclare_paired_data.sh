@@ -102,9 +102,10 @@ run_eclare_task_on_gpu() {
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="'$feature'" \
-    --distil_lambda=0.1 &
-    #--tune_hyperparameters \
-    #--n_trials=3 &
+    --tune_hyperparameters \
+    --total_epochs=10 \
+    --n_trials=3 \
+    &
 }
 
 # Function to extract genes_by_peaks_str from CSV file

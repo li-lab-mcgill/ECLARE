@@ -131,7 +131,9 @@ run_eclare_task_on_gpu() {
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="'$feature'" \
-    --distil_lambda=0.1 &
+    --tune_hyperparameters \
+    --args.total_epochs=10 \
+    --n_trials=3 &
 }
 
 ## Create experiment ID (or detect if it already exists)
