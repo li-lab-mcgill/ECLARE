@@ -102,9 +102,9 @@ run_eclare_task_on_gpu() {
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="'$feature'" \
-    --tune_hyperparameters \
-    --total_epochs=10 \
-    --n_trials=3 \
+    #--tune_hyperparameters \
+    #--total_epochs=10 \
+    #--n_trials=100 \
     &
 }
 
