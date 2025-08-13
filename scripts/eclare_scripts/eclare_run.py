@@ -44,8 +44,6 @@ if __name__ == "__main__":
                         help='genes by peaks string')
     parser.add_argument('--source_dataset_embedder', action='store_true', default=False,
                         help='use a dataset embedder')
-    parser.add_argument('--distil_lambda', type=float, default=0.1,
-                        help='lambda value for MobileCLIP loss')
     parser.add_argument('--valid_subsample', type=int, default=2000,
                         help='number of nuclei to subsample for validation')
     parser.add_argument('--source_dataset', type=str, default=None,
@@ -270,11 +268,6 @@ if __name__ == "__main__":
             with open(os.path.join(args.outdir, 'model_uri.txt'), 'w') as f:
                 f.write(f"{runs_uri}\n")
                 f.write(f"{file_uri}\n")
-
-            ## clear some memory in device
-            del models
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
             ## create umap embeddings
             student_rna_cells, student_rna_labels, student_rna_batches = fetch_data_from_loader_light(student_rna_valid_loader, subsample=args.valid_subsample, shuffle=False)

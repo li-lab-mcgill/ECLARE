@@ -96,11 +96,11 @@ run_eclare_task_on_gpu() {
     --experiment_job_id=$experiment_job_id \
     --source_dataset=$source_dataset \
     --target_dataset=$target_dataset \
+    --ignore_sources "PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" \
     --genes_by_peaks_str='17563_by_100000' \
     --total_epochs=$total_epochs \
     --batch_size=800 \
-    --feature="$feature" \
-    --distil_lambda=0.1 &  # Add & to run in background
+    --feature="'$feature'"
 
     # Increment job counter
     ((current_jobs++))

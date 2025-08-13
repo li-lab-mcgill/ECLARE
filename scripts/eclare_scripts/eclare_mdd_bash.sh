@@ -27,8 +27,11 @@ mkdir $TMPDIR/$target_dataset
 srun python weighted_ensemble_learning.py --n_epochs=50 --save_latents --outdir=$TMPDIR/$target_dataset \
 --clip_job_id='39309250' \
 --target_dataset=$target_dataset \
+--ignore_sources "PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" \
 --genes_by_peaks_str='17563_by_100000' \
---distil_lambda=0.1
+--total_epochs=$total_epochs \
+--batch_size=800 \
+--feature="'$feature'"
 
  
 ## Move SLURM log file to sub-directory

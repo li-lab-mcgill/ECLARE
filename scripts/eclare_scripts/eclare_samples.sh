@@ -52,8 +52,7 @@ for target_dataset in "${target_datasets[@]}"; do
         --n_epochs=$total_epochs \
         --clip_job_id=$clip_job_id \
         --target_dataset=$target_dataset \
-        --genes_by_peaks_str='6816_by_55284' \
-        --distil_lambda=0.1
+        --genes_by_peaks_str='6816_by_55284'
 
     done
 done

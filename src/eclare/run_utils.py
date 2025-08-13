@@ -570,6 +570,7 @@ def run_ECLARE(
     mlflow.log_param("n_genes", n_genes)
     mlflow.log_param("n_peaks", n_peaks)
     mlflow.log_param("weights_temperature", weights_temperature)
+    mlflow.log_param("distil_lambda", params.get('distil_lambda', 0.1))
 
     # Define loop_order parameter
     loop_order = args.loop_order  # 'datasets_first' or 'batches_first'
@@ -587,7 +588,7 @@ def run_ECLARE(
             teacher_atac_valid_loaders,
             student_model,
             teacher_models,
-            args.distil_lambda,
+            params.get('distil_lambda', 0.1),
             None,
             knowledge_distillation_fn,
             loop_order
@@ -603,7 +604,7 @@ def run_ECLARE(
         datasets = list(teacher_rna_valid_loaders.keys())
         for dataset in datasets+[args.target_dataset]:
             valid_losses['align_loss_'+dataset] = valid_losses['align_loss_'+dataset] * align_loss_scale
-            valid_losses['total_loss_'+dataset] = (args.distil_lambda * valid_losses['distil_loss_'+dataset]) + ((1-args.distil_lambda) * valid_losses['align_loss_'+dataset])
+            valid_losses['total_loss_'+dataset] = (params.get('distil_lambda', 0.1) * valid_losses['distil_loss_'+dataset]) + ((1-params.get('distil_lambda', 0.1)) * valid_losses['align_loss_'+dataset])
 
         ## get metrics
         metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device, paired=paired)
@@ -628,7 +629,7 @@ def run_ECLARE(
             teacher_atac_train_loaders,
             student_model,
             teacher_models,
-            args.distil_lambda,
+            params.get('distil_lambda', 0.1),
             optimizer,
             knowledge_distillation_fn,
             loop_order
@@ -646,7 +647,7 @@ def run_ECLARE(
                 teacher_atac_valid_loaders,
                 student_model,
                 teacher_models,
-                args.distil_lambda,
+                params.get('distil_lambda', 0.1),
                 None,
                 knowledge_distillation_fn,
                 loop_order
