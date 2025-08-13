@@ -85,7 +85,7 @@ device = torch.device(f'cuda:{n_cudas - 1}') if cuda_available else 'cpu'
 methods_id_dict = {
     'clip': '09114308',
     'kd_clip': '09140533',
-    'eclare': ['10165959'],
+    'eclare': ['09140535'],
 }
 
 ## define search strings
@@ -110,13 +110,24 @@ os.makedirs(output_dir, exist_ok=True)
 
 #%% get BICCN similarity matrices
 
-sim_mat_path = os.path.join(os.environ['DATAPATH'], 'biccn_dend_to_matrix.pkl')
-with open(sim_mat_path, 'rb') as f:
-    sim_mat_dict, celltype_map_dict = pickle.load(f)
+ref_similarity_type = 'scCello_PPR'
 
-# Compute the mean of the DataFrames in sim_mat_dict, keeping the DataFrame format
-sim_mat_mean_df = pd.concat(sim_mat_dict.values()).groupby(level=0).mean()
+if ref_similarity_type == 'biccn_dend':
+    sim_mat_path = os.path.join(os.environ['DATAPATH'], 'cell_taxonomy', 'biccn_dend_to_matrix.pkl')
+    with open(sim_mat_path, 'rb') as f:
+        sim_mat_dict, celltype_map_dict = pickle.load(f)
 
+    # Compute the mean of the DataFrames in sim_mat_dict, keeping the DataFrame format
+    sim_mat_mean_df = pd.concat(sim_mat_dict.values()).groupby(level=0).mean()
+
+elif ref_similarity_type == 'scCello_PPR':
+    sim_mat_path = os.path.join(os.environ['DATAPATH'], 'cell_taxonomy', 'scCello_PPR_similarity.pkl')
+    with open(sim_mat_path, 'rb') as f:
+        sim_mat_dict = pickle.load(f)
+
+    sim_mat_mean_df = sim_mat_dict['scCello_cell_ontology']
+
+    
 #%% paired data
 experiment_name = f"clip_{methods_id_dict['clip']}"
 
@@ -592,6 +603,8 @@ for s, source_dataset in enumerate(source_datasets):
     mean_cosine_similarity_by_label_atac = mean_cosine_similarities(kd_clip_atac_latents, kd_clip_atac_latents, student_atac_labels, student_atac_labels)
     mean_cosine_similarity_by_label_rna_atac = mean_cosine_similarities(kd_clip_rna_latents, kd_clip_atac_latents, student_rna_labels, student_atac_labels)
 
+    all_kd_sim_rna[source_dataset] = mean_cosine_similarity_by_label_rna
+    all_kd_sim_atac[source_dataset] = mean_cosine_similarity_by_label_atac
     all_kd_sim_rna_atac[source_dataset] = mean_cosine_similarity_by_label_rna_atac
 
     sns.heatmap(mean_cosine_similarity_by_label_rna, ax=ax2[0, s + 1], cmap=cmap); ax2[0, s + 1].set_xlabel(''); ax2[0, s + 1].set_ylabel('')
@@ -606,40 +619,103 @@ fig2.tight_layout()
 #%% Barplot of Spearman correlation between inferred similarities and BICCN reference
 from scipy.stats import spearmanr
 
-mean_kd_sim_rna_atac = pd.concat(all_kd_sim_rna_atac.values()).groupby(level=0).mean()
+# Define a dictionary of metric functions for flexible evaluation
+def frobenius_norm(a, b):
+    return np.linalg.norm(a - b, ord='fro')
 
-spearman_df = pd.DataFrame(index=['ECLARE', 'mean KD-CLIP', 'MOFA+', 'MOJITOO'], columns=['full', 'triangular'])
+def mse(a, b):
+    return np.mean((a - b) ** 2)
+
+def spearman_corr(a, b):
+    # Returns only the correlation coefficient, not the p-value
+    return spearmanr(a, b)[0]
+
+similarity_metrics = {
+    'spearmanr': spearman_corr,
+    'frobenius': frobenius_norm,
+    'mse': mse,
+}
+
+def compute_similarity_metric(a, b, metric='spearmanr'):
+    """
+    Compute similarity between two arrays using the specified metric.
+    metric: one of 'spearmanr', 'frobenius', 'mse'
+    """
+    if metric not in similarity_metrics:
+        raise ValueError(f"Unknown metric '{metric}'. Choose from {list(similarity_metrics.keys())}")
+    return similarity_metrics[metric](a, b)
+
+# Example usage:
+# compute_similarity_metric(reference_sim, eclare_sim, metric='spearmanr')
+# compute_similarity_metric(reference_sim, eclare_sim, metric='frobenius')
+metric = 'mse'
+
+mean_kd_sim_rna_atac = pd.concat(all_kd_sim_rna_atac.values()).groupby(level=0).mean()
+mean_kd_sim_rna = pd.concat(all_kd_sim_rna.values()).groupby(level=0).mean()
+mean_kd_sim_atac = pd.concat(all_kd_sim_atac.values()).groupby(level=0).mean()
+
+spearman_df = pd.DataFrame(columns=['full', 'triangular'])
 
 reference_sim = sim_mat_mean_df.values.flatten()
 
-eclare_sim = eclare_sim_rna_atac.values.flatten()
-mean_kd_clip_sim = mean_kd_sim_rna_atac.values.flatten()
+## full matrices
+eclare_sim_flat = eclare_sim_rna_atac.values.flatten()
+eclare_sim_rna_flat = eclare_sim_rna.values.flatten()
+eclare_sim_atac_flat = eclare_sim_atac.values.flatten()
+
+mean_kd_clip_sim_flat = mean_kd_sim_rna_atac.values.flatten()
+mean_kd_clip_sim_rna_flat = mean_kd_sim_rna.values.flatten()
+mean_kd_clip_sim_atac_flat = mean_kd_sim_atac.values.flatten()
+
 mofa_sim = mofa_sim_rna_atac.values.flatten()
 mojitoo_sim = mojitoo_sim_rna_atac.values.flatten()
+pca_rna_sim = pca_sim_rna.values.flatten()
+pca_atac_sim = pca_sim_atac.values.flatten()
 
-spearman_df.loc['ECLARE', 'full'] = spearmanr(reference_sim, eclare_sim)[0]
-spearman_df.loc['mean KD-CLIP', 'full'] = spearmanr(reference_sim, mean_kd_clip_sim)[0]
-spearman_df.loc['MOFA+', 'full'] = spearmanr(reference_sim, mofa_sim)[0]
-spearman_df.loc['MOJITOO', 'full'] = spearmanr(reference_sim, mojitoo_sim)[0]
+spearman_df.loc['ECLARE', 'full'] = compute_similarity_metric(reference_sim, eclare_sim_flat, metric=metric)
+spearman_df.loc['ECLARE (RNA)', 'full'] = compute_similarity_metric(reference_sim, eclare_sim_rna_flat, metric=metric)
+spearman_df.loc['ECLARE (ATAC)', 'full'] = compute_similarity_metric(reference_sim, eclare_sim_atac_flat, metric=metric)
+spearman_df.loc['mean KD-CLIP', 'full'] = compute_similarity_metric(reference_sim, mean_kd_clip_sim_flat, metric=metric)
+spearman_df.loc['mean KD-CLIP (RNA)', 'full'] = compute_similarity_metric(reference_sim, mean_kd_clip_sim_rna_flat, metric=metric)
+spearman_df.loc['mean KD-CLIP (ATAC)', 'full'] = compute_similarity_metric(reference_sim, mean_kd_clip_sim_atac, metric=metric)
+spearman_df.loc['MOFA+', 'full'] = compute_similarity_metric(reference_sim, mofa_sim, metric=metric)
+spearman_df.loc['MOJITOO', 'full'] = compute_similarity_metric(reference_sim, mojitoo_sim, metric=metric)
+spearman_df.loc['RNA only (PCA)', 'full'] = compute_similarity_metric(reference_sim, pca_rna_sim, metric=metric)
+spearman_df.loc['ATAC only (PCA)', 'full'] = compute_similarity_metric(reference_sim, pca_atac_sim, metric=metric)
 
+## triangular matrices
 triu_idxs = np.triu(np.ones(len(sim_mat_mean_df)), k=1).astype(bool)
 
 reference_sim_triangular = sim_mat_mean_df.values[triu_idxs]
 eclare_sim_triangular = 0.5 * (eclare_sim_rna_atac.values[triu_idxs] + eclare_sim_rna_atac.T.values[triu_idxs]) # since RNA-ATAC not symmetric
+eclare_sim_rna_triangular = 0.5 * (eclare_sim_rna.values[triu_idxs] + eclare_sim_rna.T.values[triu_idxs]) # since RNA-ATAC not symmetric
+eclare_sim_atac_triangular = 0.5 * (eclare_sim_atac.values[triu_idxs] + eclare_sim_atac.T.values[triu_idxs]) # since RNA-ATAC not symmetric
+
 mean_kd_clip_sim_triangular = 0.5 * (mean_kd_sim_rna_atac.values[triu_idxs] + mean_kd_sim_rna_atac.T.values[triu_idxs]) # since RNA-ATAC not symmetric
+mean_kd_clip_sim_rna_triangular = 0.5 * (mean_kd_sim_rna.values[triu_idxs] + mean_kd_sim_rna.T.values[triu_idxs]) # since RNA-ATAC not symmetric
+mean_kd_clip_sim_atac_triangular = 0.5 * (mean_kd_sim_atac.values[triu_idxs] + mean_kd_sim_atac.T.values[triu_idxs]) # since RNA-ATAC not symmetric
+
 mofa_sim_triangular = mofa_sim_rna_atac.values[triu_idxs]
 mojitoo_sim_triangular = mojitoo_sim_rna_atac.values[triu_idxs]
+pca_rna_sim_triangular = pca_sim_rna.values[triu_idxs]
+pca_atac_sim_triangular = pca_sim_atac.values[triu_idxs]
 
-spearman_df.loc['ECLARE', 'triangular'] = spearmanr(reference_sim_triangular, eclare_sim_triangular)[0]
-spearman_df.loc['mean KD-CLIP', 'triangular'] = spearmanr(reference_sim_triangular, mean_kd_clip_sim_triangular)[0]
-spearman_df.loc['MOFA+', 'triangular'] = spearmanr(reference_sim_triangular, mofa_sim_triangular)[0]
-spearman_df.loc['MOJITOO', 'triangular'] = spearmanr(reference_sim_triangular, mojitoo_sim_triangular)[0]
+spearman_df.loc['ECLARE', 'triangular'] = compute_similarity_metric(reference_sim_triangular, eclare_sim_triangular, metric=metric)
+spearman_df.loc['ECLARE (RNA)', 'triangular'] = compute_similarity_metric(reference_sim_triangular, eclare_sim_rna_triangular, metric=metric)
+spearman_df.loc['ECLARE (ATAC)', 'triangular'] = compute_similarity_metric(reference_sim_triangular, eclare_sim_atac_triangular, metric=metric)
+spearman_df.loc['mean KD-CLIP', 'triangular'] = compute_similarity_metric(reference_sim_triangular, mean_kd_clip_sim_triangular, metric=metric)
+spearman_df.loc['mean KD-CLIP (RNA)', 'triangular'] = compute_similarity_metric(reference_sim_triangular, mean_kd_clip_sim_rna_triangular, metric=metric)
+spearman_df.loc['mean KD-CLIP (ATAC)', 'triangular'] = compute_similarity_metric(reference_sim_triangular, mean_kd_clip_sim_atac_triangular, metric=metric)
+spearman_df.loc['MOFA+', 'triangular'] = compute_similarity_metric(reference_sim_triangular, mofa_sim_triangular, metric=metric)
+spearman_df.loc['MOJITOO', 'triangular'] = compute_similarity_metric(reference_sim_triangular, mojitoo_sim_triangular, metric=metric)
+spearman_df.loc['RNA only (PCA)', 'triangular'] = compute_similarity_metric(reference_sim_triangular, pca_rna_sim_triangular, metric=metric)
+spearman_df.loc['ATAC only (PCA)', 'triangular'] = compute_similarity_metric(reference_sim_triangular, pca_atac_sim_triangular, metric=metric)
 
 ## plot spearman correlations in barplot
-spearman_df.T.plot.bar(figsize=(6, 5)); plt.ylabel('Spearman correlation')
+spearman_df.T.plot.bar(figsize=(10, 4)); plt.ylabel(f'{metric}')
 plt.xlabel('portion of the similarity matrix')
-plt.ylabel('Spearman correlation')
-plt.title('Spearman correlation between inferred cell type similarities and BICCN reference')
+plt.ylabel(f'{metric}')
+plt.title(f'{metric} between inferred cell type similarities and reference')
 plt.xticks(rotation=0)
 plt.tight_layout()
 

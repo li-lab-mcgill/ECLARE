@@ -21,8 +21,8 @@ csv_file=${DATAPATH}/genes_by_peaks_full_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-source_datasets=("PFC_Zhu" "DLPFC_Ma" "Midbrain_Adams")
-target_datasets=("DLPFC_Anderson")
+source_datasets=("PFC_Zhu" "DLPFC_Anderson")
+target_datasets=("DLPFC_Ma")
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6 # only relevant for multi-replicate tasks
