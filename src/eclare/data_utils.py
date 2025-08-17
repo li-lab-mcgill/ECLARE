@@ -282,8 +282,8 @@ def fetch_data_from_loader_light(loader, subsample=2000, label_key='cell_type', 
     else:
         cells  = torch.tensor(loader.dataset.adatas[0].X[cells_idx] , dtype=torch.float32)
 
-    labels = loader.dataset.obs[label_key].values[cells_idx].to_list()
-    batches = loader.dataset.obs[batch_key].values[cells_idx].to_list() if batch_key in loader.dataset.obs.columns else np.nan
+    labels = loader.dataset.obs[label_key].values[cells_idx].tolist()
+    batches = loader.dataset.obs[batch_key].values[cells_idx].tolist() if batch_key in loader.dataset.obs.columns else np.nan
 
     return cells, labels, batches
 

@@ -15,9 +15,24 @@ import jax.numpy as jnp
 from jax.lax import top_k as lax_top_k
 from functools import partial
 
+from coral_pytorch.dataset import proba_to_label
+
 from eclare.losses_and_distances_utils import clip_loss, clip_loss_split_by_ct
 from eclare.data_utils import fetch_data_from_loader_light
 from eclare.losses_and_distances_utils import cosine_distance
+
+def ordinal_metrics(rna_probas, atac_probas, rna_targets, atac_targets):
+    rna_labels = proba_to_label(rna_probas).float()
+    atac_labels = proba_to_label(atac_probas).float()
+    rna_targets = torch.tensor(rna_targets).to(rna_labels.device).float()
+    atac_targets = torch.tensor(atac_targets).to(atac_labels.device).float()
+
+    mae_rna = torch.mean(torch.abs(rna_labels - rna_targets))
+    mae_atac = torch.mean(torch.abs(atac_labels - atac_targets))
+    mse_rna = torch.mean((rna_labels - rna_targets)**2)
+    mse_atac = torch.mean((atac_labels - atac_targets)**2)
+
+    return mae_rna, mae_atac, mse_rna, mse_atac
 
 def get_metrics(model, rna_valid_loader, atac_valid_loader, device, paired=True):
 

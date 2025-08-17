@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from optuna.distributions import CategoricalDistribution, FloatDistribution
+from coral_pytorch.layers import CoralLayer
 
 import numpy as np
 from copy import deepcopy
@@ -134,6 +135,43 @@ class CLIP(nn.Module):
             else:
                 return latent, None
             
+class ORDINAL(CLIP):
+    def __init__(self, n_peaks, n_genes, **hparams):
+        super().__init__(n_peaks, n_genes, **hparams)
+        num_units = hparams.get('num_units', 256)
+
+        # Add ordinal_layer for both modalities
+        self.ordinal_layer_rna = CoralLayer(size_in=num_units, num_classes=6) # set to 6 for now, per PFC_Zhu dev_stages
+        self.ordinal_layer_atac = CoralLayer(size_in=num_units, num_classes=6)
+
+    def forward(self, x, modality: int, normalize: int = 1):
+        '''
+        modality: 0 for rna, 1 for atac. encode with int to enable model scriptability with torch.jit
+        '''
+        if modality == 0:
+            latent = self.rna_to_core(x)
+            if normalize == 1:
+                latent = torch.nn.functional.normalize(latent, p=2.0, dim=1)
+            logits = self.ordinal_layer_rna(latent)
+
+        elif modality == 1:
+            latent = self.atac_to_core(x)
+            if normalize == 1:
+                latent = torch.nn.functional.normalize(latent, p=2.0, dim=1)
+            logits = self.ordinal_layer_atac(latent)
+
+        else:
+            # Handle invalid modality values for JIT compatibility
+            # For JIT compatibility, we need to define logits in all branches
+            # Since this is an error case, we'll use a dummy tensor that matches the expected shape
+            logits = torch.zeros(x.shape[0], 6, device=x.device, dtype=x.dtype)
+            raise ValueError(f"Invalid modality: {modality}. Must be 0 (RNA) or 1 (ATAC)")
+
+        probas = torch.sigmoid(logits)
+
+        return logits, probas, latent
+
+
 # Expose the method separately as a standalone function
 get_clip_hparams = CLIP.get_hparams
 

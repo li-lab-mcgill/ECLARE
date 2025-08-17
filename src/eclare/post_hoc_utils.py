@@ -129,19 +129,25 @@ def get_latents(model, rna, atac, return_tensor=False):
     return rna_latent, atac_latent
 
 
-def create_celltype_palette(all_rna_celltypes, all_atac_celltypes, plot_color_palette=True):
+def create_celltype_palette(all_rna_celltypes, all_atac_celltypes, plot_color_palette=True, sequential=False):
+
     all_cell_types = np.unique(np.hstack([all_rna_celltypes, all_atac_celltypes]))
 
-    if len(all_cell_types) >= 12:
-        palette = sns.color_palette("tab20", len(all_cell_types))
-    elif (len(all_cell_types) == 11):
-        palette = sns.color_palette("bright", len(all_cell_types))
-        #palette[-1] = (0.3333333333333333, 0.4196078431372549, 0.1843137254901961) # change last color to dark olive green using rgb scheme
-        palette = sns.color_palette("tab20", len(all_cell_types))
-    elif (len(all_cell_types) < 11) and (len(all_cell_types) >= 9):
-        palette = sns.color_palette("Set1", len(all_cell_types))
-    elif (len(all_cell_types) <= 8):
-        palette = sns.color_palette("Dark2", len(all_cell_types))
+    if sequential:
+        palette = sns.color_palette("cividis", len(all_cell_types))
+
+    else:
+
+        if len(all_cell_types) >= 12:
+            palette = sns.color_palette("tab20", len(all_cell_types))
+        elif (len(all_cell_types) == 11):
+            palette = sns.color_palette("bright", len(all_cell_types))
+            #palette[-1] = (0.3333333333333333, 0.4196078431372549, 0.1843137254901961) # change last color to dark olive green using rgb scheme
+            palette = sns.color_palette("tab20", len(all_cell_types))
+        elif (len(all_cell_types) < 11) and (len(all_cell_types) >= 9):
+            palette = sns.color_palette("Set1", len(all_cell_types))
+        elif (len(all_cell_types) <= 8):
+            palette = sns.color_palette("Dark2", len(all_cell_types))
 
     color_map = dict(zip(all_cell_types, palette))
 
@@ -221,7 +227,7 @@ def plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltype
             ax[0].text(0.7, i, name, va='center', ha='left', fontsize=10)
         ax[0].axis('off')
 
-        ax[0].set_title('legend: cell types')
+        ax[0].set_title('legend')
         ax[1].set_title('RNA & ATAC')
         ax[2].set_title('RNA')
         ax[3].set_title('ATAC')
