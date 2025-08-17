@@ -55,7 +55,6 @@ def json_to_newick(d):
     length = attrs['height'] - max(child_hts)
     return f"({','.join(subs)}){name}:{length:.4f}"
 
-
 def find_largest_distance(tree):
     all_clades = list(tree.find_clades())
     maxd = 0.0
@@ -75,22 +74,36 @@ def find_largest_distance(tree):
 
     return maxd, pair
 
-def get_celltype_similarity_matrix(filename):
+def get_celltype_similarity_matrix(filename_key):
 
-    dend_path = os.path.join(os.environ['DATAPATH'], filename)
+    # celltypes: 
 
-    if filename == 'dend_multiple_cortical_human.json':
-        celltypes = ['Astrocyte', 'Endo L2-5 CLDN5', 'Excitatory', 'Inhibitory', 'Micro L1-6 C1QC', 'OPC L1-6 MYT1', 'Oligodendrocyte', 'Peri L1-6 MUSTN1']
+    if filename_key == 'dend_multiple_cortical_human':
+        dend_path = os.path.join(os.environ['DATAPATH'], "cell_taxonomy", "dend_multiple_cortical_human.json")
+        dlpfc_ma_celltypes = ['Exc L2-3 LINC00507 RPL9P17', 'Oligodendrocyte', 'Astrocyte', 'VIP', 'SST', 'Micro L1-6 C1QC', 'PVALB', 'OPC L1-6 MYT1', 'Exc L3-5 RORB HSPB3', 'Exc L3-5 RORB CMAHP', 'Endo L2-5 CLDN5', 'Peri L1-6 MUSTN1', 'ADARB2 (CGE)', 'LAMP5', 'Exc L6 THEMIS EGR3', 'Exc L3-5 RORB CD24', 'Non-neuronal', 'VLMC L1-3 CYP1B1', 'Exc L6 FEZF2 FAM95C', 'Exc L6 FEZF2 ETV4', 'Micro L1-6 C1QC', 'LAMP5 LHX6', 'Inh L5 PVALB CNTNAP3P2', 'Exc L5-6 THEMIS IL7R', 'Exc L6 THEMIS C6orf48', 'Exc L5 FEZF2 SCN7A', 'Inh L5-6 SST TH', 'Inh L6 SST NPY']
 
-    elif filename == 'dend_mtg_human.json':
-        celltypes = ['Astrocyte', 'Endothelial', 'Neuronal: Glutamatergic', 'Neuronal: GABAergic', 'Microglia-PVM', 'OPC', 'Oligodendrocyte']
+        #mapper_path = os.path.join(os.environ['DATAPATH'], "cell_taxonomy", "brain_celltype_mapping_dend_multiple_cortical_human_Ma.csv")
+        #mapper_df = pd.read_csv(mapper_path)
+        #filename_key_tree = 'cell_taxonomy_biccn_multiple_cortical_human_tree_csv'
+        #_, _, ct_tree_vocab_clid2idx, ct_tree_vocab_clid2name = scCello_get_prestored_data(filename_key_tree)
 
-    elif filename == 'dend_ctx_hpc_mouse.json':
-        celltypes = ['CTX-HPF 376-378', 'CTX-HPF 379', 'CTX-HPF 124-360', 'CTX-HPF 002-123', 'CTX-HPF 386-388', 'OPC', 'CTX-HPF 365-375']
+        #dlpfc_anderson_celltypes = ['Astrocyte', 'Endo L2-5 CLDN5', 'Excitatory', 'Inhibitory', 'Micro L1-6 C1QC', 'OPC L1-6 MYT1', 'Oligodendrocyte', 'Peri L1-6 MUSTN1']
+        #celltypes = mapper_df.sort_values(by='reference_celltype')['input_name'].to_list()
+
+    elif filename_key == 'dend_mtg_human':
+        dend_path = os.path.join(os.environ['DATAPATH'], "cell_taxonomy", "dend_mtg_human.json")
+        dlpfc_anderson_celltypes = ['Astrocyte', 'Endothelial', 'Neuronal: Glutamatergic', 'Neuronal: GABAergic', 'Microglia-PVM', 'OPC', 'Oligodendrocyte']
+
+    elif filename_key == 'dend_ctx_hpc_mouse':
+        dend_path = os.path.join(os.environ['DATAPATH'], "cell_taxonomy", "dend_ctx_hpc_mouse.json")
+        dlpfc_anderson_celltypes = ['CTX-HPF 376-378', 'CTX-HPF 379', 'CTX-HPF 124-360', 'CTX-HPF 002-123', 'CTX-HPF 386-388', 'OPC', 'CTX-HPF 365-375']
 
     tree_json = json.load(open(dend_path))
     newick    = json_to_newick(tree_json) + ';'
     tree      = Phylo.read(StringIO(newick), "newick")
+
+    #celltypes = dlpfc_anderson_celltypes
+    celltypes = dlpfc_ma_celltypes
 
     names = []
     for clade in tree.find_clades():
@@ -121,12 +134,17 @@ def get_celltype_similarity_matrix(filename):
     pairwise_comparisons_df = pairwise_comparisons_df.where(~pairwise_comparisons_df.isnull(), pairwise_comparisons_df.T)
     pairwise_comparisons_df.fillna(1, inplace=True)
 
-    reference_celltypes = ['Astrocytes', 'Endothelial', 'Excitatory', 'Inhibitory', 'Microglia', 'OPCs', 'Oligodendrocytes', 'Pericytes']
+    dlpfc_anderson_reference_celltypes = ['Astrocytes', 'Endothelial', 'Excitatory', 'Inhibitory', 'Microglia', 'OPCs', 'Oligodendrocytes', 'Pericytes']
+    dlpfc_ma_reference_celltypes = ['L2_3_IT', 'Oligo', 'Astro', 'VIP', 'SST', 'Micro', 'PVALB', 'OPC', 'L3_5_IT_1', 'L3_5_IT_3', 'Endo', 'PC', 'ADARB2', 'LAMP5_RELN', 'L6_IT_1', 'L3_5_IT_2', 'SMC', 'VLMC', 'L6b', 'L6_CT', 'immune', 'LAMP5_LHX6', 'PVALB_CHC', 'L5_6_NP', 'L6_IT_2', 'L5_PT', 'TH', 'SST_NPY']
+
+    #reference_celltypes = dlpfc_anderson_reference_celltypes
+    reference_celltypes = dlpfc_ma_reference_celltypes
+
     celltype_mapping = {celltype: reference_celltypes[i] for i, celltype in enumerate(celltypes)}
     pairwise_comparisons_df = pairwise_comparisons_df.rename(columns=celltype_mapping, index=celltype_mapping)
 
     plt.figure(figsize=(5, 4))
-    sns.heatmap(pairwise_comparisons_df, annot=False, cmap='magma', cbar_kws={'label': 'normalized similarity'})
+    sns.heatmap(pairwise_comparisons_df, annot=False, cmap='PuBuGn', cbar_kws={'label': 'normalized similarity'})
 
     return pairwise_comparisons_df, celltype_mapping
 
@@ -173,7 +191,8 @@ def scCello_get_prestored_data(data_file_name: str):
         "cell_taxonomy_biccn_mtg_human_tree_csv": f"{os.environ['DATAPATH']}/cell_taxonomy/biccn_cell_set_nomenclature.csv",
 
         "cell_taxonomy_biccn_multiple_cortical_human_owl": f"{os.environ['DATAPATH']}/cell_taxonomy/dend_multiple_cortical_human.owl",
-        "cell_taxonomy_biccn_multiple_cortical_human_tree_csv": f"{os.environ['DATAPATH']}/cell_taxonomy/biccn_multiple_cortical_human_cell_set_nomenclature.csv",
+        "cell_taxonomy_biccn_multiple_cortical_human_tree_csv": f"{os.environ['DATAPATH']}/cell_taxonomy/biccn_cell_set_nomenclature.csv",
+        #"cell_taxonomy_biccn_multiple_cortical_human_tree_csv": f"{os.environ['DATAPATH']}/cell_taxonomy/biccn_multiple_cortical_human_cell_set_nomenclature.csv",
     }
 
     assert data_file_name in prestored_files, (
@@ -257,8 +276,7 @@ def scCello_get_prestored_data(data_file_name: str):
     else:
         # Should never hit because of the initial assert, but kept for clarity.
         raise NotImplementedError("Only 'cell_taxonomy_tree_json' and 'cell_taxonomy_graph_owl' are supported.")
-
-    
+ 
 def scCello_get_cell_taxonomy_similarity(nx_graph, get_raw=False, alpha=0.9, thresh=1e-4):
     """
     Return: a matrix sized by the number of nodes on the cell ontology graph,
@@ -328,17 +346,62 @@ def get_scCello_similarity_matrix(filename_key):
     similarity_df.attrs['filename'] = filename_key
 
     ## save cell type names in file, to be processed by ChatGPT
-    ## ChatGPT prompt: Here is a text file containing names of cell types that I would like to map onto a list of reference cell types. Based on the following list of reference cell types, provide a 1-to-1 mapping: ['Excitatory', 'Oligodendrocytes', 'Astrocytes', 'Inhibitory', 'OPCs', 'Microglia', 'Endothelial', 'Pericytes']. Note that the reference celltypes are in brain tissue, so make sure to map only brain cell types together.
-    nodes_df['name'].to_csv(os.path.join(os.environ['DATAPATH'], "cell_taxonomy", f"{filename_key}_celltype_names.txt"), index=False)
+    celltype_names_path = os.path.join(os.environ['DATAPATH'], "cell_taxonomy", f"{filename_key}_celltype_names.txt")
+    ## ChatGPT prompt: Here is a text file containing names of cell types that I would like to map onto a list of reference cell types. Based on the following list of reference cell types, provide a 1-to-1 mapping: ['Excitatory', 'Oligodendrocytes', 'Astrocytes', 'Inhibitory', 'OPCs', 'Microglia', 'Endothelial', 'Pericytes']. Note that the reference celltypes are in brain tissue, so make sure to map only brain cell types together. Also make sure to map human cell types.
+    if not os.path.exists(celltype_names_path):
+        nodes_df['name'].to_csv(celltype_names_path, index=False)
 
     return similarity_df, nodes_df
 
-def get_scCello_grouped_similarity_matrix(similarity_df):
+
+def get_cl_ontology_rwr(filename_key):
+
+    if filename_key == 'dend_mtg_human':
+        filename_key_tree = 'cell_taxonomy_biccn_mtg_human_tree_csv'
+    elif filename_key == 'dend_multiple_cortical_human':
+        filename_key_tree = 'cell_taxonomy_biccn_multiple_cortical_human_tree_csv'
+    elif filename_key == 'scCello_cell_ontology':
+        filename_key_tree = 'cell_taxonomy_tree_json'
+
+    ## load cl_ontology_rwr
+    path = os.path.join(os.environ['DATAPATH'], "cell_taxonomy", "cl.ontology.rwr.csv")
+    cl_ontology_rwr = pd.read_csv(path, index_col=0, header=0)
+
+    ## map cl_ontology_rwr CLIDs to cell types
+    import pronto
+    ontology = pronto.Ontology(os.path.join(os.environ['DATAPATH'], "cell_taxonomy", "cl.obo"))
+    clids = cl_ontology_rwr.index.tolist()
+    clid2name = {clid: ontology[clid].name for clid in clids}
+    
+    cl_ontology_rwr.index = cl_ontology_rwr.index.map(clid2name)
+    cl_ontology_rwr.columns = cl_ontology_rwr.columns.map(clid2name)
+
+    ## add filename_key attribute to similarity_df
+    cl_ontology_rwr.attrs['filename'] = filename_key + '_OnClass_rwr'
+
+    ## save cell type names in file, to be processed by ChatGPT
+    celltype_names_path = os.path.join(os.environ['DATAPATH'], "cell_taxonomy", f"{filename_key}_OnClass_rwr_celltype_names.txt")
+    ## ChatGPT prompt: Here is a text file containing names of cell types that I would like to map onto a list of reference cell types. Based on the following list of reference cell types, provide a 1-to-1 mapping: ['Excitatory', 'Oligodendrocytes', 'Astrocytes', 'Inhibitory', 'OPCs', 'Microglia', 'Endothelial', 'Pericytes']. Note that the reference celltypes are in brain tissue, so make sure to map only brain cell types together. Also make sure to map human cell types.
+    if not os.path.exists(celltype_names_path):
+        cl_ontology_rwr.index.to_series().to_csv(celltype_names_path, index=False)
+
+    return cl_ontology_rwr # corresponds to similarity_df
+
+
+def get_scCello_grouped_similarity_matrix(similarity_df, target_dataset='Ma'):
 
     filename_key = similarity_df.attrs['filename']
+    nodes_names = similarity_df.columns.dropna().to_numpy()
 
     ## mapping generated with ChatGPT to map nomenclature to reference types
-    brain_celltype_mapping = pd.read_csv(os.path.join(os.environ['DATAPATH'], "cell_taxonomy", f"brain_celltype_mapping_{filename_key}.csv"))
+    brain_celltype_mapping = pd.read_csv(os.path.join(os.environ['DATAPATH'], "cell_taxonomy", f"brain_celltype_mapping_{filename_key}_{target_dataset}.csv"))
+    brain_celltype_mapping = brain_celltype_mapping.iloc[:, brain_celltype_mapping.dtypes.isin([np.dtype('O'), np.dtype('str')]).to_numpy()]
+
+    ## set column names manually
+    mapped_col = brain_celltype_mapping.columns[brain_celltype_mapping.isin(nodes_names).all(0)].item()
+    ref_col = brain_celltype_mapping.columns[~brain_celltype_mapping.columns.isin([mapped_col])].item()
+    brain_celltype_mapping.rename(columns={ref_col: 'Mapped Reference Type', mapped_col: 'Original Cell Name'}, inplace=True)
+    print(brain_celltype_mapping.head(10))
 
     ## filter to only include cell types in reference types
     similarity_filt_df = similarity_df.loc[
@@ -385,6 +448,7 @@ def get_scCello_grouped_similarity_matrix(similarity_df):
 
     return grouped_similarity_normalized
 
+
 ## loop over all datasets
 filename_keys = ['dend_mtg_human', 'dend_multiple_cortical_human', 'scCello_cell_ontology']
 scCello_PPR_similarity_dict = {}
@@ -393,6 +457,10 @@ for filename_key in filename_keys:
     similarity_df, nodes_df = get_scCello_similarity_matrix(filename_key)
     grouped_similarity_normalized = get_scCello_grouped_similarity_matrix(similarity_df)
     scCello_PPR_similarity_dict[filename_key] = grouped_similarity_normalized
+
+## get cl_ontology_rwr
+similarity_df = get_cl_ontology_rwr(filename_key)
+grouped_similarity_normalized = get_scCello_grouped_similarity_matrix(similarity_df)
 
 ## aggregate scCello PPR similarity
 agg_scCello_PPR_similarity = pd.concat(scCello_PPR_similarity_dict.values()).groupby(level=0).mean()
