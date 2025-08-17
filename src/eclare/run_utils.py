@@ -10,9 +10,12 @@ import mlflow
 import subprocess
 from scipy.spatial.distance import squareform
 
-from eclare.models import CLIP, SpatialCLIP, get_clip_hparams, get_spatial_clip_hparams
+from coral_pytorch.dataset import levels_from_labelbatch
+from coral_pytorch.losses import coral_loss
+
+from eclare.models import CLIP, SpatialCLIP, ORDINAL
 from eclare.losses_and_distances_utils import clip_loss, spatial_clip_loss, rbf_from_distance, Knowledge_distillation_fn
-from eclare.eval_utils import get_metrics
+from eclare.eval_utils import get_metrics, ordinal_metrics
 from eclare.data_utils import fetch_data_from_loader_light
 
 def run_CLIP(
@@ -670,5 +673,120 @@ def run_ECLARE(
                 raise TrialPruned()
 
     return student_model, metrics
+
+
+def run_ORDINAL(
+    args: Namespace,
+    rna_train_loader,
+    rna_valid_loader,
+    atac_train_loader,
+    atac_valid_loader,
+    trial: Trial = None,
+    params: dict = {},
+    device: str = 'cpu',
+    ):
+
+    ## setup
+    paired_target = (args.target_dataset != 'MDD')
+    n_genes = rna_train_loader.dataset.shape[1]
+    n_peaks = atac_train_loader.dataset.shape[1]
+
+    model = ORDINAL(n_peaks=n_peaks, n_genes=n_genes, **params).to(device=device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    ## initialize metrics dict
+    metrics = {}
+
+    ## log initial valid loss
+    with torch.inference_mode():
+        model.eval()
+        valid_losses, valid_metrics = ordinal_pass(rna_valid_loader, atac_valid_loader, model, None)
+
+        ## log metrics
+        metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
+        metrics.update({f'valid_{k}': v for k, v in valid_metrics.items() if ~np.isnan(v)})
+        mlflow.log_metrics(metrics, step=0)
+
+    ## Train model
+    for epoch in (epochs_pbar := tqdm(range(args.total_epochs))):
+        epochs_pbar.set_description('EPOCHS')
+
+        ## optimize
+        model.train()
+        train_losses, train_metrics = ordinal_pass(rna_train_loader, atac_train_loader, model, optimizer)
+
+        ## evaluate
+        with torch.inference_mode():
+            model.eval()
+            valid_losses, valid_metrics = ordinal_pass(rna_valid_loader, atac_valid_loader, model, None)
+
+        ## log metrics
+        metrics.update({f'train_{k}': v for k, v in train_losses.items() if ~np.isnan(v)})
+        metrics.update({f'train_{k}': v for k, v in train_metrics.items() if ~np.isnan(v)})
+        metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
+        metrics.update({f'valid_{k}': v for k, v in valid_metrics.items() if ~np.isnan(v)})
+        mlflow.log_metrics(metrics, step=epoch+1)
+
+    return model
+
+def ordinal_pass(rna_loader, atac_loader, model, optimizer):
+
+    device = next(model.parameters()).device
+    epoch_losses = {'ordinal_loss_rna': [], 'ordinal_loss_atac': []}
+    epoch_metrics = {'mae_rna': [], 'mae_atac': [], 'mse_rna': [], 'mse_atac': []}
+
+    dev_stage_to_int = {'EaFet': 0, 'LaFet': 1, 'Inf': 2, 'Child': 3, 'Adol': 4, 'Adult': 5}
+        
+    for rna_dat, atac_dat in (align_itr_pbar := tqdm( zip(rna_loader, atac_loader))):
+
+        ## check if cells loaded in matching pairs
+        #assert (rna_dat.obs_names == atac_dat.obs_names).all()
+        
+        ## get cells/nuclei and their cell types
+        rna_cells = rna_dat.X.float().to(device=device) # already float32, move to correct device
+        atac_cells = atac_dat.X.float().to(device=device)
+
+        rna_cells.requires_grad_()
+        atac_cells.requires_grad_()
+
+        rna_dev_stages = rna_dat.obs['dev_stage'].map(dev_stage_to_int).tolist()
+        atac_dev_stages = atac_dat.obs['dev_stage'].map(dev_stage_to_int).tolist()
+
+        ## get levels
+        rna_levels = levels_from_labelbatch(rna_dev_stages, num_classes=len(model.ordinal_layer_rna.coral_bias)+1).to(device=device)
+        atac_levels = levels_from_labelbatch(atac_dev_stages, num_classes=len(model.ordinal_layer_atac.coral_bias)+1).to(device=device)
+
+        ## project cells/nuclei
+        rna_logits, rna_probas, _ = model(rna_cells, modality=0, normalize=0)
+        atac_logits, atac_probas, _ = model(atac_cells, modality=1, normalize=0)
+
+        ## Align losses
+        atac_ordinal_loss = coral_loss(atac_logits, atac_levels)
+        rna_ordinal_loss = coral_loss(rna_logits, rna_levels)
+
+        loss = 0.5 * (atac_ordinal_loss + rna_ordinal_loss)
+        epoch_losses['ordinal_loss_rna'].append(rna_ordinal_loss.item())
+        epoch_losses['ordinal_loss_atac'].append(atac_ordinal_loss.item())
+
+        if (optimizer is not None):
+            optimizer.zero_grad()
+            loss.backward(retain_graph=True)
+            optimizer.step()
+
+        ## get metrics
+        mae_rna, mae_atac, mse_rna, mse_atac = ordinal_metrics(rna_probas, atac_probas, rna_dev_stages, atac_dev_stages)
+        epoch_metrics['mae_rna'].append(mae_rna.item())
+        epoch_metrics['mae_atac'].append(mae_atac.item())
+        #epoch_metrics['mse_rna'].append(mse_rna.item())
+        #epoch_metrics['mse_atac'].append(mse_atac.item())
+
+        align_itr_pbar.set_description(f"{'VALID' if optimizer is None else 'TRAIN'} itr -- ORDINAL (loss: {loss.item():.4f})")
+
+    ## replace epoch losses with mean
+    epoch_losses = {k: np.mean(v) for k, v in epoch_losses.items()}
+    epoch_metrics = {k: np.mean(v) for k, v in epoch_metrics.items()}
+
+    return epoch_losses, epoch_metrics
     
     

@@ -1118,6 +1118,10 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
+    ## create dev_stage labels
+    rna.obs['dev_stage'] = rna.obs['Donor ID'].apply(lambda x: x[:-1])
+    atac.obs['dev_stage'] = atac.obs['Donor ID'].apply(lambda x: x[:-1])
+
     if return_type == 'loaders':
         rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
         atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
