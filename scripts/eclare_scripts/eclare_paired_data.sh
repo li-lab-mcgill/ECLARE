@@ -40,7 +40,7 @@ done
  
 ## Define total number of epochs
 clip_job_id='09114308'
-total_epochs=100
+total_epochs=10
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)
@@ -101,11 +101,10 @@ run_eclare_task_on_gpu() {
     --genes_by_peaks_str="17987_by_127358" \
     --total_epochs=$total_epochs \
     --batch_size=800 \
-    --feature="'$feature'" \
+    --feature="'$feature'" &
     #--tune_hyperparameters \
     #--total_epochs=10 \
     #--n_trials=100 \
-    &
 }
 
 # Function to extract genes_by_peaks_str from CSV file
