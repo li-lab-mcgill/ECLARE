@@ -45,7 +45,7 @@ if __name__ == "__main__":
                         help='number of trials used for hyperparameter search')
     parser.add_argument('--tune_id', type=str, default=None,
                         help='ID of job for Optuna hyperparameter tuning')
-    parser.add_argument('--subsample', type=int, default=-1,
+    parser.add_argument('--valid_subsample', type=int, default=2000,
                         help='number of samples to keep')
 
     args = parser.parse_args()
@@ -135,7 +135,7 @@ if __name__ == "__main__":
             ## Run training loops
             if (not args.tune_hyperparameters):
 
-                model, _ = run_CLIP(**run_args, params=default_hyperparameters)
+                model, _ = run_CLIP(**run_args, params=default_hyperparameters, device=device)
                 model_str = "trained_model"
     
             elif args.tune_hyperparameters:
@@ -147,7 +147,7 @@ if __name__ == "__main__":
                 ## run best model
                 run_args['trial'] = None
                 run_args['args'].total_epochs = 100
-                model, _ = run_CLIP(**run_args, params=best_params)
+                model, _ = run_CLIP(**run_args, params=best_params, device=device)
                 model_str = "best_model"
 
             ## infer signature

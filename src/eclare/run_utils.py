@@ -25,10 +25,10 @@ def run_CLIP(
     target_atac_valid_loader,
     trial: Trial = None,
     params: dict = {},
+    device: str = 'cpu',
     ):
 
     ## setup
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     paired_target = (args.target_dataset != 'MDD')
     n_genes = rna_train_loader.dataset.shape[1]
     n_peaks = atac_train_loader.dataset.shape[1]
@@ -40,7 +40,7 @@ def run_CLIP(
     ## log initial valid loss
     with torch.inference_mode():
         model.eval()
-        valid_losses = clip_pass(rna_valid_loader, atac_valid_loader, model, None)
+        valid_losses = clip_pass(rna_valid_loader, atac_valid_loader, model, None, teacher_temperature=params['teacher_temperature'])
         
         ## source performance metrics
         metrics = {}
@@ -62,12 +62,12 @@ def run_CLIP(
 
         ## optimize
         model.train()
-        train_losses = clip_pass(rna_train_loader, atac_train_loader, model, optimizer)
+        train_losses = clip_pass(rna_train_loader, atac_train_loader, model, optimizer, teacher_temperature=params['teacher_temperature'])
 
         ## evaluate
         with torch.inference_mode():
             model.eval()
-            valid_losses = clip_pass(rna_valid_loader, atac_valid_loader, model, None)
+            valid_losses = clip_pass(rna_valid_loader, atac_valid_loader, model, None, teacher_temperature=params['teacher_temperature'])
 
 
         ## source performance metrics
@@ -165,7 +165,7 @@ def spatial_pass(rna_loader, model, device, optimizer):
     for rna_dat in (align_itr_pbar := tqdm(rna_loader)):
 
         ## project RNA data
-        rna_cells = rna_dat.X.float() # already float32
+        rna_cells = rna_dat.X.float().to(device=device) # already float32, move to correct device
         #rna_celltypes = rna_dat.obs['cell_type'].tolist()
 
         rna_cells.requires_grad_()
@@ -219,8 +219,9 @@ def spatial_pass(rna_loader, model, device, optimizer):
     epoch_losses = {k: np.mean(v) for k, v in epoch_losses.items()}
     return epoch_losses
 
-def clip_pass(rna_loader, atac_loader, model, optimizer):
+def clip_pass(rna_loader, atac_loader, model, optimizer, teacher_temperature):
 
+    device = next(model.parameters()).device
     epoch_losses = {'clip_loss_rna': [], 'clip_loss_atac': [], 'recon_loss_rna': [], 'recon_loss_atac': [], 'tot_loss': []}
         
     for rna_dat, atac_dat in (align_itr_pbar := tqdm( zip(rna_loader, atac_loader))):
@@ -229,8 +230,8 @@ def clip_pass(rna_loader, atac_loader, model, optimizer):
         #assert (rna_dat.obs_names == atac_dat.obs_names).all()
         
         ## get cells/nuclei and their cell types
-        rna_cells = rna_dat.X.float() # already float32
-        atac_cells = atac_dat.X.float()
+        rna_cells = rna_dat.X.float().to(device=device) # already float32, move to correct device
+        atac_cells = atac_dat.X.float().to(device=device)
 
         rna_cells.requires_grad_()
         atac_cells.requires_grad_()
@@ -248,7 +249,7 @@ def clip_pass(rna_loader, atac_loader, model, optimizer):
                                                 rna_latents=rna_latents,
                                                 atac_celltypes=atac_celltypes,
                                                 rna_celltypes=rna_celltypes,
-                                                temperature=model.temperature)
+                                                temperature=teacher_temperature)
 
         loss = 0.5 * (clip_loss_atac + clip_loss_rna)
         epoch_losses['clip_loss_rna'].append(clip_loss_rna.item())

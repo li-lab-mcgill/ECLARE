@@ -116,7 +116,7 @@ if __name__ == "__main__":
     args_tmp = deepcopy(args)
     args_tmp.source_dataset = args.target_dataset
 
-    if target_dataset_og == 'DLPFC_Anderson':
+    if (target_dataset_og == 'DLPFC_Anderson') or (target_dataset_og == 'DLPFC_Ma'):
         args_tmp.target_dataset = None  # could be any dataset, specified to skip processing (or do further zero-shot tasks)
     else:
         args_tmp.target_dataset = 'MDD'
@@ -172,7 +172,7 @@ if __name__ == "__main__":
     # 2. Get or create data run with more specific filtering
     if args.source_dataset is not None:
         data_run_and_replicate_name = f'{args.source_dataset}-to-{args.target_dataset}-{args.replicate_idx}'
-    elif (args.source_dataset is None) and (args.ignore_sources is not None):
+    elif (args.source_dataset is None) and (args.ignore_sources != [None]):
         data_run_and_replicate_name = f'{args.target_dataset}-IGNORE-{"_".join(args.ignore_sources)}-{args.replicate_idx}'
     else:
         data_run_and_replicate_name = f'{args.target_dataset}-{args.replicate_idx}'

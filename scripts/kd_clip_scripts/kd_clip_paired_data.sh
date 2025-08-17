@@ -22,10 +22,10 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
 ## Define source datasets
-source_datasets=("DLPFC_Ma" "PFC_Zhu" "Midbrain_Adams")
+source_datasets=("PFC_Zhu" "DLPFC_Anderson")
 
 ## Define target dataset
-target_datasets=("DLPFC_Anderson")
+target_datasets=("DLPFC_Ma")
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=3
@@ -39,7 +39,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-clip_job_id='09114308'
+clip_job_id='13205500'
 total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
@@ -99,13 +99,13 @@ run_eclare_task_on_gpu() {
     --source_dataset=$source_dataset \
     --target_dataset=$target_dataset \
     --ignore_sources="" \
-    --genes_by_peaks_str="17987_by_127358" \
+    --genes_by_peaks_str="18892_by_143437" \
     --total_epochs=$total_epochs \
     --batch_size=800 \
-    --feature="$feature" \
-    --tune_hyperparameters \
-    --args.total_epochs=10 \
-    --n_trials=3 &
+    --feature="$feature" &
+    #--tune_hyperparameters \
+    #--args.total_epochs=10 \
+    #--n_trials=3 \
 }
 
 # Function to extract genes_by_peaks_str from CSV file
