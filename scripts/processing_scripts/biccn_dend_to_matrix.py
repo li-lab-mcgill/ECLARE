@@ -354,14 +354,7 @@ def get_scCello_similarity_matrix(filename_key):
     return similarity_df, nodes_df
 
 
-def get_cl_ontology_rwr(filename_key):
-
-    if filename_key == 'dend_mtg_human':
-        filename_key_tree = 'cell_taxonomy_biccn_mtg_human_tree_csv'
-    elif filename_key == 'dend_multiple_cortical_human':
-        filename_key_tree = 'cell_taxonomy_biccn_multiple_cortical_human_tree_csv'
-    elif filename_key == 'scCello_cell_ontology':
-        filename_key_tree = 'cell_taxonomy_tree_json'
+def get_cl_ontology_rwr(filename_key='scCello_cell_ontology'):
 
     ## load cl_ontology_rwr
     path = os.path.join(os.environ['DATAPATH'], "cell_taxonomy", "cl.ontology.rwr.csv")
@@ -385,7 +378,8 @@ def get_cl_ontology_rwr(filename_key):
     if not os.path.exists(celltype_names_path):
         cl_ontology_rwr.index.to_series().to_csv(celltype_names_path, index=False)
 
-    return cl_ontology_rwr # corresponds to similarity_df
+    similarity_df = cl_ontology_rwr.copy()
+    return similarity_df
 
 
 def get_scCello_grouped_similarity_matrix(similarity_df, target_dataset='Ma'):
@@ -400,7 +394,7 @@ def get_scCello_grouped_similarity_matrix(similarity_df, target_dataset='Ma'):
     ## set column names manually
     mapped_col = brain_celltype_mapping.columns[brain_celltype_mapping.isin(nodes_names).all(0)].item()
     ref_col = brain_celltype_mapping.columns[~brain_celltype_mapping.columns.isin([mapped_col])].item()
-    brain_celltype_mapping.rename(columns={ref_col: 'Mapped Reference Type', mapped_col: 'Original Cell Name'}, inplace=True)
+    brain_celltype_mapping.rename(columns={ref_col: 'Reference Type', mapped_col: 'Original Cell Name'}, inplace=True)
     print(brain_celltype_mapping.head(10))
 
     ## filter to only include cell types in reference types
@@ -411,8 +405,8 @@ def get_scCello_grouped_similarity_matrix(similarity_df, target_dataset='Ma'):
 
     ## rename cell types to reference types
     similarity_mapped_df = similarity_filt_df.rename(
-        columns=brain_celltype_mapping.set_index('Original Cell Name').to_dict()['Mapped Reference Type'],
-        index=brain_celltype_mapping.set_index('Original Cell Name').to_dict()['Mapped Reference Type']
+        columns=brain_celltype_mapping.set_index('Original Cell Name').to_dict()['Reference Type'],
+        index=brain_celltype_mapping.set_index('Original Cell Name').to_dict()['Reference Type']
     )
 
     # Group the rows and columns by mapped reference type and compute the mean for each group
@@ -421,15 +415,19 @@ def get_scCello_grouped_similarity_matrix(similarity_df, target_dataset='Ma'):
 
     # Symmetric normalization (D^(-1/2) * S * D^(-1/2))
     diagonal_values = np.diag(grouped_similarity)
-    diagonal_sqrt = np.sqrt(diagonal_values)
-    diagonal_sqrt_inv = 1.0 / diagonal_sqrt
 
-    # Handle any zero diagonal values
-    diagonal_sqrt_inv[diagonal_sqrt == 0] = 0
+    if not (diagonal_values==0).all() or not (diagonal_values==1).all():
+        diagonal_sqrt = np.sqrt(diagonal_values)
+        diagonal_sqrt_inv = 1.0 / diagonal_sqrt
 
-    # Create diagonal matrices
-    D_sqrt_inv = np.diag(diagonal_sqrt_inv)
-    grouped_similarity_normalized = D_sqrt_inv @ grouped_similarity @ D_sqrt_inv
+        # Handle any zero diagonal values
+        diagonal_sqrt_inv[diagonal_sqrt == 0] = 0
+
+        # Create diagonal matrices
+        D_sqrt_inv = np.diag(diagonal_sqrt_inv)
+        grouped_similarity_normalized = D_sqrt_inv @ grouped_similarity @ D_sqrt_inv
+    else:
+        grouped_similarity_normalized = grouped_similarity
 
     ## Ensure symmetry
     grouped_similarity_normalized = (grouped_similarity_normalized + grouped_similarity_normalized.T) / 2
@@ -443,7 +441,7 @@ def get_scCello_grouped_similarity_matrix(similarity_df, target_dataset='Ma'):
     # Ensure diagonal is exactly 1
     #grouped_similarity_normalized.iloc[np.eye(grouped_similarity_normalized.shape[0], dtype=bool)] = 1.0
 
-    plt.figure(figsize=(5, 5))
+    plt.figure(figsize=(6, 5))
     sns.heatmap(grouped_similarity_normalized, cmap='PuBuGn')
 
     return grouped_similarity_normalized
