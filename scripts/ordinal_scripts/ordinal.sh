@@ -12,7 +12,7 @@ TMPDIR=${OUTPATH}/ordinal_${JOB_ID}
 cp ./scripts/ordinal_scripts/ordinal_run.py ./scripts/ordinal_scripts/ordinal.sh $TMPDIR
  
 ## Define total number of epochs
-total_epochs=100
+total_epochs=500
 
 
 # Function to check if a GPU is idle
@@ -69,5 +69,6 @@ CUDA_VISIBLE_DEVICES=$gpu_id \
 python ${ECLARE_ROOT}/scripts/ordinal_scripts/ordinal_run.py \
 --outdir $TMPDIR \
 --total_epochs=$total_epochs \
+--genes_by_peaks_str="9832_by_70751" \
 --feature="ordinal" \
 --job_id $JOB_ID

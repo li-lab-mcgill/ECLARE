@@ -25,9 +25,9 @@ if __name__ == "__main__":
                         help='output directory')
     parser.add_argument('--source_dataset', type=str, default='PFC_Zhu',
                         help='current options: PFC_Zhu')
-    parser.add_argument('--target_dataset', type=str, default='MDD',
+    parser.add_argument('--target_dataset', type=str, default=None,
                         help='current options: MDD')
-    parser.add_argument('--genes_by_peaks_str', type=str, default='6816_by_55284',
+    parser.add_argument('--genes_by_peaks_str', type=str, default='827_by_1681',
                         help='indicator of peaks to genes mapping to skip processing')
     parser.add_argument('--total_epochs', type=int, default=2, metavar='E',
                         help='number of epochs for training')
@@ -182,11 +182,7 @@ if __name__ == "__main__":
             rna_latents = rna_latents.detach().cpu().numpy()
             atac_latents = atac_latents.detach().cpu().numpy()
 
-            color_map_dev_stage = create_celltype_palette(rna_labels, atac_labels, plot_color_palette=False, sequential=True)
-
-            ## Reorder color-map to track developmental stages
-            dev_stages = ['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult']
-            color_map_dev_stage = {dev_stage: color_map_dev_stage[dev_stage] for dev_stage in dev_stages}
+            color_map_dev_stage = create_celltype_palette(rna_labels, atac_labels, sequential=True, labels=['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult'], plot_color_palette=False)
 
             rna_condition = ['nan'] * len(rna_labels)
             atac_condition = ['nan'] * len(atac_labels)
