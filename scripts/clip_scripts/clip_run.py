@@ -3,7 +3,7 @@ from argparse import ArgumentParser
 import torch
 import pandas as pd
 import optuna
-from shutil import copy2
+from copy import deepcopy
 import socket
 
 import mlflow
@@ -45,16 +45,21 @@ if __name__ == "__main__":
                         help='number of trials used for hyperparameter search')
     parser.add_argument('--tune_id', type=str, default=None,
                         help='ID of job for Optuna hyperparameter tuning')
+    parser.add_argument('--job_id', type=str, default=None,
+                        help='Job ID for experiment naming')
     parser.add_argument('--valid_subsample', type=int, default=2000,
                         help='number of samples to keep')
+    parser.add_argument('--keep_group', type=str, default=None,
+                        help='group of samples to keep')
 
     args = parser.parse_args()
     #args, _ = parser.parse_known_args()
     
     if torch.cuda.is_available():
         print('CUDA available')
-        device   = 'cuda'
         num_gpus = torch.cuda.device_count()
+        device   = torch.device(f'cuda:{num_gpus-1}')
+        torch.cuda.set_device(device.index)  # default device used by e.g. AnnLoader
     else:
         print('CUDA not available, set default to CPU')
         device   = 'cpu'
@@ -69,16 +74,29 @@ if __name__ == "__main__":
     ## SOURCE dataset setup function
     source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
-    ## get data loaders
-    rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
-        source_setup_func(args, return_type='loaders', dataset=args.source_dataset)
-    
     ## TARGET dataset setup function
-    target_setup_func = return_setup_func_from_dataset(args.target_dataset)
+    target_setup_func = return_setup_func_from_dataset(args.target_dataset)    
 
-    ## missing overlapping_subjects argument if target is MDD (False by default)
-    _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
-        target_setup_func(args, return_type='loaders', dataset=args.target_dataset)
+    if args.keep_group is not None:
+
+        ## get data loaders, with keep_group argument
+        rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
+            source_setup_func(args, return_type='loaders', keep_group=[args.keep_group])
+
+        args_tmp = deepcopy(args)
+        args_tmp.target_dataset = None
+
+        _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
+            target_setup_func(args_tmp, return_type='loaders', keep_group=['']) # keep_group=[''] to keep all subjects
+
+    else:
+        ## get data loaders
+        rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
+            source_setup_func(args, return_type='loaders')
+
+        ## missing overlapping_subjects argument if target is MDD (False by default)
+        _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
+            target_setup_func(args, return_type='loaders')
     
     run_args = {
         'args': args,
@@ -91,7 +109,7 @@ if __name__ == "__main__":
     }
 
     ## get clip_job_id from outdir
-    clip_job_id = args.outdir.split('/')[-4].split('_')[-1]
+    clip_job_id = args.job_id
 
     ## get or create mlflow experiment
     if args.target_dataset == 'MDD':
@@ -199,8 +217,14 @@ if __name__ == "__main__":
             rna_cells, rna_labels, rna_batches = fetch_data_from_loader_light(rna_valid_loader, subsample=args.valid_subsample, shuffle=False)
             atac_cells, atac_labels, atac_batches = fetch_data_from_loader_light(atac_valid_loader, subsample=args.valid_subsample, shuffle=False)
 
-            rna_latents = model(rna_cells.to(model.device) if hasattr(model, 'device') else rna_cells.to('cuda' if torch.cuda.is_available() else 'cpu'), modality=0)[0].detach().cpu().numpy()
-            atac_latents = model(atac_cells.to(model.device) if hasattr(model, 'device') else atac_cells.to('cuda' if torch.cuda.is_available() else 'cpu'), modality=1)[0].detach().cpu().numpy()
+            #rna_latents = model(rna_cells.to(model.device) if hasattr(model, 'device') else rna_cells.to('cuda' if torch.cuda.is_available() else 'cpu'), modality=0, normalize=0)[0].detach().cpu().numpy()
+            #atac_latents = model(atac_cells.to(model.device) if hasattr(model, 'device') else atac_cells.to('cuda' if torch.cuda.is_available() else 'cpu'), modality=1, normalize=0)[0].detach().cpu().numpy()
+            rna_latents, _ = model(rna_cells.to(device), modality=0)
+            atac_latents, _ = model(atac_cells.to(device), modality=1)
+
+            # Use logits for UMAP embeddings
+            rna_latents = rna_latents.detach().cpu().numpy()
+            atac_latents = atac_latents.detach().cpu().numpy()
 
             color_map_ct = create_celltype_palette(rna_labels, atac_labels, plot_color_palette=False)
 

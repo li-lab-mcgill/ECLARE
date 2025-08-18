@@ -170,9 +170,19 @@ def create_loaders(
         batch_key: str,
         valid_only: bool=False,
         standard: bool=False,
-        stratified: bool=True):
+        stratified: bool=True,
+        min_cells: int=12):
     
     celltypes = data.obs[cell_group_key].values
+
+    ## detect celltypes with less than min_cells cells
+    celltypes_counts = celltypes.value_counts()
+    celltypes_counts = celltypes_counts[celltypes_counts < min_cells]
+
+    ## remove celltypes with less than min_cells cells
+    data = data[~celltypes.isin(celltypes_counts.index)]
+    celltypes = celltypes[~celltypes.isin(celltypes_counts.index)]
+    celltypes = celltypes.remove_unused_categories()
 
     if batch_key in data.obs.columns:
         batches = data.obs[batch_key].values
@@ -180,8 +190,8 @@ def create_loaders(
     else:
         batches = None
 
-    train_len = (int(0.8*len(data)))
-    valid_len = int(0.2 * train_len)
+    train_len = int(0.8*len(data))
+    valid_len = int(0.2*len(data))
     test_len = int(len(data) - (train_len + valid_len))
 
     ## reduce data size to keep CPU RAM memory below 62G
