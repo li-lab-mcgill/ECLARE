@@ -12,7 +12,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Split dev stages')
     parser.add_argument('--source_dataset', type=str, default='PFC_Zhu')
     parser.add_argument('--target_dataset', type=str, default=None)
-    parser.add_argument('--genes_by_peaks_str', type=str, default='827_by_1681')
+    parser.add_argument('--genes_by_peaks_str', type=str, default='9832_by_70751')
     args = parser.parse_args()
 
     ## SOURCE dataset setup function

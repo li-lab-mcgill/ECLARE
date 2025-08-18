@@ -129,12 +129,15 @@ def get_latents(model, rna, atac, return_tensor=False):
     return rna_latent, atac_latent
 
 
-def create_celltype_palette(all_rna_celltypes, all_atac_celltypes, plot_color_palette=True, sequential=False):
+def create_celltype_palette(all_rna_celltypes, all_atac_celltypes, plot_color_palette=True, sequential=False, labels=None):
 
-    all_cell_types = np.unique(np.hstack([all_rna_celltypes, all_atac_celltypes]))
+    if labels is not None:
+        all_cell_types = labels.copy()
+    else:
+        all_cell_types = np.unique(np.hstack([all_rna_celltypes, all_atac_celltypes]))
 
     if sequential:
-        palette = sns.color_palette("cividis", len(all_cell_types))
+        palette = sns.color_palette("plasma", len(all_cell_types))
 
     else:
 

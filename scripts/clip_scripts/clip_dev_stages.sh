@@ -14,7 +14,7 @@ cp ./scripts/clip_scripts/clip_run.py ./scripts/clip_scripts/clip_dev_stages.sh 
 dev_stages=("EaFet" "LaFet" "Inf" "Child" "Adol" "Adult")
 dataset=("PFC_Zhu")
 
-genes_by_peaks_str=("827_by_1681")
+genes_by_peaks_str=("9832_by_70751")
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6 # only relevant for multi-replicate tasks
@@ -28,7 +28,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-total_epochs=4
+total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)

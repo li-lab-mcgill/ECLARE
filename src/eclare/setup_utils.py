@@ -1069,10 +1069,10 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
 
         ## Subset to variable features
         if hvg_only:
-            sc.pp.highly_variable_genes(atac, n_top_genes=10000) # sc.pl.highly_variable_genes(atac)
+            sc.pp.highly_variable_genes(atac, n_top_genes=100000) # sc.pl.highly_variable_genes(atac)
             atac = atac[:, atac.var['highly_variable'].astype(bool)].to_memory()
 
-            sc.pp.highly_variable_genes(rna, n_top_genes=1000) # sc.pl.highly_variable_genes(rna)
+            sc.pp.highly_variable_genes(rna, n_top_genes=10000) # sc.pl.highly_variable_genes(rna)
             rna = rna[:, rna.var['highly_variable'].astype(bool)].to_memory()
 
         # min-max scaling
