@@ -19,6 +19,8 @@ if __name__ == "__main__":
                         help='path to RNA data'),
     parser.add_argument('--genes_by_peaks_str', type=str, default=None,
                         help='indicator of peaks to genes mapping to skip processing')
+    parser.add_argument('--hvg_only', type=bool, default=False,
+                        help='whether to only use highly variable genes')
     parser.add_argument('--feature', type=str, default=None)
     args = parser.parse_args()
 
@@ -28,7 +30,7 @@ if __name__ == "__main__":
     ## extract data
     print('Extracting target data')
     target_rna, target_atac, target_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, target_atac_datapath, target_rna_datapath \
-        = target_setup_func(args, hvg_only=False, return_type='data')
+        = target_setup_func(args, hvg_only=args.hvg_only, return_type='data')
     
     ## delete atac.raw if it exists
     if (args.target_dataset=='MDD') and ('raw' in target_atac.uns.keys()):
@@ -45,7 +47,7 @@ if __name__ == "__main__":
         source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
         source_rna, source_atac, source_cell_group, _, _, source_atac_datapath, source_rna_datapath \
-            = source_setup_func(args, hvg_only=False, return_type='data')
+            = source_setup_func(args, hvg_only=args.hvg_only, return_type='data')
 
         ## harmonize data
         print('Harmonizing data')

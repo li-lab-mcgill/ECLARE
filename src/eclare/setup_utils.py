@@ -990,7 +990,11 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
             RNA_file = f"rna_{args.genes_by_peaks_str}.h5ad"
             ATAC_file = f"atac_{args.genes_by_peaks_str}.h5ad"
             binary_mask_file = genes_peaks_dict_file = genes_to_peaks_binary_mask = genes_peaks_dict = None
-        
+
+        if (len(keep_group) == 1) and (keep_group != ['']): # load data for a single developmental stage, should already be processed
+            dev_stage = keep_group[0]
+            RNA_file = f"{dev_stage}_{RNA_file}"
+            ATAC_file = f"{dev_stage}_{ATAC_file}"
 
         atac_fullpath = os.path.join(atac_datapath, ATAC_file)
         rna_fullpath = os.path.join(rna_datapath, RNA_file)
@@ -999,10 +1003,11 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         rna  = anndata.read_h5ad(rna_fullpath)
 
         ## retain from specific developmental stages
-        keep_atac_subj = atac.obs['Donor ID'].str.startswith(tuple(keep_group)) 
-        keep_rna_subj = rna.obs['Donor ID'].str.startswith(tuple(keep_group))
+        keep_atac_subj = atac.obs['Donor ID'].str.contains('|'.join(keep_group), regex=True) # if keep_group=[''], then keeps all subjects
+        keep_rna_subj = rna.obs['Donor ID'].str.contains('|'.join(keep_group), regex=True)
 
-        if 'Fet' not in keep_group:
+        fetal_present = pd.Series(keep_group).str.contains('Fet').any()
+        if (not fetal_present) and (keep_group != ['']):
             keep_atac_ct = ~atac.obs['Cell type'].str.contains('fetal')
             keep_rna_ct = ~rna.obs['Cell type'].str.contains('fetal')
 
@@ -1017,6 +1022,10 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
 
         atac = atac[keep_atac].to_memory()
         rna = rna[keep_rna].to_memory()
+
+        ## create dev_stage labels
+        rna.obs['dev_stage'] = rna.obs['Donor ID'].apply(lambda x: x[:-1])
+        atac.obs['dev_stage'] = atac.obs['Donor ID'].apply(lambda x: x[:-1])
 
     elif args.genes_by_peaks_str is None:
 
@@ -1060,10 +1069,10 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
 
         ## Subset to variable features
         if hvg_only:
-            sc.pp.highly_variable_genes(atac, n_top_genes=200000) # sc.pl.highly_variable_genes(atac)
+            sc.pp.highly_variable_genes(atac, n_top_genes=10000) # sc.pl.highly_variable_genes(atac)
             atac = atac[:, atac.var['highly_variable'].astype(bool)].to_memory()
 
-            sc.pp.highly_variable_genes(rna, n_top_genes=10000) # sc.pl.highly_variable_genes(rna)
+            sc.pp.highly_variable_genes(rna, n_top_genes=1000) # sc.pl.highly_variable_genes(rna)
             rna = rna[:, rna.var['highly_variable'].astype(bool)].to_memory()
 
         # min-max scaling
@@ -1123,10 +1132,6 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
-
-    ## create dev_stage labels
-    rna.obs['dev_stage'] = rna.obs['Donor ID'].apply(lambda x: x[:-1])
-    atac.obs['dev_stage'] = atac.obs['Donor ID'].apply(lambda x: x[:-1])
 
     if return_type == 'loaders':
         rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
