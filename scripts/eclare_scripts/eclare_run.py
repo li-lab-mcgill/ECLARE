@@ -30,6 +30,8 @@ if __name__ == "__main__":
                         help='Job ID of CLIP training')
     parser.add_argument('--experiment_job_id', type=str, default=None,
                         help='Job ID of experiment')
+    parser.add_argument('--ordinal_job_id', type=str, default=None,
+                        help='Job ID of ORDINAL training')
     parser.add_argument('--total_epochs', type=int, default=2,
                         help='number of epochs')
     parser.add_argument('--batch_size', type=int, default=800,
@@ -108,22 +110,40 @@ if __name__ == "__main__":
     elif (args.source_dataset is None) and (args.target_dataset == 'MDD'):
         model_uri_paths_str = f'clip_mdd_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'
 
-
     model_uri_paths = glob(os.path.join(outpath, model_uri_paths_str))
     assert len(model_uri_paths) > 0, f'Model URI path not found @ {model_uri_paths_str}'
+
+    # ordinal model
+    if args.ordinal_job_id is not None:
+        ordinal_model_uri_paths_str = f'ordinal_*{args.ordinal_job_id}/model_uri.txt'
+        ordinal_model_uri_paths = glob(os.path.join(outpath, ordinal_model_uri_paths_str))
+        assert len(ordinal_model_uri_paths) > 0, f'Model URI path not found @ {ordinal_model_uri_paths_str}'
+
+        ## Load the model
+        with open(ordinal_model_uri_paths[0], 'r') as f:
+            model_uris = f.read().strip().splitlines()
+            model_uri = model_uris[0]
+        ordinal_model = mlflow.pytorch.load_model(model_uri, device=device)
+
+    else:
+        ordinal_model = None
 
     ##Get student loaders
     args_tmp = deepcopy(args)
     args_tmp.source_dataset = args.target_dataset
 
-    if (target_dataset_og == 'DLPFC_Anderson') or (target_dataset_og == 'DLPFC_Ma'):
+    if (target_dataset_og == 'DLPFC_Anderson') or (target_dataset_og == 'DLPFC_Ma') or (target_dataset_og == 'PFC_Zhu'):
         args_tmp.target_dataset = None  # could be any dataset, specified to skip processing (or do further zero-shot tasks)
     else:
         args_tmp.target_dataset = 'MDD'
 
     student_setup_func = return_setup_func_from_dataset(args.target_dataset)
-    student_rna_train_loader, student_atac_train_loader, student_atac_train_num_batches, student_atac_train_n_batches_str_length, student_atac_train_total_epochs_str_length, student_rna_valid_loader, student_atac_valid_loader, student_atac_valid_num_batches, student_atac_valid_n_batches_str_length, student_atac_valid_total_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
-        student_setup_func(args_tmp, return_type='loaders')
+    if args.ordinal_job_id is None:
+        student_rna_train_loader, student_atac_train_loader, student_atac_train_num_batches, student_atac_train_n_batches_str_length, student_atac_train_total_epochs_str_length, student_rna_valid_loader, student_atac_valid_loader, student_atac_valid_num_batches, student_atac_valid_n_batches_str_length, student_atac_valid_total_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
+                student_setup_func(args_tmp, return_type='loaders')
+    else:
+        student_rna_train_loader, student_atac_train_loader, student_atac_train_num_batches, student_atac_train_n_batches_str_length, student_atac_train_total_epochs_str_length, student_rna_valid_loader, student_atac_valid_loader, student_atac_valid_num_batches, student_atac_valid_n_batches_str_length, student_atac_valid_total_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
+            student_setup_func(args_tmp, return_type='loaders', keep_group=[''])
     
     ## Setup teachers
     datasets, models, teacher_rna_train_loaders, teacher_atac_train_loaders, teacher_rna_valid_loaders, teacher_atac_valid_loaders = \
@@ -211,7 +231,7 @@ if __name__ == "__main__":
 
             if not args.tune_hyperparameters:
 
-                student_model, metrics_dict = run_ECLARE(**run_args, params=default_hyperparameters, device=device)
+                student_model, metrics_dict = run_ECLARE(**run_args, ordinal_model=ordinal_model, params=default_hyperparameters, device=device)
                 model_str = "trained_model"
 
             else:
@@ -221,7 +241,7 @@ if __name__ == "__main__":
                 ## run best model
                 run_args['trial'] = None
                 run_args['args'].total_epochs = 100
-                student_model, _ = run_ECLARE(**run_args, params=best_params, device=device)
+                student_model, _ = run_ECLARE(**run_args, ordinal_model=ordinal_model, params=best_params, device=device)
                 model_str = "best_model"
 
             ## infer signature

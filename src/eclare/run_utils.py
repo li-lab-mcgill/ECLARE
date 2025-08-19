@@ -10,7 +10,7 @@ import mlflow
 import subprocess
 from scipy.spatial.distance import squareform
 
-from coral_pytorch.dataset import levels_from_labelbatch
+from coral_pytorch.dataset import levels_from_labelbatch, proba_to_label
 from coral_pytorch.losses import coral_loss
 
 from eclare.models import CLIP, SpatialCLIP, ORDINAL
@@ -39,6 +39,12 @@ def run_CLIP(
     model = CLIP(n_peaks=n_peaks, n_genes=n_genes, **params).to(device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    # Log model parameters with MLflow
+    mlflow.log_params(params)
+    mlflow.log_param("paired", paired_target)
+    mlflow.log_param("n_genes", n_genes)
+    mlflow.log_param("n_peaks", n_peaks)
 
     ## log initial valid loss
     with torch.inference_mode():
@@ -356,11 +362,12 @@ def eclare_pass(
     lambd,
     optimizer,
     knowledge_distillation_fn,
-    loop_order
+    loop_order,
+    ordinal_model=None
     ):
 
-    # Extract datasets from iterators
-    datasets = list(teacher_rna_iterators.keys())
+    # Extract datasets
+    datasets = list(models.keys())
 
     # Initialize iterators for each data loader
     teacher_rna_iterators = {dataset: iter(loader) for dataset, loader in teacher_rna_iterators.items()}
@@ -370,12 +377,22 @@ def eclare_pass(
     student_atac_iterator = iter(student_atac_iterator)
 
     # Determine the number of batches per dataset
-    num_batches_per_dataset = {
-        dataset: min(
-            len(teacher_rna_iterators[dataset]), len(teacher_atac_iterators[dataset]), len(student_rna_iterator), len(student_atac_iterator)
-        )
-        for dataset in datasets
-    }
+    if ordinal_model is None:
+        num_batches_per_dataset = {
+            dataset: min(
+                len(teacher_rna_iterators[dataset]), len(teacher_atac_iterators[dataset]), len(student_rna_iterator), len(student_atac_iterator)
+            )
+            for dataset in datasets
+        }
+    else:
+        num_batches_per_dataset = {'student': min(len(student_rna_iterator), len(student_atac_iterator))}
+
+        coral_probs = lambda p: torch.cat([1 - p[:, :1], p[:, :-1] - p[:, 1:], p[:, -1:]], dim=1)
+
+        ## get matching indices for datasets and ordinal classes
+        classes_lookup = {val: idx for idx, val in enumerate(ordinal_model.ordinal_classes)}
+        matching_indices = [classes_lookup[d] for d in datasets]
+
 
     # Determine the global minimum number of batches
     if knowledge_distillation_fn.paired:
@@ -426,32 +443,39 @@ def eclare_pass(
         for inner in (tqdm(inner_iterable, leave=False) if loop_order == 'datasets_first' else inner_iterable):
             dataset = outer if loop_order == 'datasets_first' else inner
 
-            # Retrieve the next batch from each iterator
-            try:
-                teacher_rna_dat = next(teacher_rna_iterators[dataset])
-                teacher_atac_dat = next(teacher_atac_iterators[dataset])
+            if ordinal_model is None:
+                # Retrieve the next batch from each iterator
+                try:
+                    teacher_rna_dat = next(teacher_rna_iterators[dataset])
+                    teacher_atac_dat = next(teacher_atac_iterators[dataset])
 
-            except StopIteration:
-                # If any iterator runs out of data, continue to the next iteration
-                continue
+                    assert (student_rna_dat.obs_names == teacher_rna_dat.obs_names).all()
+                    assert (student_atac_dat.obs_names == teacher_atac_dat.obs_names).all()
+
+                except StopIteration:
+                    # If any iterator runs out of data, continue to the next iteration
+                    continue
+
+                # Extract teacher data
+                teacher_rna_cells = teacher_rna_dat.X.float().to(device)
+                teacher_atac_cells = teacher_atac_dat.X.float().to(device)
+
+            else:
+                teacher_rna_cells = student_rna_cells.clone()
+                teacher_atac_cells = student_atac_cells.clone()
 
             # Load the model for that dataset
             model = models[dataset]
 
             # Project teacher RNA data
-            teacher_rna_cells = teacher_rna_dat.X.float().to(device)
             teacher_rna_latents, _ = model(teacher_rna_cells, modality=0)
 
             # Project teacher ATAC data
-            teacher_atac_cells = teacher_atac_dat.X.float().to(device)
             teacher_atac_latents, _ = model(teacher_atac_cells, modality=1)
 
             ## Ensure that the teacher latents are detached
             teacher_rna_latents = teacher_rna_latents.detach()
             teacher_atac_latents = teacher_atac_latents.detach()
-
-            assert (student_rna_dat.obs_names == teacher_rna_dat.obs_names).all()
-            assert (student_atac_dat.obs_names == teacher_atac_dat.obs_names).all()
 
             ## compute teacher losses
             distil_loss, distil_loss_T, align_loss_scaled, align_loss_T_scaled, offset, offset_T = \
@@ -485,13 +509,46 @@ def eclare_pass(
         offsets = torch.stack(offsets)
         offsets_T = torch.stack(offsets_T)
 
-        ## Compute distillation loss weighted by alignment loss, if more than one teacher
-        mean_distil_loss, teacher_weights, teacher_T_weights = \
-            knowledge_distillation_fn.distil_loss_weighting( distil_losses, distil_losses_T, (offsets - align_losses), (offsets_T - align_losses_T))
+        if ordinal_model is None:
+                
+            ## Compute distillation loss weighted by alignment loss, if more than one teacher
+            mean_distil_loss, teacher_weights, teacher_T_weights = \
+                knowledge_distillation_fn.distil_loss_weighting( distil_losses, distil_losses_T, (offsets - align_losses), (offsets_T - align_losses_T))
 
-        ## Get student align loss
-        _, _, align_loss_scaled, _, _, _ = \
-            knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'student')
+            ## Get student align loss
+            _, _, align_loss_scaled, _, _, _ = \
+                knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'student')
+
+        else:
+
+            ## project cells/nuclei
+            _, student_rna_probas, _ = ordinal_model(student_rna_cells, modality=0, normalize=0)
+            _, student_atac_probas, _ = ordinal_model(student_atac_cells, modality=1, normalize=0)
+
+            ## get teacher weights from probas as per https://chatgpt.com/share/68a3d08c-9b4c-8009-9132-f777e3324e52
+            teacher_weights = coral_probs(student_rna_probas)
+            teacher_T_weights = coral_probs(student_atac_probas)
+
+            ## re-order teacher weights to match datasets
+            teacher_weights = teacher_weights[:, matching_indices]
+            teacher_T_weights = teacher_T_weights[:, matching_indices]
+
+            if len(datasets) > 1:
+
+                ## check that shapes match - no broadcasting allowed
+                assert (teacher_weights.shape == distil_losses.T.shape)
+                assert (teacher_T_weights.shape == distil_losses.T.shape)
+                assert (teacher_weights.shape == align_losses.T.shape)
+                assert (teacher_T_weights.shape == align_losses.T.shape)
+
+                ## get weighted losses
+                mean_distil_loss = (teacher_weights * distil_losses.T).mean() + (teacher_T_weights * distil_losses_T.T).mean()
+                align_loss_scaled = (teacher_weights * align_losses.T).mean() + (teacher_T_weights * align_losses_T.T).mean()
+
+            else:
+                mean_distil_loss = distil_losses.mean() + distil_losses_T.mean()
+                align_loss_scaled = align_losses.mean() + align_losses_T.mean()
+
 
         ## Compute total loss as convex combination of CLIP loss and average distillation loss
         total_loss = (lambd * mean_distil_loss) + ((1-lambd) * align_loss_scaled)
@@ -541,6 +598,7 @@ def run_ECLARE(
     teacher_rna_valid_loaders,
     teacher_atac_valid_loaders,
     teacher_models,
+    ordinal_model=None,
     trial: Trial = None,
     params: dict = {},
     device: str = 'cpu',
@@ -595,7 +653,8 @@ def run_ECLARE(
             params.get('distil_lambda', 0.1),
             None,
             knowledge_distillation_fn,
-            loop_order
+            loop_order,
+            ordinal_model=ordinal_model
         )
 
         ## Update alignment loss scale
@@ -636,7 +695,8 @@ def run_ECLARE(
             params.get('distil_lambda', 0.1),
             optimizer,
             knowledge_distillation_fn,
-            loop_order
+            loop_order,
+            ordinal_model=ordinal_model
         )
 
         with torch.inference_mode():
@@ -654,7 +714,8 @@ def run_ECLARE(
                 params.get('distil_lambda', 0.1),
                 None,
                 knowledge_distillation_fn,
-                loop_order
+                loop_order,
+                ordinal_model=ordinal_model
             )
 
         # Add performance metrics from get_metrics
@@ -681,6 +742,7 @@ def run_ORDINAL(
     rna_valid_loader,
     atac_train_loader,
     atac_valid_loader,
+    ordinal_classes,
     trial: Trial = None,
     params: dict = {},
     device: str = 'cpu',
@@ -691,9 +753,16 @@ def run_ORDINAL(
     n_genes = rna_train_loader.dataset.shape[1]
     n_peaks = atac_train_loader.dataset.shape[1]
 
-    model = ORDINAL(n_peaks=n_peaks, n_genes=n_genes, **params).to(device=device)
+    model = ORDINAL(n_peaks, n_genes, ordinal_classes, **params).to(device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    # Log model parameters with MLflow
+    mlflow.log_params(params)
+    mlflow.log_param("ordinal_classes", ordinal_classes)
+    mlflow.log_param("paired", paired_target)
+    mlflow.log_param("n_genes", n_genes)
+    mlflow.log_param("n_peaks", n_peaks)
 
     ## initialize metrics dict
     metrics = {}

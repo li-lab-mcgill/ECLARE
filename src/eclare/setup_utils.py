@@ -1682,7 +1682,8 @@ def teachers_setup(model_paths, args, device, dataset_idx_dict=None):
         
         ## Get metadata and determine the dataset
         model_metadata = Model.load(model_uri)
-        dataset = model_metadata.metadata['source_dataset']
+        #dataset = model_metadata.metadata['source_dataset']
+        dataset = model_path.split('/')[-3] # TEMPORARY - get dataset from model path
         genes_by_peaks_str = model_metadata.metadata['genes_by_peaks_str']
         target_setup_func = return_setup_func_from_dataset(args.target_dataset)
 
@@ -1706,15 +1707,6 @@ def teachers_setup(model_paths, args, device, dataset_idx_dict=None):
         #rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
         #    source_setup_func(model_args_dict['args'], pretrain=None, return_type='loaders', dataset=dataset)
 
-        ## TMP - create deepcopy of args
-        args_tmp = deepcopy(args)
-        args_tmp.source_dataset = dataset
-        args_tmp.genes_by_peaks_str = genes_by_peaks_str
-        
-        overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
-        target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
-            target_setup_func(args_tmp, return_type='loaders')
-        
         #if args.train_encoders:
         #    model.train()
 
@@ -1723,10 +1715,27 @@ def teachers_setup(model_paths, args, device, dataset_idx_dict=None):
         if args.source_dataset_embedder:
             dataset_idx_dict[dataset] = m
 
-        target_rna_train_loaders[dataset] = target_rna_train_loader
-        target_atac_train_loaders[dataset] = target_atac_train_loader
-        target_rna_valid_loaders[dataset] = target_rna_valid_loader
-        target_atac_valid_loaders[dataset] = target_atac_valid_loader
+        if args.ordinal_job_id is None:
+            ## TMP - create deepcopy of args
+            args_tmp = deepcopy(args)
+            args_tmp.source_dataset = dataset
+            args_tmp.genes_by_peaks_str = genes_by_peaks_str
+            
+            overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
+            target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
+                target_setup_func(args_tmp, return_type='loaders')
+            
+            target_rna_train_loaders[dataset] = target_rna_train_loader
+            target_atac_train_loaders[dataset] = target_atac_train_loader
+            target_rna_valid_loaders[dataset] = target_rna_valid_loader
+            target_atac_valid_loaders[dataset] = target_atac_valid_loader
+
+        #else:
+        #    target_rna_train_loaders[dataset] = None
+        #    target_atac_train_loaders[dataset] = None
+        #    target_rna_valid_loaders[dataset] = None
+        #    target_atac_valid_loaders[dataset] = None
+
 
     return datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders
 
