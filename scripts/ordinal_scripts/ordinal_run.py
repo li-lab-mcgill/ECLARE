@@ -61,9 +61,12 @@ if __name__ == "__main__":
     assert args.source_dataset == 'PFC_Zhu', "ORDINAL only implemented for PFC_Zhu"
     source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
+    ## specifify dev_stages
+    dev_stages = ['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult']
+
     ## get data loaders
     rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
-        source_setup_func(args, return_type='loaders', keep_group=['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult'])
+        source_setup_func(args, return_type='loaders', keep_group=dev_stages)
     
     run_args = {
         'args': args,
@@ -71,6 +74,7 @@ if __name__ == "__main__":
         'rna_valid_loader': rna_valid_loader,
         'atac_train_loader': atac_train_loader,
         'atac_valid_loader': atac_valid_loader,
+        'ordinal_classes': dev_stages,
     }
 
     ## get ordinal_job_id from outdir

@@ -143,13 +143,16 @@ class CLIP(nn.Module):
                 return latent, None
             
 class ORDINAL(CLIP):
-    def __init__(self, n_peaks, n_genes, **hparams):
+    def __init__(self, n_peaks, n_genes, ordinal_classes, **hparams):
         super().__init__(n_peaks, n_genes, **hparams)
         num_units = hparams.get('num_units', 256)
 
         # Add ordinal_layer for both modalities
-        self.ordinal_layer_rna = CoralLayer(size_in=num_units, num_classes=6) # set to 6 for now, per PFC_Zhu dev_stages
-        self.ordinal_layer_atac = CoralLayer(size_in=num_units, num_classes=6)
+        self.ordinal_classes = ordinal_classes
+        num_classes = len(ordinal_classes)
+        
+        self.ordinal_layer_rna = CoralLayer(size_in=num_units, num_classes=num_classes)
+        self.ordinal_layer_atac = CoralLayer(size_in=num_units, num_classes=num_classes)
 
     def forward(self, x, modality: int, normalize: int = 1):
         '''

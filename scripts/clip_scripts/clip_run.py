@@ -193,7 +193,7 @@ if __name__ == "__main__":
                 "modalities": ["rna", "atac"],
                 "modality_feature_sizes": [n_genes, n_peaks],
                 "genes_by_peaks_str": args.genes_by_peaks_str,
-                "source_dataset": args.source_dataset,
+                "source_dataset": args.keep_group if args.keep_group is not None else args.source_dataset,
                 "target_dataset": args.target_dataset,
             }
 
