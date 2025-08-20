@@ -991,7 +991,8 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
             ATAC_file = f"atac_{args.genes_by_peaks_str}.h5ad"
             binary_mask_file = genes_peaks_dict_file = genes_to_peaks_binary_mask = genes_peaks_dict = None
 
-        if (len(keep_group) == 1) and (keep_group != ['']): # load data for a single developmental stage, should already be processed
+        ## load data for a single developmental stage, should already be processed
+        if (len(keep_group) == 1) and (keep_group != ['']):
             dev_stage = keep_group[0]
             RNA_file = f"{dev_stage}_{RNA_file}"
             ATAC_file = f"{dev_stage}_{ATAC_file}"
@@ -1140,7 +1141,43 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
     
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
-      
+
+def cortex_velmeshev_setup(args, cell_group='cell_type', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='Cortex_Velmeshev',\
+    keep_group=['Inf', 'Child', 'Adol', 'Adult']):
+    
+    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'Cortex_Velmeshev')
+
+    if args.genes_by_peaks_str is not None:
+
+        raise NotImplementedError("cortex_velmeshev_setup with genes_by_peaks_str is not implemented yet.")
+
+    elif args.genes_by_peaks_str is None:
+
+        file = "data.h5ad"
+        fullpath = os.path.join(datapath, file)
+    
+        data = anndata.read_h5ad(fullpath)
+
+def pfc_v1_wang_setup(args, cell_group='cell_type', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_Wang',\
+    keep_group=['Inf', 'Child', 'Adol', 'Adult']):
+
+    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'PFC_V1_Wang')
+
+    if args.genes_by_peaks_str is not None:
+
+        raise NotImplementedError("pfc_v1_wang_setup with genes_by_peaks_str is not implemented yet.")
+
+    elif args.genes_by_peaks_str is None:
+
+        file = "data.h5ad"
+        fullpath = os.path.join(datapath, file)
+
+        data = anndata.read_h5ad(fullpath)
+
+        ## Subset to protein-coding genes
+        if protein_coding_only:
+            data = get_protein_coding_genes(data)
+
 def dlpfc_anderson_setup(args, cell_group='predicted.id', batch_group='id', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Anderson'):
         
     atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Anderson', 'snMultiome')
