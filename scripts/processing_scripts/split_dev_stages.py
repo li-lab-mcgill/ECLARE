@@ -10,21 +10,25 @@ from eclare.setup_utils import return_setup_func_from_dataset
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Split dev stages')
-    parser.add_argument('--source_dataset', type=str, default='PFC_Zhu')
+    parser.add_argument('--source_dataset', type=str, default='PFC_V1_Wang')
     parser.add_argument('--target_dataset', type=str, default=None)
-    parser.add_argument('--genes_by_peaks_str', type=str, default='9832_by_70751')
+    parser.add_argument('--genes_by_peaks_str', type=str, default='9914_by_63404')
     args = parser.parse_args()
 
     ## SOURCE dataset setup function
-    assert args.source_dataset == 'PFC_Zhu', "ORDINAL only implemented for PFC_Zhu"
+    developmental_datasets = ['PFC_Zhu', 'PFC_V1_Wang']
+    assert args.source_dataset in developmental_datasets, "ORDINAL only implemented for developmental datasets"
     source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
-    dev_stages = ['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult']
-    #dev_stages = ['Fet', 'Inf', 'Child', 'Adol', 'Adult'] # combine EaFet and LaFet into Fet
+    dev_stages_dict = {
+        'PFC_Zhu': ['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult'],
+        'PFC_V1_Wang': ['FirstTrim', 'SecTrim', 'ThirdTrim', 'Inf', 'Adol']
+    }
+    dev_stages = dev_stages_dict[args.source_dataset]
 
     ## get data - preload all dev stages, then split into dev stages in loop
     rna, atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath = \
-        source_setup_func(args, return_type='data', keep_group=dev_stages)
+        source_setup_func(args, return_type='data', keep_group=[''])
 
     print('Total number of cells:', len(rna))
 

@@ -29,10 +29,8 @@ def ordinal_metrics(rna_probas, atac_probas, rna_targets, atac_targets):
 
     mae_rna = torch.mean(torch.abs(rna_labels - rna_targets))
     mae_atac = torch.mean(torch.abs(atac_labels - atac_targets))
-    mse_rna = torch.mean((rna_labels - rna_targets)**2)
-    mse_atac = torch.mean((atac_labels - atac_targets)**2)
 
-    return mae_rna, mae_atac, mse_rna, mse_atac
+    return mae_rna, mae_atac
 
 def get_metrics(model, rna_valid_loader, atac_valid_loader, device, paired=True):
 

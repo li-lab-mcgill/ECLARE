@@ -58,15 +58,13 @@ if __name__ == "__main__":
     print(f"Allocated CPUs: {cpus_per_task}")
 
     ## SOURCE dataset setup function
-    assert args.source_dataset == 'PFC_Zhu', "ORDINAL only implemented for PFC_Zhu"
+    developmental_datasets = ['PFC_Zhu', 'PFC_V1_Wang']
+    assert args.source_dataset in developmental_datasets, "ORDINAL only implemented for developmental datasets"
     source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
-    ## specifify dev_stages
-    dev_stages = ['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult']
-
     ## get data loaders
-    rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
-        source_setup_func(args, return_type='loaders', keep_group=dev_stages)
+    dev_stages, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
+        source_setup_func(args, return_type ='loaders_with_dev_stages', keep_group=[''])
     
     run_args = {
         'args': args,
@@ -186,7 +184,7 @@ if __name__ == "__main__":
             rna_latents = rna_latents.detach().cpu().numpy()
             atac_latents = atac_latents.detach().cpu().numpy()
 
-            color_map_dev_stage = create_celltype_palette(rna_labels, atac_labels, sequential=True, labels=['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult'], plot_color_palette=False)
+            color_map_dev_stage = create_celltype_palette(rna_labels, atac_labels, sequential=True, labels=dev_stages, plot_color_palette=False)
 
             rna_condition = ['nan'] * len(rna_labels)
             atac_condition = ['nan'] * len(atac_labels)
