@@ -11,10 +11,14 @@ TMPDIR=${OUTPATH}/clip_${JOB_ID}
 ## Copy scripts to sub-directory for reproducibility
 cp ./scripts/clip_scripts/clip_run.py ./scripts/clip_scripts/clip_dev_stages.sh $TMPDIR
 
-dev_stages=("EaFet" "LaFet" "Inf" "Child" "Adol" "Adult")
-dataset=("PFC_Zhu")
+#dev_stages=("EaFet" "LaFet" "Inf" "Child" "Adol" "Adult")
+#dataset=("PFC_Zhu")
+#genes_by_peaks_str=("9832_by_70751")
 
-genes_by_peaks_str=("9832_by_70751")
+dev_stages=("FirstTrim" "SecTrim" "ThirdTrim" "Inf" "Adol")
+dataset=("PFC_V1_Wang")
+genes_by_peaks_str=("9914_by_63404")
+
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6 # only relevant for multi-replicate tasks
@@ -28,7 +32,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-total_epochs=100
+total_epochs=10
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)
@@ -85,7 +89,7 @@ run_clip_task_on_gpu() {
     --batch_size=800 \
     --feature="${feature}" \
     --metric_to_optimize="1-foscttm" \
-    --job_id=$JOB_ID &
+    --job_id=$JOB_ID
     #--tune_hyperparameters \
     #--n_trials=3 &
 }

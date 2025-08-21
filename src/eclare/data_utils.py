@@ -173,7 +173,7 @@ def create_loaders(
         stratified: bool=True,
         min_cells: int=12):
     
-    celltypes = data.obs[cell_group_key].values
+    celltypes = pd.Categorical(data.obs[cell_group_key].values)
 
     ## detect celltypes with less than min_cells cells
     celltypes_counts = celltypes.value_counts()

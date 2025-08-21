@@ -803,9 +803,10 @@ def ordinal_pass(rna_loader, atac_loader, model, optimizer):
 
     device = next(model.parameters()).device
     epoch_losses = {'ordinal_loss_rna': [], 'ordinal_loss_atac': []}
-    epoch_metrics = {'mae_rna': [], 'mae_atac': [], 'mse_rna': [], 'mse_atac': []}
+    epoch_metrics = {'mae_rna': [], 'mae_atac': []}
 
-    dev_stage_to_int = {'EaFet': 0, 'LaFet': 1, 'Inf': 2, 'Child': 3, 'Adol': 4, 'Adult': 5}
+    #dev_stage_to_int = {'EaFet': 0, 'LaFet': 1, 'Inf': 2, 'Child': 3, 'Adol': 4, 'Adult': 5}
+    dev_stage_to_int = {cl: i for i, cl in enumerate(model.ordinal_classes)}
         
     for rna_dat, atac_dat in (align_itr_pbar := tqdm( zip(rna_loader, atac_loader))):
 
@@ -844,11 +845,9 @@ def ordinal_pass(rna_loader, atac_loader, model, optimizer):
             optimizer.step()
 
         ## get metrics
-        mae_rna, mae_atac, mse_rna, mse_atac = ordinal_metrics(rna_probas, atac_probas, rna_dev_stages, atac_dev_stages)
+        mae_rna, mae_atac = ordinal_metrics(rna_probas, atac_probas, rna_dev_stages, atac_dev_stages)
         epoch_metrics['mae_rna'].append(mae_rna.item())
         epoch_metrics['mae_atac'].append(mae_atac.item())
-        #epoch_metrics['mse_rna'].append(mse_rna.item())
-        #epoch_metrics['mse_atac'].append(mse_atac.item())
 
         align_itr_pbar.set_description(f"{'VALID' if optimizer is None else 'TRAIN'} itr -- ORDINAL (loss: {loss.item():.4f})")
 

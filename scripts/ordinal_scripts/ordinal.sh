@@ -12,7 +12,7 @@ TMPDIR=${OUTPATH}/ordinal_${JOB_ID}
 cp ./scripts/ordinal_scripts/ordinal_run.py ./scripts/ordinal_scripts/ordinal.sh $TMPDIR
  
 ## Define total number of epochs
-total_epochs=500
+total_epochs=10
 
 
 # Function to check if a GPU is idle
@@ -58,6 +58,9 @@ run_name = 'ORDINAL_${JOB_ID}'
 client.create_run(experiment_id, run_name=run_name)
 "
 
+source_dataset="PFC_V1_Wang"
+genes_by_peaks_str="9914_by_63404"
+
 ## Make new sub-sub-directory for source dataset
 mkdir -p $TMPDIR
 
@@ -69,6 +72,7 @@ CUDA_VISIBLE_DEVICES=$gpu_id \
 python ${ECLARE_ROOT}/scripts/ordinal_scripts/ordinal_run.py \
 --outdir $TMPDIR \
 --total_epochs=$total_epochs \
---genes_by_peaks_str="9832_by_70751" \
---feature="ordinal" \
+--source_dataset=$source_dataset \
+--genes_by_peaks_str=$genes_by_peaks_str \
+--feature=$source_dataset \
 --job_id $JOB_ID

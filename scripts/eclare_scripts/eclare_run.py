@@ -132,7 +132,8 @@ if __name__ == "__main__":
     args_tmp = deepcopy(args)
     args_tmp.source_dataset = args.target_dataset
 
-    if (target_dataset_og == 'DLPFC_Anderson') or (target_dataset_og == 'DLPFC_Ma') or (target_dataset_og == 'PFC_Zhu'):
+    datasets_with_unaligned = ['DLPFC_Anderson', 'DLPFC_Ma', 'PFC_Zhu', 'PFC_V1_Wang']
+    if target_dataset_og in datasets_with_unaligned:
         args_tmp.target_dataset = None  # could be any dataset, specified to skip processing (or do further zero-shot tasks)
     else:
         args_tmp.target_dataset = 'MDD'
