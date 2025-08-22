@@ -14,14 +14,15 @@ cp ./scripts/eclare_scripts/eclare_run.py ./scripts/eclare_scripts/eclare_dev_st
 ## Define target datasets
 #target_dataset=("PFC_Zhu")
 #genes_by_peaks_str=("9832_by_70751")
+#clip_job_id='18175628'
+#ordinal_job_id='21125926'
 
 target_dataset=("PFC_V1_Wang")
 genes_by_peaks_str=("9914_by_63404")
-
-## Define JOB IDs and total number of epochs
 clip_job_id='20194800'
 ordinal_job_id='20180433'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
-total_epochs=10
+
+total_epochs=100
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6

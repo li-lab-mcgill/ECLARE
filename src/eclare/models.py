@@ -154,7 +154,7 @@ class ORDINAL(CLIP):
         self.ordinal_layer_rna = CoralLayer(size_in=num_units, num_classes=num_classes)
         self.ordinal_layer_atac = CoralLayer(size_in=num_units, num_classes=num_classes)
 
-    def forward(self, x, modality: int, normalize: int = 1):
+    def forward(self, x, modality: int, normalize: int = 0):
         '''
         modality: 0 for rna, 1 for atac. encode with int to enable model scriptability with torch.jit
         '''

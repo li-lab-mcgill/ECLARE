@@ -12,8 +12,12 @@ TMPDIR=${OUTPATH}/ordinal_${JOB_ID}
 cp ./scripts/ordinal_scripts/ordinal_run.py ./scripts/ordinal_scripts/ordinal.sh $TMPDIR
  
 ## Define total number of epochs
-total_epochs=10
+total_epochs=100
 
+source_dataset="PFC_V1_Wang"
+genes_by_peaks_str="9914_by_63404"
+#source_dataset="PFC_Zhu"
+#genes_by_peaks_str="9832_by_70751"
 
 # Function to check if a GPU is idle
 is_gpu_idle() {
@@ -57,9 +61,6 @@ client = MlflowClient()
 run_name = 'ORDINAL_${JOB_ID}'
 client.create_run(experiment_id, run_name=run_name)
 "
-
-source_dataset="PFC_V1_Wang"
-genes_by_peaks_str="9914_by_63404"
 
 ## Make new sub-sub-directory for source dataset
 mkdir -p $TMPDIR
