@@ -17,13 +17,14 @@ cp ./scripts/eclare_scripts/eclare_run.py ./scripts/kd_clip_scripts/kd_clip_dev_
 #genes_by_peaks_str=("9832_by_70751")
 
 target_dataset=("PFC_V1_Wang")
-source_datasets=("FirstTrim" "SecTrim" "ThirdTrim" "Inf" "Adol")
+#source_datasets=("FirstTrim" "SecTrim" "ThirdTrim" "Inf" "Adol")
+source_datasets=("Inf" "Adol")
 genes_by_peaks_str=("9914_by_63404")
 
 ## Define JOB IDs and total number of epochs
-clip_job_id='20194800'
-ordinal_job_id='20180433'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
-total_epochs=10
+clip_job_id='21141050'
+ordinal_job_id='21141050'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
+total_epochs=100
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6
@@ -96,7 +97,7 @@ run_eclare_task_on_gpu() {
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --batch_size=500 \
+    --batch_size=800 \
     --feature="'$feature'"
     #--tune_hyperparameters \
     #--total_epochs=10 \
