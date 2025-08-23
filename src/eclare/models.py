@@ -143,7 +143,7 @@ class CLIP(nn.Module):
                 return latent, None
             
 class ORDINAL(CLIP):
-    def __init__(self, n_peaks, n_genes, ordinal_classes, **hparams):
+    def __init__(self, n_peaks, n_genes, ordinal_classes, shared_coral_layer=False, **hparams):
         super().__init__(n_peaks, n_genes, **hparams)
         num_units = hparams.get('num_units', 256)
 
@@ -151,8 +151,13 @@ class ORDINAL(CLIP):
         self.ordinal_classes = ordinal_classes
         num_classes = len(ordinal_classes)
         
-        self.ordinal_layer_rna = CoralLayer(size_in=num_units, num_classes=num_classes)
-        self.ordinal_layer_atac = CoralLayer(size_in=num_units, num_classes=num_classes)
+        if shared_coral_layer:
+            self.ordinal_layer = CoralLayer(size_in=num_units, num_classes=num_classes)
+            self.ordinal_layer_rna = self.ordinal_layer
+            self.ordinal_layer_atac = self.ordinal_layer
+        else:
+            self.ordinal_layer_rna = CoralLayer(size_in=num_units, num_classes=num_classes)
+            self.ordinal_layer_atac = CoralLayer(size_in=num_units, num_classes=num_classes)
 
     def forward(self, x, modality: int, normalize: int = 0):
         '''

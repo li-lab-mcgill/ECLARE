@@ -413,7 +413,8 @@ def eclare_pass(
     device = next(student_model.parameters()).device
 
     # Initialize dictionaries to accumulate losses
-    epoch_total_losses, epoch_align_loss, epoch_distil_loss = [{dataset: 0.0 for dataset in datasets+[target_dataset_og]} for _ in range(3)]
+    epoch_distil_loss = {dataset: 0.0 for dataset in datasets+[target_dataset_og]}
+    epoch_total_losses, epoch_align_loss = [{target_dataset_og: 0.0} for _ in range(2)]
     epoch_teacher_weights, epoch_teacher_T_weights = [{dataset: 0.0 for dataset in datasets} for _ in range(2)]
 
     for outer in tqdm(outer_iterable):
@@ -428,7 +429,7 @@ def eclare_pass(
                 continue
 
         ## Project student RNA data (teacher)
-        student_rna_cells = student_rna_dat.X.float().to(device)
+        student_rna_cells = student_rna_dat.X.float() if student_rna_dat.X.device == device else student_rna_dat.X.float().to(device)
         student_rna_latents, _ = student_model(student_rna_cells, modality=0)
 
         ## Project student ATAC data (teacher)
@@ -496,9 +497,9 @@ def eclare_pass(
             total_loss = (lambd * distil_loss) + ((1-lambd) * align_loss_scaled)
 
             # Accumulate scalar loss values for logging
-            epoch_total_losses[dataset]     += total_loss.mean().item()
+            #epoch_align_loss[dataset]       += align_loss_scaled.mean().item()
+            #epoch_total_losses[dataset]     += total_loss.mean().item()
             epoch_distil_loss[dataset]      += distil_loss.mean().item()
-            epoch_align_loss[dataset]       += align_loss_scaled.mean().item()
 
 
         ## Stack teacher distillation losses
@@ -543,7 +544,12 @@ def eclare_pass(
 
                 ## get weighted losses
                 mean_distil_loss = (teacher_weights * distil_losses.T).mean() + (teacher_T_weights * distil_losses_T.T).mean()
-                align_loss_scaled = (teacher_weights * align_losses.T).mean() + (teacher_T_weights * align_losses_T.T).mean()
+                #align_loss_scaled = (teacher_weights * align_losses.T).mean() + (teacher_T_weights * align_losses_T.T).mean()
+
+                ## Get student align loss
+                _, _, align_loss_scaled, _, _, _ = \
+                    knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'student', ot_clip_loss_weights=teacher_weights.T)
+
 
             else:
                 mean_distil_loss = distil_losses.mean() + distil_losses_T.mean()
@@ -573,16 +579,22 @@ def eclare_pass(
     
     # Add metrics
     for dataset in datasets+[target_dataset_og]:
-        metrics_dict[f'total_loss_{dataset}']   = epoch_total_losses[dataset] / num_batches
         metrics_dict[f'distil_loss_{dataset}']  = epoch_distil_loss[dataset] / num_batches
-        metrics_dict[f'align_loss_{dataset}']   = epoch_align_loss[dataset] / num_batches # could ignore non-teacher datasets since constant value across epochs
 
         if dataset != target_dataset_og:
             metrics_dict[f'teacher_weights_{dataset}']    = epoch_teacher_weights[dataset] / num_batches
             metrics_dict[f'teacher_T_weights_{dataset}']  = epoch_teacher_T_weights[dataset] / num_batches
             
+        elif dataset == target_dataset_og:
+            metrics_dict[f'align_loss_{dataset}']   = epoch_align_loss[dataset] / num_batches
+            metrics_dict[f'total_loss_{dataset}']   = epoch_total_losses[dataset] / num_batches
+            
     # Add weights_temperature to metrics
     metrics_dict['weights_temperature'] = knowledge_distillation_fn.weights_temperature.item()
+
+    # Clear accumulated lists at the end of each outer iteration
+    del teacher_weights, teacher_T_weights, distil_losses, align_losses, distil_losses_T, align_losses_T, offsets, offsets_T, distil_loss, align_loss_scaled, total_loss, mean_distil_loss
+    torch.cuda.empty_cache()  # Force CUDA memory cleanup
             
     return metrics_dict
 

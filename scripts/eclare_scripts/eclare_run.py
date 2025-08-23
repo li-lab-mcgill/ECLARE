@@ -69,8 +69,9 @@ if __name__ == "__main__":
 
     if torch.cuda.is_available():
         print('CUDA available')
-        device   = 'cuda'
         num_gpus = torch.cuda.device_count()
+        device   = torch.device(f'cuda:{num_gpus-1}')
+        torch.cuda.set_device(device.index)  # default device used by e.g. AnnLoader
     else:
         print('CUDA not available, set default to CPU')
         device   = 'cpu'
