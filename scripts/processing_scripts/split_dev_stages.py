@@ -22,7 +22,8 @@ if __name__ == '__main__':
 
     dev_stages_dict = {
         'PFC_Zhu': ['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult'],
-        'PFC_V1_Wang': ['FirstTrim', 'SecTrim', 'ThirdTrim', 'Inf', 'Adol']
+        'PFC_V1_Wang': ['FirstTrim', 'SecTrim', 'ThirdTrim', 'Inf', 'Adol'],
+        'Cortex_Velmeshev': ['2nd trimester', '3rd trimester', '0-1 years', '1-2 years', '2-4 years', '4-10 years', '10-20 years', 'Adult']
     }
     dev_stages = dev_stages_dict[args.source_dataset]
 

@@ -68,6 +68,9 @@ def return_setup_func_from_dataset(dataset_name):
     elif (dataset_name == 'PFC_V1_Wang'):
         setup_func = pfc_v1_wang_setup
 
+    elif (dataset_name == 'Cortex_Velmeshev'):
+        setup_func = cortex_velmeshev_setup
+
     return setup_func
 
 def get_protein_coding_genes(rna):
@@ -1153,9 +1156,11 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
 
 
 def cortex_velmeshev_setup(args, cell_group='cell_type', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='Cortex_Velmeshev',\
-    keep_group=['Inf', 'Child', 'Adol', 'Adult']):
+    keep_group=['10-20 years', 'Adult'], dev_group_key='Age_Range'):
     
-    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'Cortex_Velmeshev')
+    datapath = os.path.join(os.environ['DATAPATH'], 'Cortex_Velmeshev')
+    atac_datapath = os.path.join(datapath, 'atac')
+    rna_datapath = os.path.join(datapath, 'rna')
 
     if args.genes_by_peaks_str is not None:
 
@@ -1163,10 +1168,117 @@ def cortex_velmeshev_setup(args, cell_group='cell_type', batch_group='subject', 
 
     elif args.genes_by_peaks_str is None:
 
-        file = "data.h5ad"
-        fullpath = os.path.join(datapath, file)
+        #rna = anndata.read_h5ad(os.path.join(rna_datapath, "velmeshev_snRNA_seq.h5ad"))
+        #rna_meta = pd.read_csv(os.path.join(rna_datapath, "meta.tsv"), sep='\t')
+        #rna.obs = rna_meta.merge(rna.obs, left_on='Cell_ID', right_index=True).set_index('Cell_ID')
+
+        rna = anndata.read_h5ad(os.path.join(rna_datapath, "rna.h5ad"))
+        rna_meta = pd.read_csv(os.path.join(rna_datapath, "meta.tsv"), sep='\t')
+        rna.obs = rna_meta.merge(rna.obs, left_on='Cell_ID', right_index=True).set_index('Cell_ID')
+        rna.var['protein_coding'] = (rna.var['feature_type'] == 'protein_coding')
+        rna.var = rna.var.reset_index().set_index('feature_name')
+        rna.obs['Individual'] = rna.obs['Individual'].astype(str)
+        
+        atac = anndata.read_h5ad(os.path.join(atac_datapath, "atac_unprocessed.h5ad"))
+
+        ## Subset to protein-coding genes
+        if protein_coding_only:
+            rna = rna[:, rna.var['feature_type'] == 'protein_coding'].copy()
+
+        if return_raw_data and return_type == 'data':
+            return rna.to_memory(), atac.to_memory(), cell_group, None, None, atac_datapath, rna_datapath
+
+        ## Normalize data
+        ac.pp.tfidf(atac, scale_factor=1e4)
+        sc.pp.normalize_total(atac, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(atac)
+
+        sc.pp.normalize_total(rna, target_sum=1e4, exclude_highly_expressed=False)
+        sc.pp.log1p(rna)
+
+        ## Subset to variable features
+        if hvg_only:
+            sc.pp.highly_variable_genes(atac, n_top_genes=100000) # sc.pl.highly_variable_genes(atac)
+            atac = atac[:, atac.var['highly_variable'].astype(bool)].to_memory()
+
+            sc.pp.highly_variable_genes(rna, n_top_genes=10000) # sc.pl.highly_variable_genes(rna)
+            rna = rna[:, rna.var['highly_variable'].astype(bool)].to_memory()
+
+        # min-max scaling
+        sc.pp.scale(atac, zero_center=False, max_value=10)
+        sc.pp.scale(rna, zero_center=False,  max_value=10)
+
+        ## Save dummy-encoded overlapping intervals, use later as mask
+        genes_to_peaks_binary_mask_path = os.path.join(datapath, 'atac', f'genes_to_peaks_binary_mask_{rna.n_vars}_by_{atac.n_vars}.npz')
+
+        if not os.path.exists(genes_to_peaks_binary_mask_path):
+            print(f'peaks to genes mask not found, saving to {os.path.splitext(genes_to_peaks_binary_mask_path)[-1]}')
+            genes_to_peaks_binary_mask, genes_peaks_dict = get_genes_by_peaks(rna, atac, genes_to_peaks_binary_mask_path, window_size=250000)
+            #genes_to_peaks_binary_mask = pd.DataFrame(genes_to_peaks_binary_mask.toarray(), index=genes_peaks_dict['genes'], columns=genes_peaks_dict['peaks'])
+            
+        else:
+            print(f'peaks to genes mask found, loading {os.path.splitext(genes_to_peaks_binary_mask_path)[-1]}')
+            genes_to_peaks_binary_mask = load_npz(genes_to_peaks_binary_mask_path)
+            pkl_path = os.path.splitext(genes_to_peaks_binary_mask_path)[0] + '.pkl'
+            with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
+            #genes_to_peaks_binary_mask = pd.DataFrame(genes_to_peaks_binary_mask.toarray(), index=genes_peaks_dict['genes'], columns=genes_peaks_dict['peaks'])
+
+            ## ensure chrom:start-end format
+            genes_peaks_dict['peaks'] = pd.DataFrame(genes_peaks_dict['peaks'].str.split('[-:]', expand=True).to_list()).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1).values
+
+        ## find peaks and genes that overlap
+        overlapping_genes = set(rna.var.index).intersection(genes_peaks_dict['genes'])
+        overlapping_peaks = set(atac.var.index).intersection(genes_peaks_dict['peaks'])
+        #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ list(overlapping_genes) , list(overlapping_peaks) ]
+
+        ## subset RNA genes
+        rna = rna[:, rna.var.index.isin(overlapping_genes)].copy()
+        #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask.loc[rna.var.index,:]
+
+        ## subset ATAC peaks - requires ordering of peaks
+        atac = atac[:, atac.var.index.isin(overlapping_peaks)].copy()
+        #genes_to_peaks_binary_mask = genes_to_peaks_binary_mask.loc[:,atac.var.index]
+
+        ## sort peaks and genes
+        genes_sort_idxs = np.argsort(genes_peaks_dict['genes'].tolist())
+        peaks_sort_idxs = np.argsort(genes_peaks_dict['peaks'].tolist())
+
+        genes_peaks_dict['genes'] = genes_peaks_dict['genes'][genes_sort_idxs]
+        genes_peaks_dict['peaks'] = genes_peaks_dict['peaks'][peaks_sort_idxs]
+        genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ genes_sort_idxs , : ]
+        genes_to_peaks_binary_mask = genes_to_peaks_binary_mask[ : , peaks_sort_idxs ]
+
+        genes_sort_idxs = np.argsort(rna.var.index.tolist())
+        rna = rna[:,genes_sort_idxs]
+
+        peaks_sort_idxs = np.argsort(atac.var.index.tolist())
+        atac = atac[:,peaks_sort_idxs]
+
+        ## check alignment
+        print('Genes match:', (rna.var.index == genes_peaks_dict['genes']).all())
+        print('Peaks match:', (atac.var.index == genes_peaks_dict['peaks']).all())
+
+        
+    n_peaks, n_genes = atac.n_vars, rna.n_vars
+    print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
+
+    if return_type == 'loaders':
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
+        return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
-        data = anndata.read_h5ad(fullpath)
+    elif return_type == 'loaders_with_dev_stages':
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
+        dev_stages = ['2nd trimester', '3rd trimester', '0-1 years', '1-2 years', '2-4 years', '4-10 years', '10-20 years', 'Adult']
+        return dev_stages, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
+
+    elif return_type == 'data':
+        return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
+
+
+        
+
 
 def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_V1_Wang',\
     keep_group=['Adol'], dev_group_key='Group'):
