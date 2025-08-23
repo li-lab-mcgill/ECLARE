@@ -183,15 +183,17 @@ class Knowledge_distillation_fn(torch.nn.Module):
 
         return loss, loss_T
     
-    def ot_clip_loss_forward(self, teacher_logits, student_logits=None):
+    def ot_clip_loss_forward(self, teacher_logits, student_logits=None, ot_clip_loss_weights=None):
 
         # student loss
         if (student_logits is not None):
 
-            ## obtain teacher weights - without temperature scaling, teacher weights very uniform
-            weights_temperature = self.get_temperature_scaling(self.weights_temperature)
-            ot_clip_loss_logits = (1 - torch.stack(self.all_teacher_ot_values)) / weights_temperature
-            ot_clip_loss_weights = ot_clip_loss_logits.softmax(dim=0).to(device=self.device)  # in principle, would also have values & weights for plan_T
+            if ot_clip_loss_weights is None:
+                ## obtain teacher weights - without temperature scaling, teacher weights very uniform
+                weights_temperature = self.get_temperature_scaling(self.weights_temperature)
+                ot_clip_loss_logits = (1 - torch.stack(self.all_teacher_ot_values)) / weights_temperature
+                ot_clip_loss_weights = ot_clip_loss_logits.softmax(dim=0).to(device=self.device)  # in principle, would also have values & weights for plan_T
+
             ot_clip_loss = torch.zeros(len(student_logits), device=self.device)
             ot_clip_loss_T = torch.zeros(len(student_logits), device=self.device)
 
@@ -235,7 +237,7 @@ class Knowledge_distillation_fn(torch.nn.Module):
         return ot_clip_loss, ot_clip_loss_T
 
 
-    def forward(self, student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, teacher_or_student, dataset_embedding=None):
+    def forward(self, student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, teacher_or_student, ot_clip_loss_weights=None):
 
         ## get logits
         student_temperature = self.get_temperature_scaling(self.student_temperature)
@@ -248,7 +250,7 @@ class Knowledge_distillation_fn(torch.nn.Module):
 
         ## get alignment loss
         if teacher_or_student == 'student':
-            align_loss, align_loss_T = self.ot_clip_loss_forward(None, student_logits)
+            align_loss, align_loss_T = self.ot_clip_loss_forward(None, student_logits, ot_clip_loss_weights=ot_clip_loss_weights)
             align_loss = 0.5 * (align_loss + align_loss_T).mean()
             offset = student_logits.exp().sum(1).log().mean()
             offset_T = student_logits.T.exp().sum(1).log().mean()

@@ -12,18 +12,19 @@ TMPDIR=${OUTPATH}/kd_clip_${JOB_ID}
 cp ./scripts/eclare_scripts/eclare_run.py ./scripts/kd_clip_scripts/kd_clip_dev_stages.sh $TMPDIR
 
 ## Define target datasets
-#target_dataset=("PFC_Zhu")
-#source_datasets=("EaFet" "LaFet" "Inf" "Child" "Adol" "Adult")
-#genes_by_peaks_str=("9832_by_70751")
+target_dataset=("PFC_Zhu")
+source_datasets=("EaFet" "LaFet" "Inf" "Child" "Adol" "Adult")
+genes_by_peaks_str=("9832_by_70751")
+clip_job_id='18175628'
+ordinal_job_id='21125926'
 
-target_dataset=("PFC_V1_Wang")
+#target_dataset=("PFC_V1_Wang")
 #source_datasets=("FirstTrim" "SecTrim" "ThirdTrim" "Inf" "Adol")
-source_datasets=("Inf" "Adol")
-genes_by_peaks_str=("9914_by_63404")
+#genes_by_peaks_str=("9914_by_63404")
+#clip_job_id='20194800'
+#ordinal_job_id='21141050'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
 
 ## Define JOB IDs and total number of epochs
-clip_job_id='21141050'
-ordinal_job_id='21141050'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
 total_epochs=100
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
@@ -98,7 +99,8 @@ run_eclare_task_on_gpu() {
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
     --batch_size=800 \
-    --feature="'$feature'"
+    --feature="'$feature'" \
+    &
     #--tune_hyperparameters \
     #--total_epochs=10 \
     #--n_trials=100 \ &
