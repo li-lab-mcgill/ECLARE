@@ -241,8 +241,11 @@ def create_loaders(
     elif not standard:
 
         data.obs = data.obs.reset_index().reset_index().set_index('index')  # ensure to register indices in terms of integers, to be saved later
+        data.obs.index = data.obs.index.astype(str)
+        data.obs = data.obs.rename(columns={'cell_type':'cell_type_og', 'batch':'batch_og'})
         data.obs = data.obs.rename(columns={cell_group_key:'cell_type', batch_key:'batch'})
 
+        assert data.obs.columns.duplicated().sum() < 2, 'Duplicate columns in obs'
         valid_data = data[valid_idx].copy()
 
         if stratified:
