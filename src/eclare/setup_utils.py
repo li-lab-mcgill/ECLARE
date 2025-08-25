@@ -1155,7 +1155,7 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
 
 
-def cortex_velmeshev_setup(args, cell_group='cell_type', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='Cortex_Velmeshev',\
+def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='Cortex_Velmeshev',\
     keep_group=['10-20 years', 'Adult'], dev_group_key='Age_Range'):
     
     datapath = os.path.join(os.environ['DATAPATH'], 'Cortex_Velmeshev')
@@ -1164,7 +1164,65 @@ def cortex_velmeshev_setup(args, cell_group='cell_type', batch_group='subject', 
 
     if args.genes_by_peaks_str is not None:
 
-        raise NotImplementedError("cortex_velmeshev_setup with genes_by_peaks_str is not implemented yet.")
+        if (args.source_dataset == dataset) and (args.target_dataset is not None):
+            RNA_file = f"rna_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
+            ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.h5ad"
+            binary_mask_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.npz"
+            genes_peaks_dict_file = f"genes_to_peaks_binary_mask_{args.genes_by_peaks_str}_aligned_target_{args.target_dataset}.pkl"
+            
+            genes_to_peaks_binary_mask_path = os.path.join(atac_datapath, binary_mask_file)
+            genes_to_peaks_binary_mask = load_npz(genes_to_peaks_binary_mask_path)
+            pkl_path = os.path.join(atac_datapath, genes_peaks_dict_file)
+            with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
+
+        elif (args.target_dataset == dataset) and (args.source_dataset is not None):
+            RNA_file = f"rna_{args.genes_by_peaks_str}_aligned_source_{args.source_dataset}.h5ad"
+            ATAC_file = f"atac_{args.genes_by_peaks_str}_aligned_source_{args.source_dataset}.h5ad"
+            binary_mask_file = genes_peaks_dict_file = genes_to_peaks_binary_mask = genes_peaks_dict = None
+
+        elif (args.source_dataset == dataset) and (args.target_dataset is None):
+            RNA_file = f"rna_{args.genes_by_peaks_str}.h5ad"
+            ATAC_file = f"atac_{args.genes_by_peaks_str}.h5ad"
+            binary_mask_file = genes_peaks_dict_file = genes_to_peaks_binary_mask = genes_peaks_dict = None
+
+        ## load data for a single developmental stage, should already be processed
+        if (len(keep_group) == 1) and (keep_group != ['']):
+            dev_stage = keep_group[0]
+            RNA_file = f"{dev_stage}_{RNA_file}"
+            ATAC_file = f"{dev_stage}_{ATAC_file}"
+
+        atac_fullpath = os.path.join(atac_datapath, ATAC_file)
+        rna_fullpath = os.path.join(rna_datapath, RNA_file)
+
+        atac = anndata.read_h5ad(atac_fullpath)
+        rna  = anndata.read_h5ad(rna_fullpath)
+
+        #rna.obs['Seurat_cell_type'] = rna.obs[['cell_type', 'Seurat_clusters']].apply(lambda x: f'{x[0]} - {x[1]}', axis=1)
+
+        ## create dev_stage labels by copying from dev_group_key
+        rna.obs['dev_stage'] = rna.obs[dev_group_key].copy()
+        atac.obs['dev_stage'] = atac.obs[dev_group_key].copy()
+
+        ## retain from specific developmental stages
+        keep_atac_subj = atac.obs['dev_stage'].str.contains('|'.join(keep_group), regex=True) # if keep_group=[''], then keeps all subjects
+        keep_rna_subj = rna.obs['dev_stage'].str.contains('|'.join(keep_group), regex=True)
+
+        ## remove fetal cells if not part of keep_group
+        fetal_present = pd.Series(keep_group).str.contains('trimester').any()
+        if (not fetal_present) and (keep_group != ['']):
+            fetal_cell_types = ["pLaCeHoLdEr"]
+
+            keep_atac_ct = ~atac.obs[cell_group].isin(fetal_cell_types)
+            keep_rna_ct = ~rna.obs[cell_group].isin(fetal_cell_types)
+
+            keep_atac = keep_atac_subj & keep_atac_ct
+            keep_rna = keep_rna_subj & keep_rna_ct
+        else:
+            keep_atac = keep_atac_subj
+            keep_rna = keep_rna_subj
+
+        atac = atac[keep_atac].to_memory()
+        rna = rna[keep_rna].to_memory()
 
     elif args.genes_by_peaks_str is None:
 
@@ -1276,8 +1334,6 @@ def cortex_velmeshev_setup(args, cell_group='cell_type', batch_group='subject', 
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
 
-
-        
 
 
 def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_V1_Wang',\
