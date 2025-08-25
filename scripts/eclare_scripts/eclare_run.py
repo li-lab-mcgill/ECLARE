@@ -105,11 +105,11 @@ if __name__ == "__main__":
 
     # kd-clip mdd or cortex_velmeshev
     elif (args.source_dataset is not None) and (args.target_dataset in ['MDD', 'Cortex_Velmeshev']):
-        model_uri_paths_str = f'clip_mdd_*{args.clip_job_id}/{args.target_dataset}/{args.source_dataset}/{replicate_idx}/model_uri.txt'
+        model_uri_paths_str = f'clip_{args.target_dataset.lower()}_*{args.clip_job_id}/{args.target_dataset}/{args.source_dataset}/{replicate_idx}/model_uri.txt'
 
     # eclare mdd or cortex_velmeshev
     elif (args.source_dataset is None) and (args.target_dataset in ['MDD', 'Cortex_Velmeshev']):
-        model_uri_paths_str = f'clip_mdd_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'
+        model_uri_paths_str = f'clip_{args.target_dataset.lower()}_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'
 
     model_uri_paths = glob(os.path.join(outpath, model_uri_paths_str))
     assert len(model_uri_paths) > 0, f'Model URI path not found @ {model_uri_paths_str}'
