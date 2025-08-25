@@ -19,7 +19,7 @@ if __name__ == "__main__":
                         help='path to RNA data'),
     parser.add_argument('--genes_by_peaks_str', type=str, default=None,
                         help='indicator of peaks to genes mapping to skip processing')
-    parser.add_argument('--hvg_only', type=bool, default=False,
+    parser.add_argument('--hvg_only', action='store_true', default=False,
                         help='whether to only use highly variable genes')
     parser.add_argument('--feature', type=str, default=None)
     args = parser.parse_args()

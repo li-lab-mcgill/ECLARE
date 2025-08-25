@@ -3,11 +3,6 @@
 conda activate eclare_env
 cd $ECLARE_ROOT
  
-## Make new sub-directory for current job ID and assign to "TMPDIR" variable
-JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
-mkdir -p ${OUTPATH}/eclare_mdd_${JOB_ID}
-TMPDIR=${OUTPATH}/eclare_mdd_${JOB_ID}
- 
 ## Copy scripts to sub-directory for reproducibility
 cp ./scripts/eclare_scripts/eclare_run.py ./scripts/eclare_scripts/eclare_mdd.sh $TMPDIR
  
@@ -21,19 +16,28 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-## Define datasets to be ignored as sources
-ignore_sources=("PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams")
-
 ## Preset target dataset
-target_dataset="MDD"
+clip_job_id='25121404'
+source_datasets=("PFC_Zhu")
+target_dataset="Cortex_Velmeshev"
+genes_by_peaks_str='9584_by_66620'
+
+#clip_job_id='30153403'
+#target_dataset="MDD"
+#genes_by_peaks_str='17563_by_100000'
 
 ## Define total number of epochs
-clip_job_id='30153403'
-total_epochs=100
+total_epochs=10
+target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
+
+## Make new sub-directory for current job ID and assign to "TMPDIR" variable
+JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
+mkdir -p ${OUTPATH}/eclare_${target_dataset_lowercase}_${JOB_ID}
+TMPDIR=${OUTPATH}/eclare_${target_dataset_lowercase}_${JOB_ID}
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
-N_CORES=3
-N_REPLICATES=3
+N_CORES=1
+N_REPLICATES=1
 
 ## Define random state
 RANDOM=42
@@ -126,8 +130,7 @@ run_eclare_task_on_gpu() {
     --clip_job_id=$clip_job_id \
     --experiment_job_id=$experiment_job_id \
     --target_dataset=$target_dataset \
-    --ignore_sources "PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" \
-    --genes_by_peaks_str='17563_by_100000' \
+    --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="'$feature'" \
