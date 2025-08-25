@@ -32,7 +32,7 @@ def run_CLIP(
     ):
 
     ## setup
-    paired_target = (args.target_dataset != 'MDD')
+    paired_target = (args.target_dataset not in ['MDD', 'Cortex_Velmeshev'])
     n_genes = rna_train_loader.dataset.shape[1]
     n_peaks = atac_train_loader.dataset.shape[1]
 
@@ -624,7 +624,7 @@ def run_ECLARE(
     student_model = CLIP(n_peaks=n_peaks, n_genes=n_genes, **params).to(device=device)
 
     # Instantiate the knowledge distillation loss function
-    paired = (args.target_dataset != 'MDD')
+    paired = (args.target_dataset not in ['MDD', 'Cortex_Velmeshev'])
     weights_temperature = params.get('weights_temperature', 0.01)
     student_temperature = params.get('student_temperature', 1)
     teacher_temperature = params.get('teacher_temperature', 1)
@@ -761,7 +761,7 @@ def run_ORDINAL(
     ):
 
     ## setup
-    paired_target = (args.target_dataset != 'MDD')
+    paired_target = (args.target_dataset not in ['MDD', 'Cortex_Velmeshev'])
     n_genes = rna_train_loader.dataset.shape[1]
     n_peaks = atac_train_loader.dataset.shape[1]
 

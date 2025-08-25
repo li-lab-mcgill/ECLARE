@@ -208,7 +208,7 @@ if __name__ == '__main__':
     rna_cell_types_valid = rna_cell_types.iloc[rna_valid_idx][cell_group].values
 
     ## Evaluate alignment
-    paired = (args.source_dataset != 'mdd')
+    paired = (args.source_dataset not in ['mdd', 'cortex_velmeshev'])
     ilisis_valid, clisis_valid, nmi_valid, ari_valid, diag_concentration_minimizer_valid, foscttm_score_valid, rank_score_valid, acc_valid, acc_top5_valid, clip_loss_valid, clip_loss_censored_valid, \
                     foscttm_score_ct_valid, accuracy_ct_valid, accuracy_top5_ct_valid, clip_loss_ct_valid, clip_loss_ct_split_valid = \
                         align_metrics(None, rna_latents_valid, rna_cell_types_valid, atac_latents_valid, atac_cell_types_valid, paired=paired, is_latents=True)
@@ -311,7 +311,7 @@ if __name__ == '__main__':
     target_rna_cell_types_valid = target_rna_cell_types.iloc[valid_idx][target_cell_group].values
 
     ## Evaluate alignment
-    paired = (args.target_dataset != 'mdd')
+    paired = (args.target_dataset not in ['mdd', 'cortex_velmeshev'])
     ilisis_valid, clisis_valid, nmi_valid, ari_valid, diag_concentration_minimizer_valid, foscttm_score_valid, rank_score_valid, acc_valid, acc_top5_valid, clip_loss_valid, clip_loss_censored_valid, \
                     foscttm_score_ct_valid, accuracy_ct_valid, accuracy_top5_ct_valid, clip_loss_ct_valid, clip_loss_ct_split_valid = \
                         align_metrics(None, target_rna_latents_valid, target_rna_cell_types_valid, target_atac_latents_valid, target_atac_cell_types_valid, paired=paired, is_latents=True)
