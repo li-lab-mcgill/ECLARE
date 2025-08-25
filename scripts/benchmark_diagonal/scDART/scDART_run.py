@@ -148,7 +148,7 @@ if __name__ == '__main__':
     atac_latents_valid = torch.from_numpy(atac_latents_valid)
 
     ## Evaluate alignment
-    paired = (args.source_dataset != 'mdd')
+    paired = (args.source_dataset not in ['mdd', 'cortex_velmeshev'])
     ilisis_valid, clisis_valid, nmi_valid, ari_valid, diag_concentration_minimizer_valid, foscttm_score_valid, rank_score_valid, acc_valid, acc_top5_valid, clip_loss_valid, clip_loss_censored_valid, \
                     foscttm_score_ct_valid, accuracy_ct_valid, accuracy_top5_ct_valid, clip_loss_ct_valid, clip_loss_ct_split_valid = \
                         align_metrics(None, rna_latents_valid, cell_types_valid, atac_latents_valid, cell_types_valid, paired=paired, is_latents=True)
@@ -208,7 +208,7 @@ if __name__ == '__main__':
     target_atac_latents_valid = torch.from_numpy(target_atac_latents_valid)
 
     ## Align metrics for valid data
-    paired = (args.target_dataset != 'mdd')
+    paired = (args.target_dataset not in ['mdd', 'cortex_velmeshev'])
     ilisis_target_valid, clisis_target_valid, nmi_target_valid, ari_target_valid, diag_concentration_minimizer_target_valid, foscttm_score_target_valid, rank_score_target_valid, acc_target_valid, acc_top5_target_valid, clip_loss_target_valid, clip_loss_censored_target_valid, \
                         foscttm_score_ct_target_valid, accuracy_ct_target_valid, accuracy_top5_ct_target_valid, clip_loss_ct_target_valid, clip_loss_ct_split_target_valid = \
                             align_metrics(None, target_rna_latents_valid, target_cell_types_valid, target_atac_latents_valid, target_cell_types_valid, paired=paired, is_latents=True)

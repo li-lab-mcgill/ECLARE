@@ -112,8 +112,8 @@ if __name__ == "__main__":
     clip_job_id = args.job_id
 
     ## get or create mlflow experiment
-    if args.target_dataset == 'MDD':
-        experiment = get_or_create_experiment(f'clip_mdd_{clip_job_id}')
+    if args.target_dataset in ['MDD', 'Cortex_Velmeshev']:
+        experiment = get_or_create_experiment(f'clip_{args.target_dataset.lower()}_{clip_job_id}')
     else:
         experiment = get_or_create_experiment(f'clip_{clip_job_id}')
         

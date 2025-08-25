@@ -21,14 +21,14 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-source_datasets=("pbmc_10x" "mouse_brain_10x")
+source_datasets=("PFC_Zhu")
 
 ## Preset target dataset
-target_dataset="MDD"
+target_dataset="Cortex_Velmeshev"
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6 # only relevant for multi-replicate tasks
-N_REPLICATES=3
+N_REPLICATES=1
 
 ## Define random state
 RANDOM=42
@@ -38,7 +38,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-total_epochs=100
+total_epochs=10
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)

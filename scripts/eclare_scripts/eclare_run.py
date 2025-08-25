@@ -100,15 +100,15 @@ if __name__ == "__main__":
         model_uri_paths_str = f'clip_*{args.clip_job_id}/{args.target_dataset}/{args.source_dataset}/{replicate_idx}/model_uri.txt'
 
     # eclare
-    elif (args.source_dataset is None) and (args.target_dataset != 'MDD'):
+    elif (args.source_dataset is None) and (args.target_dataset not in ['MDD', 'Cortex_Velmeshev']):
         model_uri_paths_str = f'clip_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'
 
-    # kd-clip mdd
-    elif (args.source_dataset is not None) and (args.target_dataset == 'MDD'):
+    # kd-clip mdd or cortex_velmeshev
+    elif (args.source_dataset is not None) and (args.target_dataset in ['MDD', 'Cortex_Velmeshev']):
         model_uri_paths_str = f'clip_mdd_*{args.clip_job_id}/{args.target_dataset}/{args.source_dataset}/{replicate_idx}/model_uri.txt'
 
-    # eclare mdd
-    elif (args.source_dataset is None) and (args.target_dataset == 'MDD'):
+    # eclare mdd or cortex_velmeshev
+    elif (args.source_dataset is None) and (args.target_dataset in ['MDD', 'Cortex_Velmeshev']):
         model_uri_paths_str = f'clip_mdd_*{args.clip_job_id}/{target_dataset_og}/**/{replicate_idx}/model_uri.txt'
 
     model_uri_paths = glob(os.path.join(outpath, model_uri_paths_str))
@@ -166,8 +166,8 @@ if __name__ == "__main__":
     }
 
     ## get or create mlflow experiment
-    if args.target_dataset == 'MDD':
-        experiment = get_or_create_experiment(f'clip_mdd_{args.clip_job_id}')
+    if args.target_dataset in ['MDD', 'Cortex_Velmeshev']:
+        experiment = get_or_create_experiment(f'clip_{args.target_dataset.lower()}_{args.clip_job_id}')
     else:
         experiment = get_or_create_experiment(f'clip_{args.clip_job_id}')
 
