@@ -968,7 +968,7 @@ def mdd_setup(
         return rna, atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
     
 def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_Zhu', \
-    keep_group=['Inf', 'Child', 'Adol', 'Adult']):
+    keep_group=[]):
 
     datapath = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu')
     rna_datapath = os.path.join(datapath, 'rna')
@@ -1156,7 +1156,7 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
 
 
 def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='Cortex_Velmeshev',\
-    keep_group=['10-20 years', 'Adult'], dev_group_key='Age_Range'):
+    keep_group=[''], dev_group_key='Age_Range'):
     
     datapath = os.path.join(os.environ['DATAPATH'], 'Cortex_Velmeshev')
     atac_datapath = os.path.join(datapath, 'atac')
@@ -1337,7 +1337,7 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
 
 
 def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_V1_Wang',\
-    keep_group=['Adol'], dev_group_key='Group'):
+    keep_group=[''], dev_group_key='Group'):
 
     datapath = os.path.join(os.environ['DATAPATH'], 'PFC_V1_Wang')
     atac_datapath = os.path.join(datapath, 'atac')
@@ -1466,9 +1466,6 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
             with open(pkl_path, 'rb') as f: genes_peaks_dict = pkl_load(f)
             #genes_to_peaks_binary_mask = pd.DataFrame(genes_to_peaks_binary_mask.toarray(), index=genes_peaks_dict['genes'], columns=genes_peaks_dict['peaks'])
 
-            ## ensure chrom:start-end format
-            genes_peaks_dict['peaks'] = pd.DataFrame(genes_peaks_dict['peaks'].str.split('[-:]', expand=True).to_list()).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1).values
-
         ## find peaks and genes that overlap
         overlapping_genes = set(rna.var.index).intersection(genes_peaks_dict['genes'])
         overlapping_peaks = set(atac.var.index).intersection(genes_peaks_dict['peaks'])
@@ -1500,6 +1497,10 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
         ## check alignment
         print('Genes match:', (rna.var.index == genes_peaks_dict['genes']).all())
         print('Peaks match:', (atac.var.index == genes_peaks_dict['peaks']).all())
+
+        ## ensure chrom:start-end format
+        genes_peaks_dict['peaks'] = pd.DataFrame(genes_peaks_dict['peaks'].str.split('[-:]', expand=True).to_list()).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1).values
+        atac.var.index = genes_peaks_dict['peaks']
 
         
     n_peaks, n_genes = atac.n_vars, rna.n_vars

@@ -3,11 +3,6 @@
 conda activate eclare_env
 cd $ECLARE_ROOT
  
-## Make new sub-directory for current job ID and assign to "TMPDIR" variable
-JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
-mkdir -p ${OUTPATH}/kd_clip_mdd_${JOB_ID}
-TMPDIR=${OUTPATH}/kd_clip_mdd_${JOB_ID}
- 
 ## Copy scripts to sub-directory for reproducibility
 cp ./scripts/eclare_scripts/eclare_run.py ./scripts/kd_clip_scripts/kd_clip_mdd.sh $TMPDIR
  
@@ -21,18 +16,28 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-source_datasets=("pbmc_10x" "mouse_brain_10x")
-
 ## Preset target dataset
-target_dataset="MDD"
+clip_job_id='25121404'
+source_datasets=("PFC_Zhu")
+target_dataset="Cortex_Velmeshev"
+genes_by_peaks_str='9584_by_66620'
+
+#clip_job_id='30153403'
+#target_dataset="MDD"
+#genes_by_peaks_str='17563_by_100000'
 
 ## Define total number of epochs
-clip_job_id='30153403'
-total_epochs=100
+total_epochs=10
+target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
+
+## Make new sub-directory for current job ID and assign to "TMPDIR" variable
+JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
+mkdir -p ${OUTPATH}/kd_clip_${target_dataset_lowercase}_${JOB_ID}
+TMPDIR=${OUTPATH}/kd_clip_${target_dataset_lowercase}_${JOB_ID}
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
-N_CORES=3
-N_REPLICATES=3
+N_CORES=1
+N_REPLICATES=1
 
 ## Define random state
 RANDOM=42
@@ -96,11 +101,10 @@ run_eclare_task_on_gpu() {
     --experiment_job_id=$experiment_job_id \
     --source_dataset=$source_dataset \
     --target_dataset=$target_dataset \
-    --ignore_sources "PFC_Zhu" "DLPFC_Anderson" "DLPFC_Ma" "Midbrain_Adams" \
-    --genes_by_peaks_str='17563_by_100000' \
+    --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
     --batch_size=800 \
-    --feature="'$feature'"
+    --feature="'$feature'" \
 
     # Increment job counter
     ((current_jobs++))
@@ -118,7 +122,7 @@ current_jobs=0
 ## Create experiment ID (or detect if it already exists)
 python -c "
 from src.eclare.run_utils import get_or_create_experiment; 
-experiment = get_or_create_experiment('clip_mdd_${clip_job_id}')
+experiment = get_or_create_experiment('clip_${target_dataset_lowercase}_${clip_job_id}')
 experiment_id = experiment.experiment_id
 print(experiment_id)
 

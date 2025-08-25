@@ -91,7 +91,8 @@ run_clip_task_on_gpu() {
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="${feature}" \
-    --metric_to_optimize="1-foscttm" &
+    --metric_to_optimize="1-foscttm" \
+    --job_id=$JOB_ID &
     #--tune_hyperparameters \
     #--n_trials=3 &
 }

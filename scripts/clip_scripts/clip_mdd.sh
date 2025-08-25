@@ -2,18 +2,6 @@
  
 conda activate eclare_env
 cd $ECLARE_ROOT
- 
-## Make new sub-directory for current job ID and assign to "TMPDIR" variable
-JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
-mkdir -p ${OUTPATH}/clip_mdd_${JOB_ID}
-TMPDIR=${OUTPATH}/clip_mdd_${JOB_ID}
- 
-## Copy scripts to sub-directory for reproducibility
-cp ./scripts/clip_scripts/clip_run.py ./scripts/clip_scripts/clip_mdd.sh $TMPDIR
- 
-## https://docs.alliancecan.ca/wiki/PyTorch#PyTorch_with_Multiple_GPUs
-export NCCL_BLOCKING_WAIT=1  #Set this environment variable if you wish to use the NCCL backend for inter-GPU communication.
-export MASTER_ADDR=$(hostname)
   
 ## Set path to CSV file containing genes-by-peaks strings to match datasets
 csv_file=${DATAPATH}/genes_by_peaks_str.csv
@@ -21,10 +9,23 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-source_datasets=("PFC_Zhu")
+source_datasets=("PFC_V1_Wang" "PFC_Zhu")
 
 ## Preset target dataset
 target_dataset="Cortex_Velmeshev"
+target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
+
+## Make new sub-directory for current job ID and assign to "TMPDIR" variable
+JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
+mkdir -p ${OUTPATH}/clip_${target_dataset_lowercase}_${JOB_ID}
+TMPDIR=${OUTPATH}/clip_${target_dataset_lowercase}_${JOB_ID}
+ 
+## Copy scripts to sub-directory for reproducibility
+cp ./scripts/clip_scripts/clip_run.py ./scripts/clip_scripts/clip_mdd.sh $TMPDIR
+ 
+## https://docs.alliancecan.ca/wiki/PyTorch#PyTorch_with_Multiple_GPUs
+export NCCL_BLOCKING_WAIT=1  #Set this environment variable if you wish to use the NCCL backend for inter-GPU communication.
+export MASTER_ADDR=$(hostname)
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6 # only relevant for multi-replicate tasks
@@ -93,7 +94,8 @@ run_clip_task_on_gpu() {
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="${feature}" \
-    --metric_to_optimize="1-foscttm" &
+    --metric_to_optimize="1-foscttm" \
+    --job_id=$JOB_ID &
     #--tune_hyperparameters \
     #--n_trials=3 &
 }
@@ -139,7 +141,7 @@ extract_genes_by_peaks_str() {
 ## Create experiment ID (or detect if it already exists)
 python -c "
 from src.eclare.run_utils import get_or_create_experiment; 
-experiment = get_or_create_experiment('clip_mdd_${JOB_ID}')
+experiment = get_or_create_experiment('clip_${target_dataset_lowercase}_${JOB_ID}')
 experiment_id = experiment.experiment_id
 print(experiment_id)
 
