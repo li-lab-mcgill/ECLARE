@@ -1155,8 +1155,8 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
 
 
-def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='Cortex_Velmeshev',\
-    keep_group=[''], dev_group_key='Age_Range'):
+def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, return_backed=False, dataset='Cortex_Velmeshev',\
+    keep_group=[''], dev_group_key='Age_Range', dev_stages=['2nd trimester', '3rd trimester', '0-1 years', '1-2 years', '2-4 years', '4-10 years', '10-20 years', 'Adult']):
     
     datapath = os.path.join(os.environ['DATAPATH'], 'Cortex_Velmeshev')
     atac_datapath = os.path.join(datapath, 'atac')
@@ -1220,6 +1220,9 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
         else:
             keep_atac = keep_atac_subj
             keep_rna = keep_rna_subj
+
+        if return_backed:
+            return rna, atac, cell_group, dev_group_key, dev_stages
 
         atac = atac[keep_atac].to_memory()
         rna = rna[keep_rna].to_memory()
@@ -1316,20 +1319,26 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
         print('Genes match:', (rna.var.index == genes_peaks_dict['genes']).all())
         print('Peaks match:', (atac.var.index == genes_peaks_dict['peaks']).all())
 
+    ## Count number of cells per dev stage
+    dev_stage_counts_df = pd.merge(
+        rna.obs[dev_group_key].value_counts().to_frame(), atac.obs[dev_group_key].value_counts().to_frame(),
+        left_index=True, right_index=True, how='outer')
+    dev_stage_counts_df.columns = ['rna_n_cells', 'atac_n_cells']
+    dev_stage_counts_df.index = pd.Categorical(dev_stage_counts_df.index, categories=dev_stages, ordered=True)
+    dev_stage_counts_df = dev_stage_counts_df.sort_index()
         
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     if return_type == 'loaders':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, split_type='balanced', split_key=dev_group_key, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, split_type='balanced', split_key=dev_group_key, cell_group_key=cell_group, batch_key=batch_group)
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
     elif return_type == 'loaders_with_dev_stages':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
-        dev_stages = ['2nd trimester', '3rd trimester', '0-1 years', '1-2 years', '2-4 years', '4-10 years', '10-20 years', 'Adult']
-        return dev_stages, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, split_type='balanced', split_key=dev_group_key, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, split_type='balanced', split_key=dev_group_key, cell_group_key=cell_group, batch_key=batch_group)
+        return dev_stage_counts_df, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
 
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
@@ -2084,38 +2093,25 @@ def teachers_setup(model_paths, args, device, dataset_idx_dict=None):
         print(dataset)
         datasets.append(dataset)
 
-        ## Load the data loaders
-        #rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
-        #    source_setup_func(model_args_dict['args'], pretrain=None, return_type='loaders', dataset=dataset)
-
-        #if args.train_encoders:
-        #    model.train()
-
         models[dataset] = model
 
         if args.source_dataset_embedder:
             dataset_idx_dict[dataset] = m
 
-        if args.ordinal_job_id is None:
-            ## TMP - create deepcopy of args
-            args_tmp = deepcopy(args)
-            args_tmp.source_dataset = dataset
-            args_tmp.genes_by_peaks_str = genes_by_peaks_str
-            
-            overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
-            target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
-                target_setup_func(args_tmp, return_type='loaders')
-            
-            target_rna_train_loaders[dataset] = target_rna_train_loader
-            target_atac_train_loaders[dataset] = target_atac_train_loader
-            target_rna_valid_loaders[dataset] = target_rna_valid_loader
-            target_atac_valid_loaders[dataset] = target_atac_valid_loader
-
-        #else:
-        #    target_rna_train_loaders[dataset] = None
-        #    target_atac_train_loaders[dataset] = None
-        #    target_rna_valid_loaders[dataset] = None
-        #    target_atac_valid_loaders[dataset] = None
+        #if args.ordinal_job_id is None:
+        ## TMP - create deepcopy of args
+        args_tmp = deepcopy(args)
+        args_tmp.source_dataset = dataset
+        args_tmp.genes_by_peaks_str = genes_by_peaks_str
+        
+        overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
+        target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
+            target_setup_func(args_tmp, return_type='loaders')
+        
+        target_rna_train_loaders[dataset] = target_rna_train_loader
+        target_atac_train_loaders[dataset] = target_atac_train_loader
+        target_rna_valid_loaders[dataset] = target_rna_valid_loader
+        target_atac_valid_loaders[dataset] = target_atac_valid_loader
 
 
     return datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders

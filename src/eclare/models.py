@@ -57,7 +57,7 @@ class CLIP(nn.Module):
         },
         'distil_lambda': {
             'suggest_distribution': FloatDistribution(low=0.01, high=0.99),
-            'default': 0.1
+            'default': 0.5
             #'default': 0.6138311212064465
         },
         'decoder_loss': {
@@ -143,13 +143,28 @@ class CLIP(nn.Module):
                 return latent, None
             
 class ORDINAL(CLIP):
-    def __init__(self, n_peaks, n_genes, ordinal_classes, shared_coral_layer=False, **hparams):
+    def __init__(self, n_peaks, n_genes, ordinal_classes_df, shared_coral_layer=False, **hparams):
         super().__init__(n_peaks, n_genes, **hparams)
         num_units = hparams.get('num_units', 256)
 
         # Add ordinal_layer for both modalities
-        self.ordinal_classes = ordinal_classes
-        num_classes = len(ordinal_classes)
+        self.ordinal_classes = ordinal_classes_df.index.tolist()
+        num_classes = len(self.ordinal_classes)
+
+        ## get importance weights for ordinal loss
+        eps = 1e-6
+        rna_p = (ordinal_classes_df['rna_n_cells'].cumsum()[:-1] / ordinal_classes_df['rna_n_cells'].sum()).fillna(0).values
+        atac_p = (ordinal_classes_df['atac_n_cells'].cumsum()[:-1] / ordinal_classes_df['atac_n_cells'].sum()).fillna(0).values
+
+        rna_ordinal_weights = 1.0 / (rna_p * (1-rna_p) + eps)
+        atac_ordinal_weights = 1.0 / (atac_p * (1-atac_p) + eps)
+        atac_ordinal_weights[atac_p==0] = 0
+
+        rna_ordinal_weights = rna_ordinal_weights / rna_ordinal_weights.sum()
+        atac_ordinal_weights = atac_ordinal_weights / atac_ordinal_weights.sum()
+
+        self.rna_ordinal_weights = torch.from_numpy(rna_ordinal_weights).float()
+        self.atac_ordinal_weights = torch.from_numpy(atac_ordinal_weights).float()
         
         if shared_coral_layer:
             self.ordinal_layer = CoralLayer(size_in=num_units, num_classes=num_classes)

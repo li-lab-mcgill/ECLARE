@@ -1,8 +1,10 @@
 from torch.utils.data import Dataset
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler, BatchSampler
 from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
+from imblearn.under_sampling import RandomUnderSampler
+from collections import Counter
 import pandas as pd
 import os
 import anndata
@@ -170,8 +172,12 @@ def create_loaders(
         batch_key: str,
         valid_only: bool=False,
         standard: bool=False,
-        stratified: bool=True,
+        split_type: str='stratified',
+        split_key: str=None,
         min_cells: int=12):
+
+    if split_key is None:
+        split_key = cell_group_key
     
     celltypes = pd.Categorical(data.obs[cell_group_key].values)
 
@@ -232,7 +238,7 @@ def create_loaders(
         valid_num_batches = np.ceil(len(valid_data) / batch_size)
 
         #valid_loader = DataLoader(valid_data, batch_size=batch_size, shuffle=False, num_workers=0)
-        if stratified:
+        if split_type == 'stratified':
             valid_sampler = StratifiedBatchSampler(celltypes[valid_idx], batch_size=batch_size, shuffle=False)
             valid_loader = DataLoader(valid_data, num_workers=0, batch_sampler=valid_sampler, shuffle=False)
         else:
@@ -248,22 +254,52 @@ def create_loaders(
         assert data.obs.columns.duplicated().sum() < 2, 'Duplicate columns in obs'
         valid_data = data[valid_idx].copy()
 
-        if stratified:
-            valid_sampler = StratifiedBatchSampler(celltypes[valid_idx], batch_size=batch_size, shuffle=False)
+        if split_type == 'stratified':
+            valid_sampler = StratifiedBatchSampler(data.obs[split_key][valid_idx], batch_size=batch_size, shuffle=False)
             valid_loader_indices = [(batch_indices,) for batch_indices in valid_sampler]
             valid_loader_indices = np.hstack(valid_loader_indices).squeeze()   # stack, so can sensibly use batch_size argument for AnnLoader
 
             valid_loader = AnnLoader(valid_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False, indices=valid_loader_indices)
+
+        elif split_type == 'balanced':
+            class_counts = Counter(data.obs[split_key][valid_idx])
+            class_weights = {c: 1.0 / class_counts[c] for c in class_counts}
+            sample_weights = [class_weights[c] for c in data.obs[split_key][valid_idx]]
+
+            sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=False)
+            batch_sampler = BatchSampler(sampler, batch_size=batch_size, drop_last=False)
+            valid_loader_indices = [batch_indices for batch_indices in batch_sampler]
+            valid_loader_indices = np.hstack(valid_loader_indices).squeeze()   # stack, so can sensibly use batch_size argument for AnnLoader
+            
+            valid_loader = AnnLoader(valid_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False, indices=valid_loader_indices)
+            #valid_loader = AnnLoader(valid_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False, sampler=sampler)
+
         else:
             valid_loader = AnnLoader(valid_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False)
 
         if not valid_only:
-            train_data = data[train_idx].copy()
-            train_sampler = StratifiedBatchSampler(celltypes[train_idx], batch_size=batch_size, shuffle=False)
-            train_loader_indices = [(batch_indices,) for batch_indices in train_sampler]
-            train_loader_indices = np.hstack(train_loader_indices).squeeze()   # stack, so can sensibly use batch_size argument for AnnLoader
 
-            train_loader = AnnLoader(train_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False, indices=train_loader_indices)
+            train_data = data[train_idx].copy()
+
+            if split_type == 'stratified':
+                train_sampler = StratifiedBatchSampler(data.obs[split_key][train_idx], batch_size=batch_size, shuffle=False)
+                train_loader_indices = [(batch_indices,) for batch_indices in train_sampler]
+                train_loader_indices = np.hstack(train_loader_indices).squeeze()   # stack, so can sensibly use batch_size argument for AnnLoader
+
+                train_loader = AnnLoader(train_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False, indices=train_loader_indices)
+
+            elif split_type == 'balanced':
+                class_counts = Counter(data.obs[split_key][train_idx])
+                class_weights = {c: 1.0 / class_counts[c] for c in class_counts}
+                sample_weights = [class_weights[c] for c in data.obs[split_key][train_idx]]
+
+                sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=False)
+                batch_sampler = BatchSampler(sampler, batch_size=batch_size, drop_last=False)
+                train_loader_indices = [batch_indices for batch_indices in batch_sampler]
+                train_loader_indices = np.hstack(train_loader_indices).squeeze()   # stack, so can sensibly use batch_size argument for AnnLoader
+
+                train_loader = AnnLoader(train_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False, indices=train_loader_indices)
+                #train_loader = AnnLoader(train_data, use_cuda=torch.cuda.is_available(), batch_size=batch_size, shuffle=False, sampler=sampler)
 
             train_num_batches = np.ceil(len(train_data) / batch_size)
             train_n_batches_str_length = len(str(int(train_num_batches)))
