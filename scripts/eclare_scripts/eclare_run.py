@@ -32,6 +32,8 @@ if __name__ == "__main__":
                         help='Job ID of experiment')
     parser.add_argument('--ordinal_job_id', type=str, default=None,
                         help='Job ID of ORDINAL training')
+    parser.add_argument('--eclare_job_id', type=str, default=None,
+                        help='Job ID of ECLARE student training')
     parser.add_argument('--total_epochs', type=int, default=2,
                         help='number of epochs')
     parser.add_argument('--batch_size', type=int, default=800,
@@ -93,7 +95,20 @@ if __name__ == "__main__":
     target_dataset_og = args.target_dataset
     replicate_idx = str(args.replicate_idx)    
 
-    ## get model uri paths based on experiment type
+    ## get eclare student model, if eclare_job_id is provided
+    if args.eclare_job_id is not None:
+        eclare_student_model_uri_paths_str = f'eclare_*{args.eclare_job_id}/{target_dataset_og}/{replicate_idx}/model_uri.txt'
+        eclare_student_model_uri_paths = glob(os.path.join(outpath, eclare_student_model_uri_paths_str))
+        assert len(eclare_student_model_uri_paths) > 0, f'Model URI path not found @ {eclare_student_model_uri_paths_str}'
+        with open(eclare_student_model_uri_paths[0], 'r') as f:
+            model_uris = f.read().strip().splitlines()
+            model_uri = model_uris[0]
+            eclare_student_model = mlflow.pytorch.load_model(model_uri, device=device)
+        eclare_student_model.train()
+    else:
+        eclare_student_model = None # will get instantiated in run_ECLARE
+
+    ## get teacher model uri paths based on experiment type
 
     # kd-clip
     if (args.source_dataset is not None) and (args.target_dataset != 'MDD'):
@@ -233,7 +248,14 @@ if __name__ == "__main__":
 
             if not args.tune_hyperparameters:
 
-                student_model, metrics_dict = run_ECLARE(**run_args, ordinal_model=ordinal_model, params=default_hyperparameters, device=device)
+                student_model, metrics_dict = run_ECLARE(
+                    **run_args,
+                    student_model=eclare_student_model,
+                    ordinal_model=ordinal_model,
+                    params=default_hyperparameters,
+                    device=device
+                    )
+
                 model_str = "trained_model"
 
             else:
@@ -243,7 +265,7 @@ if __name__ == "__main__":
                 ## run best model
                 run_args['trial'] = None
                 run_args['args'].total_epochs = 100
-                student_model, _ = run_ECLARE(**run_args, ordinal_model=ordinal_model, params=best_params, device=device)
+                student_model, _ = run_ECLARE(**run_args, student_model=eclare_student_model, ordinal_model=ordinal_model, params=best_params, device=device)
                 model_str = "best_model"
 
             ## infer signature

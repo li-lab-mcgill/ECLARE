@@ -11,6 +11,7 @@ def cosine_distance(x, y, norm=True, detach=True):
 
     similarity = torch.matmul(x_norm, y_norm.transpose(0, 1))
     distance = (1 - similarity)
+    #distance = 0.5 * (1 - similarity) # currently, similarity bounded between 0 and 1
 
     if detach:
         distance = distance.detach().cpu().numpy()
@@ -168,14 +169,14 @@ class Knowledge_distillation_fn(torch.nn.Module):
         self.all_teacher_ot_values = []
 
     ## forward functions for different KD losses
-    def kl_forward(self, student_logits, target_logits):
+    def kl_forward(self, student_logits, teacher_logits):
         student_log_softmax = F.log_softmax(student_logits, dim=1)
-        target_log_softmax = F.log_softmax(target_logits, dim=1)
-        loss = torch.nn.functional.kl_div(student_log_softmax, target_log_softmax.detach(), reduction='none', log_target=True)
+        teacher_log_softmax = F.log_softmax(teacher_logits, dim=1)
+        loss = torch.nn.functional.kl_div(student_log_softmax, teacher_log_softmax.detach(), reduction='none', log_target=True)
 
         student_log_softmax_T = F.log_softmax(student_logits.T, dim=1)
-        target_log_softmax_T = F.log_softmax(target_logits.T, dim=1)
-        loss_T = torch.nn.functional.kl_div(student_log_softmax_T, target_log_softmax_T.detach(), reduction='none', log_target=True)
+        teacher_log_softmax_T = F.log_softmax(teacher_logits.T, dim=1)
+        loss_T = torch.nn.functional.kl_div(student_log_softmax_T, teacher_log_softmax_T.detach(), reduction='none', log_target=True)
 
         ## sum over "target" nuclei, end up with a loss per "student" nucleus, whereas batchmean will still average across all nuclei
         loss = loss.sum(1)
@@ -237,16 +238,22 @@ class Knowledge_distillation_fn(torch.nn.Module):
         return ot_clip_loss, ot_clip_loss_T
 
 
-    def forward(self, student_rna_latents, student_atac_latents, target_rna_latents, target_atac_latents, teacher_or_student, ot_clip_loss_weights=None):
+    def forward(self, student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, teacher_or_student, ot_clip_loss_weights=None, student_logits_scaling=None, teacher_logits_scaling=None):
 
         ## get logits
         student_temperature = self.get_temperature_scaling(self.student_temperature)
         teacher_temperature = self.get_temperature_scaling(self.teacher_temperature)
         student_logits = torch.matmul(student_atac_latents, student_rna_latents.T) * torch.exp(1/student_temperature)
-        target_logits = torch.matmul(target_atac_latents, target_rna_latents.T) * torch.exp(1/teacher_temperature)
+        teacher_logits = torch.matmul(teacher_atac_latents, teacher_rna_latents.T) * torch.exp(1/teacher_temperature)
+
+        ## apply logits scaling (if any)
+        if student_logits_scaling is not None:
+            student_logits = student_logits * student_logits_scaling
+        if teacher_logits_scaling is not None:
+            teacher_logits = teacher_logits * teacher_logits_scaling
 
         ## get distillation loss
-        distil_loss, distil_loss_T = self.kl_forward(student_logits, target_logits)
+        distil_loss, distil_loss_T = self.kl_forward(student_logits, teacher_logits)
 
         ## get alignment loss
         if teacher_or_student == 'student':
@@ -257,9 +264,9 @@ class Knowledge_distillation_fn(torch.nn.Module):
             align_loss_T_scaled = None
 
         elif teacher_or_student == 'teacher':
-            align_loss, align_loss_T = self.ot_clip_loss_forward(target_logits, None)
-            offset = target_logits.exp().sum(1).log()       # dim: batch size
-            offset_T = target_logits.T.exp().sum(1).log()   # dim: batch size
+            align_loss, align_loss_T = self.ot_clip_loss_forward(teacher_logits, None)
+            offset = teacher_logits.exp().sum(1).log()       # dim: batch size
+            offset_T = teacher_logits.T.exp().sum(1).log()   # dim: batch size
             align_loss_T_scaled = self.align_loss_scale * align_loss_T
 
         ## scale alignment loss

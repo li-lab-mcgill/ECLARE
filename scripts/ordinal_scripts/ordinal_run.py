@@ -58,13 +58,15 @@ if __name__ == "__main__":
     print(f"Allocated CPUs: {cpus_per_task}")
 
     ## SOURCE dataset setup function
-    developmental_datasets = ['PFC_Zhu', 'PFC_V1_Wang']
+    developmental_datasets = ['PFC_Zhu', 'PFC_V1_Wang', 'Cortex_Velmeshev']
     assert args.source_dataset in developmental_datasets, "ORDINAL only implemented for developmental datasets"
     source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
     ## get data loaders
-    dev_stages, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
+    dev_stage_counts_df, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
         source_setup_func(args, return_type ='loaders_with_dev_stages', keep_group=[''])
+
+    dev_stages = dev_stage_counts_df.index.tolist()
     
     run_args = {
         'args': args,
@@ -72,7 +74,7 @@ if __name__ == "__main__":
         'rna_valid_loader': rna_valid_loader,
         'atac_train_loader': atac_train_loader,
         'atac_valid_loader': atac_valid_loader,
-        'ordinal_classes': dev_stages,
+        'ordinal_classes_df': dev_stage_counts_df,
     }
 
     ## get ordinal_job_id from outdir
