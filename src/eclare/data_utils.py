@@ -177,7 +177,8 @@ def create_loaders(
         min_cells: int=12):
 
     if split_key is None:
-        split_key = cell_group_key
+        #split_key = cell_group_key
+        split_key = 'cell_type'
     
     celltypes = pd.Categorical(data.obs[cell_group_key].values)
 
@@ -293,7 +294,7 @@ def create_loaders(
                 class_weights = {c: 1.0 / class_counts[c] for c in class_counts}
                 sample_weights = [class_weights[c] for c in data.obs[split_key][train_idx]]
 
-                sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=False)
+                sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
                 batch_sampler = BatchSampler(sampler, batch_size=batch_size, drop_last=False)
                 train_loader_indices = [batch_indices for batch_indices in batch_sampler]
                 train_loader_indices = np.hstack(train_loader_indices).squeeze()   # stack, so can sensibly use batch_size argument for AnnLoader
