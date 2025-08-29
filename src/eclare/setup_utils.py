@@ -968,7 +968,7 @@ def mdd_setup(
         return rna, atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
     
 def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_Zhu', \
-    keep_group=[]):
+    keep_group=[], dev_group_key='dev_stage', dev_stages = ['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult']):
 
     datapath = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu')
     rna_datapath = os.path.join(datapath, 'rna')
@@ -1136,7 +1136,14 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         print('Genes match:', (rna.var.index == genes_peaks_dict['genes']).all())
         print('Peaks match:', (atac.var.index == genes_peaks_dict['peaks']).all())
 
-        
+    ## Count number of cells per dev stage
+    dev_stage_counts_df = pd.merge(
+        rna.obs[dev_group_key].value_counts().to_frame(), atac.obs[dev_group_key].value_counts().to_frame(),
+        left_index=True, right_index=True, how='outer')
+    dev_stage_counts_df.columns = ['rna_n_cells', 'atac_n_cells']
+    dev_stage_counts_df.index = pd.Categorical(dev_stage_counts_df.index, categories=dev_stages, ordered=True)
+    dev_stage_counts_df = dev_stage_counts_df.sort_index()
+
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
@@ -1148,8 +1155,7 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
     elif return_type == 'loaders_with_dev_stages':
         rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
         atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, cell_group_key=cell_group, batch_key=batch_group)
-        dev_stages = ['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult']
-        return dev_stages, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
+        return dev_stage_counts_df, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
 
     elif return_type == 'data':
         return rna.to_memory(), atac.to_memory(), cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath
@@ -1330,14 +1336,18 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
+    ## define variable used to split data into train and valid sets
+    split_key = 'cell_type'
+    split_type = 'balanced'
+
     if return_type == 'loaders':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, split_type='balanced', split_key=dev_group_key, cell_group_key=cell_group, batch_key=batch_group)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, split_type='balanced', split_key=dev_group_key, cell_group_key=cell_group, batch_key=batch_group)
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, split_type=split_type, split_key=split_key, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, split_type=split_type, split_key=split_key, cell_group_key=cell_group, batch_key=batch_group)
         return rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
     
     elif return_type == 'loaders_with_dev_stages':
-        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, split_type='balanced', split_key=dev_group_key, cell_group_key=cell_group, batch_key=batch_group)
-        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, split_type='balanced', split_key=dev_group_key, cell_group_key=cell_group, batch_key=batch_group)
+        rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, split_type=split_type, split_key=split_key, cell_group_key=cell_group, batch_key=batch_group)
+        atac_train_loader, atac_valid_loader, atac_valid_idx, atac_train_num_batches, atac_valid_num_batches, atac_train_n_batches_str_length, atac_valid_n_batches_str_length, atac_train_n_epochs_str_length, atac_valid_n_epochs_str_length = create_loaders(atac, dataset, args.batch_size, args.total_epochs, split_type=split_type, split_key=split_key, cell_group_key=cell_group, batch_key=batch_group)
         return dev_stage_counts_df, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask
 
     elif return_type == 'data':
