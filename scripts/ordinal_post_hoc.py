@@ -24,7 +24,7 @@ if __name__ == '__main__':
         source_dataset=source_dataset,
         target_dataset=None,
         genes_by_peaks_str='9584_by_66620',
-        ordinal_job_id='27204131',
+        ordinal_job_id='25195201',
     )
 
     if torch.cuda.is_available():
@@ -142,11 +142,11 @@ if __name__ == '__main__':
 
     ## get pseudotimes from CORAL layer
     rna_coral_prebias = ordinal_model.ordinal_layer_rna.coral_weights(rna_latents)
-    rna_pt = torch.sigmoid(rna_coral_prebias).flatten().detach().cpu().numpy()
+    rna_pt = torch.sigmoid(rna_coral_prebias / 4.).flatten().detach().cpu().numpy()
     #rna_pt = rna_coral_prebias.flatten().detach().cpu().numpy()
 
     atac_coral_prebias = ordinal_model.ordinal_layer_atac.coral_weights(atac_latents)
-    atac_pt = torch.sigmoid(atac_coral_prebias).flatten().detach().cpu().numpy()
+    atac_pt = torch.sigmoid(atac_coral_prebias / 4.).flatten().detach().cpu().numpy()
     #atac_pt = atac_coral_prebias.flatten().detach().cpu().numpy()
 
     ## store pseudotimes in dataframes
@@ -170,9 +170,11 @@ if __name__ == '__main__':
     pt_df_horizontal[dev_group_key] = pt_df_horizontal[f'{dev_group_key}_rna']
     pt_df_horizontal = pt_df_horizontal.drop([f'{dev_group_key}_rna', f'{dev_group_key}_atac', f'{cell_group_key}_rna', f'{cell_group_key}_atac'], axis=1)
 
+    #pt_df_vertical['pseudotime'] = pt_df_vertical['pseudotime'].apply(lambda x: np.sign(x) * np.log1p(np.abs(x)))
+
     fig, axs = plt.subplots(1, 2, figsize=(12, 5), sharex=True)
-    sns.histplot(pt_df_vertical, x='pseudotime', hue=dev_group_key, bins=80, alpha=1., ax=axs[0])
-    sns.histplot(pt_df_vertical, x='pseudotime', hue='modality', bins=80, alpha=0.5, ax=axs[1])
+    sns.histplot(pt_df_vertical, x='pseudotime', stat='count', hue=dev_group_key, bins=80, alpha=1., ax=axs[0])
+    sns.histplot(pt_df_vertical, x='pseudotime', stat='count', hue='modality', bins=80, alpha=0.5, ax=axs[1])
     plt.show()
 
     g = sns.jointplot(pt_df_horizontal, x='pseudotime_rna', y='pseudotime_atac', hue=dev_group_key, kind='hist', bins=30, legend=False)
