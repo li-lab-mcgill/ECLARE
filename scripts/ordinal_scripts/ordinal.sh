@@ -34,12 +34,12 @@ cp ./scripts/ordinal_scripts/ordinal_run.py ./scripts/ordinal_scripts/ordinal.sh
 ## Define total number of epochs
 total_epochs=10
 
-source_dataset="Cortex_Velmeshev"
-genes_by_peaks_str="9584_by_66620"
+#source_dataset="Cortex_Velmeshev"
+#genes_by_peaks_str="9584_by_66620"
 #source_dataset="PFC_V1_Wang"
 #genes_by_peaks_str="9914_by_63404"
-#source_dataset="PFC_Zhu"
-#genes_by_peaks_str="9832_by_70751"
+source_dataset="PFC_Zhu"
+genes_by_peaks_str="9832_by_70751"
 
 # Function to check if a GPU is idle
 is_gpu_idle() {
