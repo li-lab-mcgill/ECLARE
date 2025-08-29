@@ -57,7 +57,7 @@ class CLIP(nn.Module):
         },
         'distil_lambda': {
             'suggest_distribution': FloatDistribution(low=0.01, high=0.99),
-            'default': 0.5
+            'default': 0.1
             #'default': 0.6138311212064465
         },
         'decoder_loss': {
@@ -151,7 +151,7 @@ class ORDINAL(CLIP):
         self.ordinal_classes = ordinal_classes_df.index.tolist()
         num_classes = len(self.ordinal_classes)
 
-        ## get importance weights for ordinal loss
+        ''' get importance weights for ordinal loss
         eps = 1e-6
         rna_p = (ordinal_classes_df['rna_n_cells'].cumsum()[:-1] / ordinal_classes_df['rna_n_cells'].sum()).fillna(0).values
         atac_p = (ordinal_classes_df['atac_n_cells'].cumsum()[:-1] / ordinal_classes_df['atac_n_cells'].sum()).fillna(0).values
@@ -165,6 +165,7 @@ class ORDINAL(CLIP):
 
         self.rna_ordinal_weights = torch.from_numpy(rna_ordinal_weights).float()
         self.atac_ordinal_weights = torch.from_numpy(atac_ordinal_weights).float()
+        '''
         
         if shared_coral_layer:
             self.ordinal_layer = CoralLayer(size_in=num_units, num_classes=num_classes)
