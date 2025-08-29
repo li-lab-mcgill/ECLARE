@@ -14,7 +14,7 @@ from coral_pytorch.dataset import levels_from_labelbatch, proba_to_label
 from coral_pytorch.losses import coral_loss
 
 from eclare.models import CLIP, SpatialCLIP, ORDINAL
-from eclare.losses_and_distances_utils import clip_loss, spatial_clip_loss, rbf_from_distance, Knowledge_distillation_fn, cosine_distance
+from eclare.losses_and_distances_utils import clip_loss, spatial_clip_loss, rbf_from_distance, Knowledge_distillation_fn
 from eclare.eval_utils import get_metrics, ordinal_metrics
 from eclare.data_utils import fetch_data_from_loader_light
 
@@ -369,7 +369,6 @@ def eclare_pass(
     # Extract datasets
     datasets = list(models.keys())
 
-
     student_rna_iterator = iter(student_rna_iterator)
     student_atac_iterator = iter(student_atac_iterator)
 
@@ -497,8 +496,9 @@ def eclare_pass(
                     teacher_rna_dat = next(teacher_rna_iterators[dataset])
                     teacher_atac_dat = next(teacher_atac_iterators[dataset])
 
-                    assert (student_rna_dat.obs_names == teacher_rna_dat.obs_names).all()
-                    assert (student_atac_dat.obs_names == teacher_atac_dat.obs_names).all()
+                    if not target_dataset_og in ['MDD', 'Cortex_Velmeshev']:
+                        assert (student_rna_dat.obs_names == teacher_rna_dat.obs_names).all()
+                        assert (student_atac_dat.obs_names == teacher_atac_dat.obs_names).all()
 
                 except StopIteration:
                     # If any iterator runs out of data, continue to the next iteration
@@ -527,7 +527,7 @@ def eclare_pass(
 
             ## compute teacher losses
             distil_loss, distil_loss_T, align_loss_scaled, align_loss_T_scaled, offset, offset_T = \
-                knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'teacher', student_logits_scaling=None, teacher_logits_scaling=coral_sims)
+                knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'teacher', student_logits_scaling=None, teacher_logits_scaling=None)
 
             distil_losses.append(distil_loss)
             align_losses.append(align_loss_scaled)
@@ -563,7 +563,7 @@ def eclare_pass(
 
         ## Get student align loss
         _, _, align_loss_scaled, _, _, _ = \
-            knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'student', student_logits_scaling=None, teacher_logits_scaling=coral_sims)
+            knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'student', student_logits_scaling=None, teacher_logits_scaling=None)
 
         ## Compute total loss as convex combination of CLIP loss and average distillation loss
         total_loss = (lambd * mean_distil_loss) + ((1-lambd) * align_loss_scaled)
@@ -778,7 +778,7 @@ def run_ORDINAL(
     n_genes = rna_train_loader.dataset.shape[1]
     n_peaks = atac_train_loader.dataset.shape[1]
 
-    model = ORDINAL(n_peaks, n_genes, ordinal_classes_df, **params).to(device=device)
+    model = ORDINAL(n_peaks, n_genes, ordinal_classes_df, shared_coral_layer=True, **params).to(device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
