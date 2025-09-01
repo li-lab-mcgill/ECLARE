@@ -27,6 +27,8 @@ if __name__ == "__main__":
                         help='current options: PFC_Zhu')
     parser.add_argument('--target_dataset', type=str, default=None,
                         help='current options: MDD')
+    parser.add_argument('--source_or_target', type=str, default='source',
+                        help='current options: source, target')
     parser.add_argument('--genes_by_peaks_str', type=str, default='827_by_1681',
                         help='indicator of peaks to genes mapping to skip processing')
     parser.add_argument('--total_epochs', type=int, default=2, metavar='E',
@@ -59,13 +61,23 @@ if __name__ == "__main__":
 
     ## SOURCE dataset setup function
     developmental_datasets = ['PFC_Zhu', 'PFC_V1_Wang', 'Cortex_Velmeshev']
-    assert args.source_dataset in developmental_datasets, "ORDINAL only implemented for developmental datasets"
-    source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
     ## get data loaders
-    dev_stage_counts_df, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
-        source_setup_func(args, return_type ='loaders_with_dev_stages', keep_group=[''])
+    if args.source_or_target == 'source':
+        assert args.source_dataset in developmental_datasets, "ORDINAL only implemented for developmental datasets"
+        source_setup_func = return_setup_func_from_dataset(args.source_dataset)
 
+        dev_stage_counts_df, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
+            source_setup_func(args, return_type ='loaders_with_dev_stages', keep_group=[''])
+
+    elif args.source_or_target == 'target':
+        assert args.target_dataset in developmental_datasets, "ORDINAL only implemented for developmental datasets"
+        target_setup_func = return_setup_func_from_dataset(args.target_dataset)
+
+        dev_stage_counts_df, rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
+            target_setup_func(args, return_type ='loaders_with_dev_stages', keep_group=[''])
+
+    ## get dev stages from dev_stage_counts_df
     dev_stages = dev_stage_counts_df.index.tolist()
     
     run_args = {
@@ -194,9 +206,10 @@ if __name__ == "__main__":
             umap_embedding, umap_figure, _ = plot_umap_embeddings(
                 rna_latents, atac_latents, rna_labels, atac_labels, rna_condition, atac_condition, color_map_dev_stage, umap_embedding=None
             )
-            umap_figure.suptitle(f'UMAP embeddings of ORDINAL model (source: {args.source_dataset}) based on {args.valid_subsample} cells')
-            umap_figure.savefig(os.path.join(args.outdir, 'source_umap_embeddings.png'))
-            mlflow.log_figure(umap_figure, 'source_umap_embeddings.png')
+            plot_dataset = args.source_or_target if args.source_or_target == 'source' else args.target_dataset
+            umap_figure.suptitle(f'UMAP embeddings of ORDINAL model ({plot_dataset}) based on {args.valid_subsample} cells')
+            umap_figure.savefig(os.path.join(args.outdir, f'{plot_dataset}_umap_embeddings.png'))
+            mlflow.log_figure(umap_figure, f'{plot_dataset}_umap_embeddings.png')
 
             ## print output directory
             print('\n', args.outdir)
