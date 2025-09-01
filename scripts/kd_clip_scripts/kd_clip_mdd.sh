@@ -16,7 +16,7 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-source_datasets=("PFC_V1_Wang" "PFC_Zhu")
+source_datasets=("PFC_Zhu" "PFC_V1_Wang")
 
 ## Preset target dataset
 clip_job_id='25165730'
@@ -37,7 +37,7 @@ mkdir -p ${OUTPATH}/kd_clip_${target_dataset_lowercase}_${JOB_ID}
 TMPDIR=${OUTPATH}/kd_clip_${target_dataset_lowercase}_${JOB_ID}
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
-N_CORES=1
+N_CORES=2
 N_REPLICATES=1
 
 ## Define random state

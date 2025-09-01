@@ -22,8 +22,8 @@ source_datasets=("PFC_V1_Wang" "PFC_Zhu")
 target_dataset="Cortex_Velmeshev"
 genes_by_peaks_str='9584_by_66620'
 clip_job_id='25165730'
-ordinal_job_id='25195201'
-eclare_job_id='26214511'
+#ordinal_job_id='25195201'
+#eclare_job_id='26214511'
 
 #clip_job_id='30153403'
 #target_dataset="MDD"
@@ -132,13 +132,13 @@ run_eclare_task_on_gpu() {
     --replicate_idx=$task_idx \
     --clip_job_id=$clip_job_id \
     --experiment_job_id=$experiment_job_id \
-    --ordinal_job_id=$ordinal_job_id \
-    --eclare_job_id=$eclare_job_id \
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="'$feature'" &
+    #--ordinal_job_id=$ordinal_job_id \
+    #--eclare_job_id=$eclare_job_id \
     #--tune_hyperparameters \
     #--args.total_epochs=10 \
     #--n_trials=3 &

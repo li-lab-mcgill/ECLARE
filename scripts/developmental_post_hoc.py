@@ -128,9 +128,12 @@ args = SimpleNamespace(
 
 student_rna, student_atac, cell_group, dev_group_key, dev_stages = student_setup_func(args, return_backed=True)
 
-macroglia_cell_types = ['OL', 'OPC', 'GLIALPROG', 'AST']
-keep_rna = student_rna.obs[cell_group].isin(macroglia_cell_types) & student_rna.obs[dev_group_key].str.contains('3rd trimester')
-keep_atac = student_atac.obs[cell_group].isin(macroglia_cell_types)
+#macroglia_cell_types = ['OL', 'OPC', 'GLIALPROG', 'AST']
+#keep_rna = student_rna.obs[cell_group].isin(macroglia_cell_types) & student_rna.obs[dev_group_key].str.contains('3rd trimester')
+#keep_atac = student_atac.obs[cell_group].isin(macroglia_cell_types)
+
+keep_rna = student_rna.obs[cell_group].str.contains('ExNeu')
+keep_atac = student_atac.obs[cell_group].str.contains('ExNeu')
 
 student_rna_keep = student_rna[keep_rna].to_memory()
 student_atac_keep = student_atac[keep_atac].to_memory()
