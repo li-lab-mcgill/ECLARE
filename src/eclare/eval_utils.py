@@ -35,7 +35,7 @@ def ordinal_metrics(rna_probas, atac_probas, rna_targets, atac_targets):
 def get_metrics(model, rna_valid_loader, atac_valid_loader, device, paired=True):
 
     ## get data & latents
-    rna_cells, rna_labels, rna_batches = fetch_data_from_loader_light(rna_valid_loader)
+    rna_cells, rna_labels, rna_batches = fetch_data_from_loader_light(rna_valid_loader, label_key='Seurat_clusters' if 'Seurat_clusters' in rna_valid_loader.dataset.obs.columns else 'cell_type')
     atac_cells, atac_labels, atac_batches = fetch_data_from_loader_light(atac_valid_loader)
     rna_latents, _ = model(rna_cells.to(device=device), modality=0)
     atac_latents, _ = model(atac_cells.to(device=device), modality=1)
