@@ -16,18 +16,20 @@ from eclare.setup_utils import return_setup_func_from_dataset
 
 cuda_available = torch.cuda.is_available()
 n_cudas = torch.cuda.device_count()
-device = torch.device(f'cuda:{n_cudas - 1}') if cuda_available else 'cpu'
+#device = torch.device(f'cuda:{n_cudas - 1}') if cuda_available else 'cpu'
+device = 'cpu'
 
 ## Define target and source datasets
 target_dataset = 'Cortex_Velmeshev'
 source_datasets = ['PFC_V1_Wang', 'PFC_Zhu']
-subsample = 2000
+subsample = 5000
 
 ## Create dict for methods and job_ids
 methods_id_dict = {
     'clip': '25165730',
     'kd_clip': '25173640',
     'eclare': ['25182625'],
+    'ordinal': '27204131',
 }
 
 ## define search strings
@@ -126,6 +128,14 @@ args = SimpleNamespace(
     total_epochs=0,
 )
 
+student_rna, student_atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath = student_setup_func(args, return_type='data')
+student_rna_keep = student_rna
+student_atac_keep = student_atac
+
+dev_group_key = 'Age_Range'
+dev_stages = ['2nd trimester', '3rd trimester', '0-1 years', '1-2 years', '2-4 years', '4-10 years', '10-20 years', 'Adult']
+
+'''
 student_rna, student_atac, cell_group, dev_group_key, dev_stages = student_setup_func(args, return_backed=True)
 
 #macroglia_cell_types = ['OL', 'OPC', 'GLIALPROG', 'AST']
@@ -137,6 +147,21 @@ keep_atac = student_atac.obs[cell_group].str.contains('ExNeu')
 
 student_rna_keep = student_rna[keep_rna].to_memory()
 student_atac_keep = student_atac[keep_atac].to_memory()
+'''
+
+#%% load ordinal model
+import mlflow
+
+ordinal_model_uri_paths_str = f"ordinal_*{methods_id_dict['ordinal']}/model_uri.txt"
+ordinal_model_uri_paths = glob(os.path.join(os.environ['OUTPATH'], ordinal_model_uri_paths_str))
+assert len(ordinal_model_uri_paths) > 0, f'Model URI path not found @ {ordinal_model_uri_paths_str}'
+
+with open(ordinal_model_uri_paths[0], 'r') as f:
+    model_uris = f.read().strip().splitlines()
+    model_uri = model_uris[0]
+
+mlflow.set_tracking_uri('file:///home/mcb/users/dmannk/scMultiCLIP/ECLARE/mlruns')
+ordinal_model = mlflow.pytorch.load_model(model_uri, device=device)
 
 #%% extract student latents for analysis
 from copy import deepcopy
@@ -165,8 +190,8 @@ def subsample_adata(adata, cell_group, dev_group_key, subsample, subsample_type=
 
     return adata[valid_idx.flatten()].copy()
 
-#student_model = deepcopy(eclare_student_model)
-student_model = deepcopy(kd_clip_student_models['PFC_V1_Wang'])
+student_model = deepcopy(eclare_student_model)
+#print('Using KD-CLIP student model'); student_model = deepcopy(kd_clip_student_models['PFC_V1_Wang'])
 
 ## project data through student model
 student_rna_cells = torch.from_numpy(student_rna_keep.X.toarray().astype(np.float32))
@@ -175,9 +200,22 @@ student_atac_cells = torch.from_numpy(student_atac_keep.X.toarray().astype(np.fl
 student_rna_latents, _ = student_model.to('cpu')(student_rna_cells, modality=0)
 student_atac_latents, _ = student_model.to('cpu')(student_atac_cells, modality=1)
 
+## project data through ordinal model and assign to adata
+ordinal_rna_logits, ordinal_rna_probas, ordinal_rna_latents = ordinal_model.to('cpu')(student_rna_cells, modality=0)
+ordinal_atac_logits, ordinal_atac_probas, ordinal_atac_latents = ordinal_model.to('cpu')(student_atac_cells, modality=1)
+
+ordinal_rna_prebias = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents)
+ordinal_atac_prebias = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_atac_latents)
+
+ordinal_rna_pt = torch.sigmoid(ordinal_rna_prebias / ordinal_rna_logits.var().pow(0.5)).flatten().detach().cpu().numpy()
+ordinal_atac_pt = torch.sigmoid(ordinal_atac_prebias / ordinal_atac_logits.var().pow(0.5)).flatten().detach().cpu().numpy()
+
+student_rna_keep.obs['ordinal_pseudotime'] = ordinal_rna_pt
+student_atac_keep.obs['ordinal_pseudotime'] = ordinal_atac_pt
+
 ## subsample data
-student_rna_sub = subsample_adata(student_rna, cell_group, dev_group_key, subsample, subsample_type='stratified')
-student_atac_sub = subsample_adata(student_atac, cell_group, dev_group_key, subsample, subsample_type='stratified')
+student_rna_sub = subsample_adata(student_rna, cell_group, dev_group_key, subsample, subsample_type='balanced')
+student_atac_sub = subsample_adata(student_atac, cell_group, dev_group_key, subsample, subsample_type='balanced')
 
 ## get subset data latents for retraining UMAP
 student_rna_cells_sub = torch.from_numpy(student_rna_sub.X.toarray().astype(np.float32))
@@ -186,10 +224,155 @@ student_atac_cells_sub = torch.from_numpy(student_atac_sub.X.toarray().astype(np
 student_rna_latents_sub, _ = student_model.to('cpu')(student_rna_cells_sub, modality=0)
 student_atac_latents_sub, _ = student_model.to('cpu')(student_atac_cells_sub, modality=1)
 
+## define color palettes
 cmap_dev = plt.get_cmap('plasma', len(dev_stages))
 cmap_dev = {dev_stages[i]: cmap_dev(i) for i in range(len(dev_stages))}
 cmap_ct = create_celltype_palette(student_rna_sub.obs[cell_group].values, student_atac_sub.obs[cell_group].values, plot_color_palette=False)
 
+
+#%% Create ECLARE adata
+import scanpy as sc
+
+## create ECLARE adata for subsampled data
+X = np.vstack([
+    student_rna_latents_sub.detach().cpu().numpy(),
+    student_atac_latents_sub.detach().cpu().numpy()
+    ])
+
+obs = pd.concat([
+    student_rna_sub.obs.assign(modality='RNA'),
+    student_atac_sub.obs.assign(modality='ATAC')
+    ])
+obs[dev_group_key] = pd.Categorical(obs[dev_group_key], categories=dev_stages, ordered=True)
+
+subsampled_eclare_adata = sc.AnnData(
+    X=X,
+    obs=obs,
+)
+
+## create ECLARE adata for full data
+X = np.vstack([
+    student_rna_latents.detach().cpu().numpy(),
+    student_atac_latents.detach().cpu().numpy()
+    ])
+
+obs = pd.concat([
+    student_rna_keep.obs.assign(modality='RNA'),
+    student_atac_keep.obs.assign(modality='ATAC')
+    ])
+
+eclare_adata = sc.AnnData(
+    X=X,
+    obs=obs,
+)
+eclare_adata.obs[dev_group_key] = eclare_adata.obs[dev_group_key].cat.reorder_categories(dev_stages, ordered=True)
+
+## create unimodal ECLARE adatas
+rna_adata = sc.AnnData(
+    X=student_rna_latents.detach().cpu().numpy(),
+    obs=student_rna_keep.obs.assign(modality='RNA'),
+)
+
+atac_adata = sc.AnnData(
+    X=student_atac_latents.detach().cpu().numpy(),
+    obs=student_atac_keep.obs.assign(modality='ATAC'),
+)
+
+#%% PAGA
+
+def paga_analysis(adata):
+
+    ## graph construction
+    sc.pp.pca(adata)
+    sc.pp.neighbors(adata, n_neighbors=5)
+    sc.tl.leiden(adata)
+
+    ## UMAP
+    sc.tl.umap(adata)
+    sc.pl.umap(adata, color=['leiden', 'modality', cell_group, 'ordinal_pseudotime', dev_group_key])
+
+    ## PAGA
+    sc.tl.paga(adata, groups="leiden")
+    sc.pl.paga(adata, color=["leiden", "modality", "Lineage", "ordinal_pseudotime"])
+
+    ## Graph based on PAGA
+    sc.tl.draw_graph(adata, init_pos='paga')
+    sc.pl.draw_graph(adata, color=['modality', 'Lineage', 'ordinal_pseudotime', dev_group_key])
+
+    ## Pseudotime with DPT
+    # Set iroot as the cell closest to the centroid of 2nd trimester cells
+    mask = adata.obs[dev_group_key] == '2nd trimester'
+    X = adata.X if not hasattr(adata, 'obsm') or 'X_pca' not in adata.obsm else adata.obsm['X_pca']
+    if hasattr(X, 'toarray'):  # handle sparse matrices
+        X = X.toarray()
+    centroid = X[mask.values].mean(axis=0)
+    dists = np.linalg.norm(X - centroid, axis=1)
+    adata.uns['iroot'] = np.argmin(np.where(mask.values, dists, np.inf))
+    sc.tl.dpt(adata)
+    sc.pl.draw_graph(adata, color=['modality', cell_group, 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key])
+
+    return adata
+
+subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata)
+eclare_adata = paga_analysis(eclare_adata)
+
+#for col in eclare_adata.obs.columns:
+#    if eclare_adata.obs[col].dtype == 'object':
+#        eclare_adata.obs[col] = eclare_adata.obs[col].astype(str)
+
+#output_dir = os.path.join(os.environ['OUTPATH'], f'paga_analysis_{methods_id_dict["eclare"][0]}')
+#os.makedirs(output_dir, exist_ok=True)
+#eclare_adata.write_h5ad(os.path.join(output_dir, 'eclare_adata.h5ad'))
+
+rna_adata = paga_analysis(rna_adata)
+atac_adata = paga_analysis(atac_adata)
+
+student_rna_keep.obs['modality'] = 'RNA'
+student_atac_keep.obs['modality'] = 'ATAC'
+
+student_rna_keep = paga_analysis(student_rna_keep)
+student_atac_keep = paga_analysis(student_atac_keep)
+
+
+#%% trajectory analysis metrics
+
+from scipy.stats import spearmanr, kendalltau
+
+pt_adata = subsampled_eclare_adata.obs[[dev_group_key, 'dpt_pseudotime', 'ordinal_pseudotime']]
+pt_adata[dev_group_key] = pt_adata[dev_group_key].cat.codes.to_numpy()
+
+def trajectory_metrics(pt_adata):
+    triu_indices = np.triu_indices(pt_adata.shape[1], k=1)
+
+    spearman_corr_matrix = pt_adata.corr(method=lambda x, y: spearmanr(x, y)[0])
+    kendall_corr_matrix = pt_adata.corr(method=lambda x, y: kendalltau(x, y)[0])
+
+    spearman_corr_values = spearman_corr_matrix.values[triu_indices]
+    kendall_corr_values = kendall_corr_matrix.values[triu_indices]
+
+    return spearman_corr_values, kendall_corr_values
+
+trajectory_metrics(pt_adata)
+
+#%% create PHATE embeddings
+import phate
+
+phate_op = phate.PHATE(
+    k=50,                # denser graph
+    n_pca=10,            # moderate denoising
+    verbose=True
+)
+
+phate_rna = phate_op.fit_transform(student_rna_latents.detach().cpu().numpy())
+phate_atac = phate_op.fit_transform(student_atac_latents.detach().cpu().numpy())
+
+#%% plot PHATE embeddings
+import matplotlib.pyplot as plt
+
+dev_labels = student_atac_keep.obs[dev_group_key]
+cmap_colors = plt.get_cmap('plasma', len(dev_labels.unique()))
+cmap = {dev_labels.unique()[i]: cmap_colors(i) for i in range(len(dev_labels.unique()))}
+phate.plot.scatter2d(phate_op, c=dev_labels, xticklabels=False, yticklabels=False, xlabel='PHATE 1', ylabel='PHATE 2', cmap=cmap)
 
 #%% train UMAP on subsampled data
 import seaborn as sns
@@ -219,132 +402,6 @@ else:
 
 #umap_embedder, umap_fig, rna_atac_df_umap = plot_umap_embeddings(rna_latents, atac_latents, rna_dev_stages, atac_dev_stages, rna_condition, atac_condition, cmap_dev)
 umap_embedder, umap_fig, rna_atac_df_umap = plot_umap_embeddings(rna_latents, atac_latents, rna_celltypes, atac_celltypes, rna_condition, atac_condition, cmap_ct)
-
-#%% Create ECLARE adata
-import scanpy as sc
-
-X = np.vstack([
-    student_rna_latents_sub.detach().cpu().numpy(),
-    student_atac_latents_sub.detach().cpu().numpy()
-    ])
-
-obs = pd.concat([
-    student_rna_sub.obs.assign(modality='RNA'),
-    student_atac_sub.obs.assign(modality='ATAC')
-    ])
-
-eclare_adata = sc.AnnData(
-    X=X,
-    obs=obs,
-)
-
-## create unimodal ECLARE adatas
-rna_adata = sc.AnnData(
-    X=student_rna_latents_sub.detach().cpu().numpy(),
-    obs=student_rna_sub.obs.assign(modality='RNA'),
-)
-
-atac_adata = sc.AnnData(
-    X=student_atac_latents_sub.detach().cpu().numpy(),
-    obs=student_atac_sub.obs.assign(modality='ATAC'),
-)
-
-#%% PAGA
-
-def paga_analysis(adata):
-
-    sc.pp.pca(adata)
-    sc.pp.neighbors(adata)
-    sc.tl.leiden(adata, resolution=1.5)
-
-    ## UMAP
-    sc.tl.umap(adata)
-    sc.pl.umap(adata, color=[cell_group, 'modality', dev_group_key])
-
-    #sc.tl.draw_graph(eclare_adata)
-    #sc.pl.draw_graph(eclare_adata, color=[cell_group, 'modality', dev_group_key])
-
-    ## PAGA
-    sc.tl.paga(adata, groups="leiden")
-    sc.pl.paga(adata, color=["leiden", "modality", "Lineage"])
-
-    ## Graph based on PAGA
-    sc.tl.draw_graph(adata, init_pos='paga')
-    sc.pl.draw_graph(adata, color=['Lineage', 'modality', dev_group_key])
-
-    ## Pseudotime with DPT
-    adata.uns['iroot'] = np.flatnonzero(adata.obs[dev_group_key] == '2nd trimester')[0]
-    sc.tl.dpt(adata)
-    sc.pl.draw_graph(adata, color=['dpt_pseudotime', dev_group_key, cell_group, 'modality'])
-
-paga_analysis(eclare_adata)
-
-paga_analysis(rna_adata)
-paga_analysis(atac_adata)
-
-student_rna_sub.obs['modality'] = 'RNA'
-student_atac_sub.obs['modality'] = 'ATAC'
-
-paga_analysis(student_rna_sub)
-paga_analysis(student_atac_sub)
-
-
-#%% project select ATAC and RNA latents through UMAP
-
-student_atac_latents_umap = umap_embedder.transform(student_atac_latents.detach().cpu().numpy())
-student_rna_latents_umap = umap_embedder.transform(student_rna_latents.detach().cpu().numpy())
-
-dev_rna = student_rna_keep.obs[dev_group_key].values
-dev_atac = student_atac_keep.obs[dev_group_key].values
-
-ct_rna = student_rna_keep.obs[cell_group].values
-ct_atac = student_atac_keep.obs[cell_group].values
-
-mod_atac = ['ATAC'] * len(student_atac_latents)
-
-student_latents_umap = np.concatenate([student_rna_latents_umap, student_atac_latents_umap], axis=0)
-dev = np.concatenate([dev_rna, dev_atac])
-ct = np.concatenate([ct_rna, ct_atac])
-modality = np.concatenate([['RNA'] * len(student_rna_latents), ['ATAC'] * len(student_atac_latents)])
-cmap_mod = { 'RNA': 'tab:blue', 'ATAC': 'tab:orange' }
-
-fig, ax = plt.subplots(2, 3, figsize=(15, 10))
-
-sns.scatterplot(x=student_atac_latents_umap[:, 0], y=student_atac_latents_umap[:, 1], hue=dev_atac, palette=cmap_dev, marker='.', hue_order=dev_stages, ax=ax[0,0])
-sns.scatterplot(x=student_latents_umap[:, 0], y=student_latents_umap[:, 1], hue=dev, palette=cmap_dev, marker='.', hue_order=dev_stages, ax=ax[1,0])
-ax[0,0].set_title('ATAC'); ax[1,0].set_title('ATAC & RNA')
-ax[0,0].xaxis.set_visible(False); ax[0,0].yaxis.set_visible(False); ax[1,0].xaxis.set_visible(False); ax[1,0].yaxis.set_visible(False)
-
-sns.scatterplot(x=student_atac_latents_umap[:, 0], y=student_atac_latents_umap[:, 1], hue=ct_atac, palette=cmap_ct, marker='.', ax=ax[0,1])
-sns.scatterplot(x=student_latents_umap[:, 0], y=student_latents_umap[:, 1], hue=ct, palette=cmap_ct, marker='.', ax=ax[1,1])
-ax[0,1].set_title('ATAC'); ax[1,1].set_title('ATAC & RNA')
-ax[0,1].xaxis.set_visible(False); ax[0,1].yaxis.set_visible(False); ax[1,1].xaxis.set_visible(False); ax[1,1].yaxis.set_visible(False)
-
-sns.scatterplot(x=student_atac_latents_umap[:, 0], y=student_atac_latents_umap[:, 1], hue=mod_atac, palette=cmap_mod, marker='.', ax=ax[0,2])
-sns.scatterplot(x=student_latents_umap[:, 0], y=student_latents_umap[:, 1], hue=modality, palette=cmap_mod, marker='.', ax=ax[1,2])
-ax[0,2].set_title('ATAC'); ax[1,2].set_title('ATAC & RNA')
-ax[0,2].xaxis.set_visible(False); ax[0,2].yaxis.set_visible(False); ax[1,2].xaxis.set_visible(False); ax[1,2].yaxis.set_visible(False)
-
-
-#%% create PHATE embeddings
-import phate
-
-phate_op = phate.PHATE(
-    k=50,                # denser graph
-    n_pca=10,            # moderate denoising
-    verbose=True
-)
-
-phate_rna = phate_op.fit_transform(student_rna_latents.detach().cpu().numpy())
-phate_atac = phate_op.fit_transform(student_atac_latents.detach().cpu().numpy())
-
-#%% plot PHATE embeddings
-import matplotlib.pyplot as plt
-
-dev_labels = student_atac_keep.obs[dev_group_key]
-cmap_colors = plt.get_cmap('plasma', len(dev_labels.unique()))
-cmap = {dev_labels.unique()[i]: cmap_colors(i) for i in range(len(dev_labels.unique()))}
-phate.plot.scatter2d(phate_op, c=dev_labels, xticklabels=False, yticklabels=False, xlabel='PHATE 1', ylabel='PHATE 2', cmap=cmap)
 
 #%% Retrain UMAP based on original RNA UMAP coordinates
 from umap import UMAP
@@ -400,3 +457,38 @@ dev_stages_atac = [dev_stage for dev_stage in dev_stages if dev_stage in student
 student_atac_sub.obs[dev_group_key] = student_atac_sub.obs[dev_group_key].cat.reorder_categories(dev_stages_atac, ordered=True)
 sc.pl.embedding(student_atac_sub, basis='X_umap_retrained', color=dev_group_key, palette=cmap_dev, sort_order=True)
 
+#%% project select ATAC and RNA latents through UMAP
+
+student_atac_latents_umap = umap_embedder.transform(student_atac_latents.detach().cpu().numpy())
+student_rna_latents_umap = umap_embedder.transform(student_rna_latents.detach().cpu().numpy())
+
+dev_rna = student_rna_keep.obs[dev_group_key].values
+dev_atac = student_atac_keep.obs[dev_group_key].values
+
+ct_rna = student_rna_keep.obs[cell_group].values
+ct_atac = student_atac_keep.obs[cell_group].values
+
+mod_atac = ['ATAC'] * len(student_atac_latents)
+
+student_latents_umap = np.concatenate([student_rna_latents_umap, student_atac_latents_umap], axis=0)
+dev = np.concatenate([dev_rna, dev_atac])
+ct = np.concatenate([ct_rna, ct_atac])
+modality = np.concatenate([['RNA'] * len(student_rna_latents), ['ATAC'] * len(student_atac_latents)])
+cmap_mod = { 'RNA': 'tab:blue', 'ATAC': 'tab:orange' }
+
+fig, ax = plt.subplots(2, 3, figsize=(15, 10))
+
+sns.scatterplot(x=student_atac_latents_umap[:, 0], y=student_atac_latents_umap[:, 1], hue=dev_atac, palette=cmap_dev, marker='.', hue_order=dev_stages, ax=ax[0,0])
+sns.scatterplot(x=student_latents_umap[:, 0], y=student_latents_umap[:, 1], hue=dev, palette=cmap_dev, marker='.', hue_order=dev_stages, ax=ax[1,0])
+ax[0,0].set_title('ATAC'); ax[1,0].set_title('ATAC & RNA')
+ax[0,0].xaxis.set_visible(False); ax[0,0].yaxis.set_visible(False); ax[1,0].xaxis.set_visible(False); ax[1,0].yaxis.set_visible(False)
+
+sns.scatterplot(x=student_atac_latents_umap[:, 0], y=student_atac_latents_umap[:, 1], hue=ct_atac, palette=cmap_ct, marker='.', ax=ax[0,1])
+sns.scatterplot(x=student_latents_umap[:, 0], y=student_latents_umap[:, 1], hue=ct, palette=cmap_ct, marker='.', ax=ax[1,1])
+ax[0,1].set_title('ATAC'); ax[1,1].set_title('ATAC & RNA')
+ax[0,1].xaxis.set_visible(False); ax[0,1].yaxis.set_visible(False); ax[1,1].xaxis.set_visible(False); ax[1,1].yaxis.set_visible(False)
+
+sns.scatterplot(x=student_atac_latents_umap[:, 0], y=student_atac_latents_umap[:, 1], hue=mod_atac, palette=cmap_mod, marker='.', ax=ax[0,2])
+sns.scatterplot(x=student_latents_umap[:, 0], y=student_latents_umap[:, 1], hue=modality, palette=cmap_mod, marker='.', ax=ax[1,2])
+ax[0,2].set_title('ATAC'); ax[1,2].set_title('ATAC & RNA')
+ax[0,2].xaxis.set_visible(False); ax[0,2].yaxis.set_visible(False); ax[1,2].xaxis.set_visible(False); ax[1,2].yaxis.set_visible(False)
