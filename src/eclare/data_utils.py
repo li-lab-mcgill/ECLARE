@@ -3,7 +3,6 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler, BatchSampler
 from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
-from imblearn.under_sampling import RandomUnderSampler
 from collections import Counter
 import pandas as pd
 import os

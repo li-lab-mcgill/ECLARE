@@ -7,42 +7,40 @@ hostname = socket.gethostname()
 if 'narval' in hostname:
     os.environ['machine'] = 'narval'
     default_outdir = outpath = '/home/dmannk/scratch/'
-    CLARE_root = '/home/dmannk/projects/def-liyue/dmannk/CLARE'
-    sys.path.insert(0, CLARE_root)
-    os.environ['CLARE_root'] = CLARE_root
-    sys.path.insert(0, '/home/dmannk/projects/def-liyue/dmannk/CLARE/benchmark_diagonal/scDART/scDART')
+    ECLARE_root = '/home/dmannk/projects/def-liyue/dmannk/ECLARE'
+    sys.path.insert(0, ECLARE_root)
+    os.environ['ECLARE_root'] = ECLARE_root
+    sys.path.insert(0, '/home/dmannk/projects/def-liyue/dmannk/ECLARE/src/eclare')
     gtf = "/home/dmannk/projects/def-liyue/dmannk/data/genome_annot/gencode.v45lift37.basic.annotation.gtf"
 
 elif (hostname == 'MBP-de-Dylan.lan') or (hostname == 'MacBook-Pro-de-Dylan.local'):
     os.environ['machine'] = 'local'
     default_outdir = outpath = '/Users/dmannk/cisformer/outputs/'
-    CLARE_root = '/Users/dmannk/cisformer/CLARE'
-    sys.path.insert(0, CLARE_root)
-    os.environ['CLARE_root'] = CLARE_root
-    sys.path.insert(0, '/Users/dmannk/cisformer/CLARE/benchmark_diagonal/scDART/scDART')
+    ECLARE_root = '/Users/dmannk/cisformer/ECLARE'
+    sys.path.insert(0, ECLARE_root)
+    os.environ['ECLARE_root'] = ECLARE_root
+    sys.path.insert(0, '/Users/dmannk/cisformer/ECLARE/src/eclare')
     gtf = "/Users/dmannk/cisformer/workspace/genome_annot/gencode.v45lift37.basic.annotation.gtf"
 
 elif np.any([mcb_server in hostname for mcb_server in ['mcb', 'buckeridge' ,'hlr', 'ri', 'wh', 'yl']]):
     os.environ['machine'] = 'mcb'
     default_outdir = outpath = '/home/mcb/users/dmannk/scMultiCLIP/outputs'
-    CLARE_root = '/home/mcb/users/dmannk/scMultiCLIP/CLARE'
-    sys.path.insert(0, CLARE_root)
-    os.environ['CLARE_root'] = CLARE_root
-    sys.path.insert(0, '/home/mcb/users/dmannk/scMultiCLIP/CLARE/benchmark_diagonal/scDART/scDART')
+    ECLARE_root = '/home/mcb/users/dmannk/scMultiCLIP/ECLARE'
+    sys.path.insert(0, ECLARE_root)
+    os.environ['ECLARE_root'] = ECLARE_root
+    sys.path.insert(0, '/home/mcb/users/dmannk/scMultiCLIP/ECLARE/src/')
     gtf = "/home/mcb/users/dmannk/data/genome_annot/gencode.v45lift37.basic.annotation.gtf"
 
 import pandas as pd
-
 import torch
-from sklearn.decomposition import PCA
-
-import scDART.utils as utils
-import scDART.TI as ti
-import scDART
 from sklearn.model_selection import StratifiedShuffleSplit
+import scDART
 
-from setup_utils import return_setup_func_from_dataset
-from eval_utils import align_metrics
+from eclare.eval_utils import align_metrics
+from eclare.setup_utils import return_setup_func_from_dataset
+from eclare import set_env_variables
+
+set_env_variables(os.path.join(ECLARE_root, 'config'))
 
 from argparse import ArgumentParser
 parser = ArgumentParser(description='')
@@ -52,7 +50,7 @@ parser.add_argument('--n_epochs', type=int, default=2,
                     help='number of epochs')
 parser.add_argument('--source_dataset', type=str, default='roussos',
                     help='dataset to use')
-parser.add_argument('--target_dataset', type=str, default='mdd',
+parser.add_argument('--target_dataset', type=str, default='MDD',
                     help='target dataset')
 parser.add_argument('--save_latents', action='store_true',
                     help='save latents during training')
@@ -82,11 +80,11 @@ if __name__ == '__main__':
 
     ## Get HVG features
     rna_hvg, atac_hvg, _, _, _, _, _ \
-        = setup_func(args, hvg_only=True, protein_coding_only=True, pretrain=None, return_type='data', return_raw_data=False)
+        = setup_func(args, hvg_only=True, protein_coding_only=True, return_type='data', return_raw_data=False)
     
     ## Get all features to skip preprocessing
     rna, atac, cell_group, _, _, atac_datapath, rna_datapath \
-        = setup_func(args, hvg_only=False, protein_coding_only=True, pretrain=None, return_type='data', return_raw_data=True)
+        = setup_func(args, hvg_only=False, protein_coding_only=True, return_type='data', return_raw_data=True)
 
     ## Retain only HVG features
     rna = rna[:, rna.var_names.isin(rna_hvg.var_names) ].copy()
@@ -137,7 +135,7 @@ if __name__ == '__main__':
     scDART_op = scDART.scDART(n_epochs = n_epochs, latent_dim = latent_dim, batch_size = batch_size, \
             ts = ts, use_anchor = use_anchor, use_potential = use_potential, k = 10, \
             reg_d = 1, reg_g = 1, reg_mmd = 1, l_dist_type = 'kl', seed = seeds[0],\
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+            device = device)
 
     scDART_op = scDART_op.fit(rna_count = rna_train.X.toarray(), atac_count = atac_train.X.toarray(), reg = coarse_reg, rna_anchor = None, atac_anchor = None)
 

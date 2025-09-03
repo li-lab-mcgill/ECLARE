@@ -31,12 +31,9 @@ from anndata import AnnData
 from glob import glob
 from datetime import datetime
 import re
-import mlflow.pytorch
-from mlflow.models import Model
 from sklearn.ensemble import GradientBoostingRegressor
 from joblib import Parallel, delayed
 from copy import deepcopy
-from eclare.models import load_CLIP_model
 from eclare.data_utils import create_loaders
 
 def return_setup_func_from_dataset(dataset_name):
@@ -1035,9 +1032,9 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         assert (keep_atac == keep_rna).all()
 
         ## TMP - keep only ExNeu cells
-        print('!!!! TMP - keeping only cells from EN lineage !!!!')
-        keep_atac = keep_atac & atac.obs[cell_group].isin(EN_cell_type_branches.keys())
-        keep_rna = keep_rna & rna.obs[cell_group].isin(EN_cell_type_branches.keys())
+        #print('!!!! TMP - keeping only cells from EN lineage !!!!')
+        #keep_atac = keep_atac & atac.obs[cell_group].isin(EN_cell_type_branches.keys())
+        #keep_rna = keep_rna & rna.obs[cell_group].isin(EN_cell_type_branches.keys())
 
         atac = atac[keep_atac].to_memory()
         rna = rna[keep_rna].to_memory()
@@ -2167,6 +2164,8 @@ def get_genes_by_peaks_str(datasets = ["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", 
 
 
 def teachers_setup(model_paths, args, device, dataset_idx_dict=None):
+    import mlflow.pytorch
+    from mlflow.models import Model
     
     datasets = []
     models = {}
