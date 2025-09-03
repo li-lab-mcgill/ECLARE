@@ -7,25 +7,26 @@ hostname = socket.gethostname()
 if 'narval' in hostname:
     os.environ['machine'] = 'narval'
     default_outdir = outpath = '/home/dmannk/scratch/'
-    CLARE_root = '/home/dmannk/projects/def-liyue/dmannk/CLARE'
-    sys.path.insert(0, CLARE_root)
-    os.environ['CLARE_root'] = CLARE_root
+    ECLARE_root = '/home/dmannk/projects/def-liyue/dmannk/ECLARE'
+    sys.path.insert(0, ECLARE_root)
+    os.environ['ECLARE_root'] = ECLARE_root
     gtf = "/home/dmannk/projects/def-liyue/dmannk/data/genome_annot/gencode.v45lift37.basic.annotation.gtf"
 
 elif (hostname == 'MBP-de-Dylan.lan') or (hostname == 'MacBook-Pro-de-Dylan.local'):
     os.environ['machine'] = 'local'
     default_outdir = outpath = '/Users/dmannk/cisformer/outputs/'
-    CLARE_root = '/Users/dmannk/cisformer/CLARE'
-    sys.path.insert(0, CLARE_root)
-    os.environ['CLARE_root'] = CLARE_root
+    ECLARE_root = '/Users/dmannk/cisformer/ECLARE'
+    sys.path.insert(0, ECLARE_root)
+    os.environ['ECLARE_root'] = ECLARE_root
     gtf = "/Users/dmannk/cisformer/data/genome_annot/gencode.v45lift37.basic.annotation.gtf"
 
 elif np_any([mcb_server in hostname for mcb_server in ['mcb', 'buckeridge' ,'hlr', 'ri', 'wh', 'yl']]):
     os.environ['machine'] = 'mcb'
     default_outdir = outpath = '/home/mcb/users/dmannk/scMultiCLIP/outputs'
-    CLARE_root = '/home/mcb/users/dmannk/scMultiCLIP/CLARE'
-    sys.path.insert(0, CLARE_root)
-    os.environ['CLARE_root'] = CLARE_root
+    ECLARE_root = '/home/mcb/users/dmannk/scMultiCLIP/ECLARE'
+    sys.path.insert(0, ECLARE_root)
+    sys.path.insert(0, os.path.join(ECLARE_root, 'src'))
+    os.environ['ECLARE_root'] = ECLARE_root
     gtf = "/home/mcb/users/dmannk/scMultiCLIP/data/genome_annot/gencode.v45lift37.basic.annotation.gtf"
 
 import scglue
@@ -41,8 +42,8 @@ import celltypist
 from numpy import array as np_array
 from scipy.sparse import csr_matrix
 
-from setup_utils import return_setup_func_from_dataset, retain_feature_overlap
-from eval_utils import align_metrics
+from eclare.setup_utils import return_setup_func_from_dataset, retain_feature_overlap
+from eclare.eval_utils import align_metrics
 
 def process_data(rna, atac):
 
@@ -52,15 +53,17 @@ def process_data(rna, atac):
 
     if np_any(atac_non_integer_mask):
         print(f'Converting ATAC data to integers: {sum(atac_non_integer_mask)} values')
-        new_data = atac.X.data.copy()
-        new_data[atac_non_integer_mask] = np_ceil(new_data[atac_non_integer_mask])
-        atac.X = csr_matrix((new_data, atac.X.indices, atac.X.indptr), shape=atac.X.shape)
+        atac.X.data[atac_non_integer_mask] = np_ceil(atac.X.data[atac_non_integer_mask])
+        #new_data = atac.X.data.copy()
+        #new_data[atac_non_integer_mask] = np_ceil(new_data[atac_non_integer_mask])
+        #atac.X = csr_matrix((new_data, atac.X.indices, atac.X.indptr), shape=atac.X.shape)
 
     if np_any(rna_non_integer_mask):
         print(f'Converting RNA data to integers: {sum(rna_non_integer_mask)} values')
-        new_data = rna.X.data.copy()
-        new_data[rna_non_integer_mask] = np_ceil(new_data[rna_non_integer_mask])
-        rna.X = csr_matrix((new_data, rna.X.indices, rna.X.indptr), shape=rna.X.shape)
+        rna.X.data[rna_non_integer_mask] = np_ceil(rna.X.data[rna_non_integer_mask])
+        #new_data = rna.X.data.copy()
+        #new_data[rna_non_integer_mask] = np_ceil(new_data[rna_non_integer_mask])
+        #rna.X = csr_matrix((new_data, rna.X.indices, rna.X.indptr), shape=rna.X.shape)
 
     ## Preprocess ATAC data (MOJITOO documentation)
     epi.pp.cal_var(atac)
@@ -108,10 +111,10 @@ if __name__ == '__main__':
 
     ## Get all features to skip preprocessing
     source_rna, source_atac, source_cell_group, _, _, source_atac_datapath, source_rna_datapath \
-        = source_setup_func(args, return_raw_data=True, hvg_only=False, protein_coding_only=True, pretrain=None, return_type='data')
+        = source_setup_func(args, return_raw_data=True, hvg_only=False, protein_coding_only=True, return_type='data')
     
     target_rna, target_atac, target_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, target_atac_datapath, target_rna_datapath \
-        = target_setup_func(args, return_raw_data=True, hvg_only=False, protein_coding_only=True, pretrain=None, return_type='data')
+        = target_setup_func(args, return_raw_data=True, hvg_only=False, protein_coding_only=True, return_type='data')
     
     source_rna, target_rna, source_atac, target_atac, target_genes_to_peaks_binary_mask, target_genes_peaks_dict \
         = retain_feature_overlap(args, source_rna, target_rna, source_atac, target_atac, source_cell_group, target_cell_group, target_genes_to_peaks_binary_mask, target_genes_peaks_dict, return_type='data')
