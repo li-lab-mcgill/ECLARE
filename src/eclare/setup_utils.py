@@ -1159,6 +1159,10 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
+    ## ensure that developmental stages are in the correct order
+    atac.obs[dev_group_key] = pd.Categorical(atac.obs[dev_group_key], categories=dev_stages, ordered=True)
+    rna.obs[dev_group_key] = pd.Categorical(rna.obs[dev_group_key], categories=dev_stages, ordered=True)
+
     ## Set split type and key
     split_key = 'cell_type'
     split_type = 'balanced'
@@ -1274,9 +1278,9 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
             return rna, atac, cell_group, dev_group_key, dev_stages
 
         ## TMP - keep only ExNeu cells
-        print('!!!! TMP - keeping only ExNeu cells !!!!')
-        keep_atac = keep_atac & atac.obs['Lineage'].str.contains('ExNeu')
-        keep_rna = keep_rna & rna.obs['Lineage'].str.contains('ExNeu')
+        print('!!!! TMP - keeping only ExNeu and IN cells !!!!')
+        keep_atac = keep_atac & atac.obs['Lineage'].str.contains('ExNeu|IN')
+        keep_rna = keep_rna & rna.obs['Lineage'].str.contains('ExNeu|IN')
 
         atac = atac[keep_atac].to_memory()
         rna = rna[keep_rna].to_memory()
@@ -1395,6 +1399,10 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
         
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
+
+    ## ensure that developmental stages are in the correct order
+    atac.obs[dev_group_key] = pd.Categorical(atac.obs[dev_group_key], categories=dev_stages, ordered=True)
+    rna.obs[dev_group_key] = pd.Categorical(rna.obs[dev_group_key], categories=dev_stages, ordered=True)
 
     ## define variable used to split data into train and valid sets
     split_key = dev_group_key
@@ -1613,6 +1621,10 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
 
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
+
+    ## ensure that developmental stages are in the correct order
+    atac.obs[dev_group_key] = pd.Categorical(atac.obs[dev_group_key], categories=dev_stages, ordered=True)
+    rna.obs[dev_group_key] = pd.Categorical(rna.obs[dev_group_key], categories=dev_stages, ordered=True)
 
     ## Set split type and key
     split_key = 'cell_type'

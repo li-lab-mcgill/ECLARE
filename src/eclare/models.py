@@ -202,6 +202,17 @@ class ORDINAL(CLIP):
 
         return logits, probas, latent
 
+    def forward_probas(self, x, modality: int, normalize: int = 0):
+
+        if modality == 0:
+            ordinal_coral_prebias = self.ordinal_layer_rna.coral_weights(x)
+
+        elif modality == 1:
+            ordinal_coral_prebias = self.ordinal_layer_atac.coral_weights(x)
+
+        ordinal_pt = torch.sigmoid(ordinal_coral_prebias).flatten().detach().cpu().numpy()
+        return ordinal_pt
+
 
 # Expose the method separately as a standalone function
 get_clip_hparams = CLIP.get_hparams
