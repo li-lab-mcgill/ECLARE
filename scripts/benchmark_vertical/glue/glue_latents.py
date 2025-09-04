@@ -24,8 +24,6 @@ parser.add_argument('--source_dataset', type=str, default='Cortex_Velmeshev',
                     help='dataset to use')
 parser.add_argument('--target_dataset', type=str, default=None,
                     help='target dataset')
-parser.add_argument('--save_latents', action='store_true',
-                    help='save latents during training')
 parser.add_argument('--valid_subsample', type=int, default=5000,
                     help='number of nuclei to subsample for validation')
 parser.add_argument('--genes_by_peaks_str', type=str, default='9584_by_66620',
@@ -123,14 +121,26 @@ if __name__ == '__main__':
     adata_valid = AnnData(X=X, obs=obs)
     adata_valid.obs['modality'] = ['rna'] * len(rna_valid) + ['atac'] * len(atac_valid)
 
+    ## create unique identifier for this run based on date and time
+    import datetime
+    unique_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs(os.path.join(os.environ['OUTPATH'], 'glue', unique_id), exist_ok=True)
+
     ## umap
     sc.pp.neighbors(adata_valid)
     sc.tl.umap(adata_valid)
     fig = sc.pl.umap(adata_valid, color=['modality', 'Age_Range', 'Lineage'], return_fig=True)
 
     import matplotlib.pyplot as plt
-    fig.savefig(os.path.join(os.environ['OUTPATH'], 'glue', 'glue_latents.png'), dpi=96, bbox_inches='tight')
+    fig.savefig(os.path.join(os.environ['OUTPATH'], 'glue', unique_id, 'glue_latents.png'), dpi=96, bbox_inches='tight')
     plt.close()
+
+    ## save adata
+    for col in adata_valid.obs.columns:
+        if adata_valid.obs[col].dtype == 'object':
+            adata_valid.obs[col] = adata_valid.obs[col].astype(str)
+
+    adata_valid.write_h5ad(os.path.join(os.environ['OUTPATH'], 'glue', unique_id, 'glue_latents.h5ad'))
 
 
 

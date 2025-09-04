@@ -6,6 +6,7 @@ import torch
 from glob import glob
 import optuna
 import socket
+import pickle
 
 import mlflow
 from mlflow import get_artifact_uri, MlflowClient
@@ -166,6 +167,16 @@ if __name__ == "__main__":
     datasets, models, teacher_rna_train_loaders, teacher_atac_train_loaders, teacher_rna_valid_loaders, teacher_atac_valid_loaders = \
         teachers_setup(model_uri_paths, args, device)
     
+    ## Extract validation cell IDs
+    valid_cell_ids_rna = student_rna_valid_loader.dataset.obs['Cell_ID'].tolist()
+    valid_cell_ids_atac = student_atac_valid_loader.dataset.obs['Cell_ID'].tolist()
+
+    ## Confirm that validation cell IDs are the same for all teachers and student
+    for dataset in datasets:
+        valid_cell_ids_rna_ = teacher_rna_valid_loaders[dataset].dataset.obs['Cell_ID'].tolist()
+        valid_cell_ids_atac_ = teacher_atac_valid_loaders[dataset].dataset.obs['Cell_ID'].tolist()
+        assert set(valid_cell_ids_rna) == set(valid_cell_ids_rna_), f'Validation RNA cell IDs do not match in {dataset}'
+        assert set(valid_cell_ids_atac) == set(valid_cell_ids_atac_), f'Validation ATAC cell IDs do not match in {dataset}'
 
     run_args = {
         'args': args,
@@ -242,6 +253,20 @@ if __name__ == "__main__":
             mlflow.set_tag("ignore_sources", args.ignore_sources)
             mlflow.set_tag("outdir", args.outdir)
             mlflow.set_tag("hostname", socket.gethostname())
+
+            ## Log validation cell IDs
+            # Save both lists in a single pickle file
+            cell_ids_data = {
+                'valid_cell_ids_rna': valid_cell_ids_rna,
+                'valid_cell_ids_atac': valid_cell_ids_atac
+            }
+            
+            cell_ids_pkl_path = os.path.join(args.outdir, 'valid_cell_ids.pkl')
+            with open(cell_ids_pkl_path, 'wb') as f:
+                pickle.dump(cell_ids_data, f)
+            
+            # Log the single pickle file as artifact
+            mlflow.log_artifact(cell_ids_pkl_path, 'valid_cell_ids.pkl')
 
             hyperparameters = get_clip_hparams(context='student')
             default_hyperparameters = {k: hyperparameters[k]['default'] for k in hyperparameters}
