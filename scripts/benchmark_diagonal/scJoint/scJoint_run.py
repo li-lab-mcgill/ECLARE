@@ -40,8 +40,7 @@ from setup_utils import return_setup_func_from_dataset, gene_activity_score_adat
 from eval_utils import align_metrics
 
 import h5py
-from scipy.sparse import csr_matrix, csc_matrix
-from pathlib import Path
+from scipy.sparse import csc_matrix
 import pandas as pd
 import process_db
 from torch import from_numpy

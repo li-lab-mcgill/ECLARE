@@ -15,6 +15,9 @@ from warnings import warn
 from pybedtools import BedTool
 from glob import glob
 from tqdm import tqdm
+from scglue.genomics import Bed, window_graph
+from scglue.data import get_gene_annotation
+import networkx as nx
 
 from eclare.custom_annloader import CustomAnnLoader as AnnLoader
 
@@ -689,9 +692,6 @@ def get_scompreg_loglikelihood_full(mean_grn_df, X_rna, X_atac, overlapping_targ
 
     return mean_grn_df, tfrps, tg_expressions
 
-        
-
-
 def get_scompreg_loglikelihood(mean_grn_df, X_rna, X_atac, overlapping_target_genes, overlapping_tfs):
 
     ## prototype on one gene
@@ -867,3 +867,80 @@ def scompreg_likelihood_ratio(tg_expression, tfrp):
         log_gaussian_likelihood = -n/2 * np.log(2*np.pi*var) - 1/(2*var) * sq_residuals.sum()
 
     return log_gaussian_likelihood
+
+def gene_activity_score_adata(atac, rna):
+
+    ensembl_path = os.path.join(os.environ['DATAPATH'], 'ensembl_gene_positions.csv')
+
+    ## Merge gene coordinates to RNA
+    results = pd.read_csv(ensembl_path)
+    filt_chroms = [str(i) for i in range(1,23+1)] + ['X','Y']
+    results = results[results['Chromosome/scaffold name'].isin(filt_chroms)]
+    rna_var_tmp = pd.merge(rna.var, results, left_index=True, right_on='Gene name', how='left').set_index('Gene name')
+    rna_var_tmp = rna_var_tmp.groupby('Gene name', sort=False).agg({
+                'Chromosome/scaffold name': 'max',
+                'Gene start (bp)': 'mean',
+                'Gene end (bp)': 'mean'})
+    
+    rna.var = pd.merge(rna.var, rna_var_tmp, left_index=True, right_index=True, how='left')
+    #rna = rna[:,~rna.var.isna().values.any(1)]  # removes genes with nan variable, e.g. dispersions (but perhaps don't care)
+
+    rna.var['Gene start (bp)'] = rna.var['Gene start (bp)'].astype(int).astype(str)
+    rna.var['Gene end (bp)'] = rna.var['Gene end (bp)'].astype(int).astype(str)
+    rna.var['Chromosome/scaffold name'] = 'chr' + rna.var['Chromosome/scaffold name']
+
+    ## Create bedtools objects
+    rna_bed = BedTool.from_dataframe(rna.var.reset_index()[['Chromosome/scaffold name', 'Gene start (bp)', 'Gene end (bp)', 'index']])
+    atac_bed_df = pd.DataFrame(list(atac.var.index.str.split(':|-', expand=True).values), columns=['chrom','start','end'])
+    atac_bed_df['name'] = atac.var.index
+    atac_bed = BedTool.from_dataframe(atac_bed_df)
+
+    ## Find peaks at gene and 2000bp upstream for gene activity scores
+    gene_size=1e2
+    upstream=2e3
+    gas_overlaps = rna_bed.window(atac_bed, l=upstream, r=gene_size, c=False).to_dataframe()
+    #gas_overlaps['thickEnd'] = gas_overlaps[['chrom','start','end']].astype(str).apply('-'.join, axis=1)
+
+    i, r = pd.factorize(gas_overlaps['name'])
+    j, c = pd.factorize(gas_overlaps['thickEnd'])
+    n, m = len(r), len(c)
+
+    gas_binary_mask = np.zeros((n, m), dtype=np.int64)
+    np.add.at(gas_binary_mask, (i, j), 1)
+    gas_binary_mask_partial = pd.DataFrame(gas_binary_mask, index=r, columns=c)
+
+    gas_binary_mask = pd.DataFrame(np.zeros([rna.n_vars, atac.n_vars]), index=rna.var.index, columns=atac.var.index)
+    gas_binary_mask = gas_binary_mask.merge(gas_binary_mask_partial, left_index=True, right_index=True, how='left', suffixes=('_x',None))
+    gas_binary_mask = gas_binary_mask.loc[:,~gas_binary_mask.columns.str.endswith('_x')]
+    gas_binary_mask = gas_binary_mask.fillna(0)
+
+    assert (gas_binary_mask.index == rna.var_names).all(), "Gene activity score matrix is not aligned with RNA var names"
+    gas_binary_mask_sparse_transposed = csr_matrix(gas_binary_mask.values.T)
+
+    atac_gas_X = atac.X @ gas_binary_mask_sparse_transposed
+    atac_gas = AnnData(X=atac_gas_X, obs=atac.obs, var=rna.var)
+
+    return atac_gas, rna
+
+def gene_activity_score_glue(atac, rna):
+    
+    gene_ad = anndata.AnnData(var=pd.DataFrame(index=rna.var_names.to_list()))
+    get_gene_annotation(gene_ad, gtf=os.path.join(os.environ['DATAPATH'], 'gencode.v48.annotation.gtf.gz'), gtf_by='gene_name')
+    gene_ad = gene_ad[:,gene_ad.var['chromStart'].notna()]
+    rna = rna[:,gene_ad.var_names]
+
+    peak_coords = atac.var['interval'].str.split('[:-]', expand=True).rename(columns={0: 'chrom', 1: 'chromStart', 2: 'chromEnd'}).astype({'chrom': 'category', 'chromStart': 'int32', 'chromEnd': 'int32'})
+
+    genes_bed = Bed(gene_ad.var.assign(name=gene_ad.var_names)).expand(2e3, 0)
+    peaks_bed = Bed(peak_coords.assign(name=atac.var_names))
+
+    graph = window_graph(
+        genes_bed,
+        peaks_bed,
+        window_size=0, attr_fn=lambda l, r, d: {"weight": 1.0, "sign": 1}
+    )
+
+    biadj = nx.algorithms.bipartite.biadjacency_matrix(graph, gene_ad.var.index, peak_coords.index)
+    atac2rna = anndata.AnnData(X=atac.X @ biadj.T, obs=atac.obs, var=rna.var, uns=atac.uns)
+
+    return atac2rna, rna

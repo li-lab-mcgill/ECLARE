@@ -190,15 +190,15 @@ class PrepareDataloader():
         test_atac_loaders = []
         self.num_of_atac = 0
 
-        for atac_path in config.atac_paths:   
-            data_reader, _, _ = read_from_file(atac_path)
+        for atac_path, atac_label_path in zip(config.atac_paths, config.atac_labels):   
+            data_reader, atac_labels, _ = read_from_file(atac_path, atac_label_path)
             # train loader
             #trainset = DataloaderWithoutLabel(True, data_reader)
             self.num_of_atac += data_reader.shape[0]
 
             train_len = data_reader.shape[0] - config.valid_subsample
             valid_len = config.valid_subsample
-            atac_train_idx, atac_valid_idx = next(StratifiedShuffleSplit(n_splits=1, train_size=train_len, test_size=valid_len, random_state=42).split(X=np.empty(data_reader.shape[0]), y=labels))
+            atac_train_idx, atac_valid_idx = next(StratifiedShuffleSplit(n_splits=1, train_size=train_len, test_size=valid_len, random_state=42).split(X=np.empty(data_reader.shape[0]), y=atac_labels))
             
             #trainloader = torch.utils.data.DataLoader(trainset, batch_size=config.batch_size, shuffle=True, **kwargs)                        
             data_reader_ad_train = AnnData(data_reader[atac_train_idx])

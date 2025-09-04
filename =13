@@ -1,0 +1,20 @@
+Channels:
+ - conda-forge
+ - defaults
+Platform: linux-64
+Collecting package metadata (repodata.json): ...working... done
+Solving environment: ...working... done
+
+# All requested packages already installed.
+
+
+Exporting environment variables from config.yaml - script needs to be sourced and path to config.yaml needs to be provided as argument. For example:
+
+>> source config/export_env_variables.sh config/config.yaml
+
+Environment variables set for mcb_directories:
+	 - ECLARE_ROOT=/home/mcb/users/dmannk/scMultiCLIP/ECLARE
+	 - OUTPATH=/home/mcb/users/dmannk/scMultiCLIP/outputs
+	 - DATAPATH=/home/mcb/users/dmannk/scMultiCLIP/data
+
+

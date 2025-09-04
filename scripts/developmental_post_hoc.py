@@ -129,8 +129,8 @@ args = SimpleNamespace(
 )
 
 student_rna, student_atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath = student_setup_func(args, return_type='data')
-student_rna_keep = student_rna
-student_atac_keep = student_atac
+#student_rna_keep = student_rna
+#student_atac_keep = student_atac
 
 dev_group_key = 'Age_Range'
 dev_stages = ['2nd trimester', '3rd trimester', '0-1 years', '1-2 years', '2-4 years', '4-10 years', '10-20 years', 'Adult']
@@ -194,8 +194,8 @@ student_model = deepcopy(eclare_student_model)
 #print('Using KD-CLIP student model'); student_model = deepcopy(kd_clip_student_models['PFC_V1_Wang'])
 
 ## project data through student model
-student_rna_cells = torch.from_numpy(student_rna_keep.X.toarray().astype(np.float32))
-student_atac_cells = torch.from_numpy(student_atac_keep.X.toarray().astype(np.float32))
+student_rna_cells = torch.from_numpy(student_rna.X.toarray().astype(np.float32))
+student_atac_cells = torch.from_numpy(student_atac.X.toarray().astype(np.float32))
 
 student_rna_latents, _ = student_model.to('cpu')(student_rna_cells, modality=0)
 student_atac_latents, _ = student_model.to('cpu')(student_atac_cells, modality=1)
@@ -210,8 +210,8 @@ ordinal_atac_prebias = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_at
 ordinal_rna_pt = torch.sigmoid(ordinal_rna_prebias / ordinal_rna_logits.var().pow(0.5)).flatten().detach().cpu().numpy()
 ordinal_atac_pt = torch.sigmoid(ordinal_atac_prebias / ordinal_atac_logits.var().pow(0.5)).flatten().detach().cpu().numpy()
 
-student_rna_keep.obs['ordinal_pseudotime'] = ordinal_rna_pt
-student_atac_keep.obs['ordinal_pseudotime'] = ordinal_atac_pt
+student_rna.obs['ordinal_pseudotime'] = ordinal_rna_pt
+student_atac.obs['ordinal_pseudotime'] = ordinal_atac_pt
 
 ## subsample data
 student_rna_sub = subsample_adata(student_rna, cell_group, dev_group_key, subsample, subsample_type='balanced')
@@ -257,8 +257,8 @@ X = np.vstack([
     ])
 
 obs = pd.concat([
-    student_rna_keep.obs.assign(modality='RNA'),
-    student_atac_keep.obs.assign(modality='ATAC')
+    student_rna.obs.assign(modality='RNA'),
+    student_atac.obs.assign(modality='ATAC')
     ])
 
 eclare_adata = sc.AnnData(
@@ -270,25 +270,45 @@ eclare_adata.obs[dev_group_key] = eclare_adata.obs[dev_group_key].cat.reorder_ca
 ## create unimodal ECLARE adatas
 rna_adata = sc.AnnData(
     X=student_rna_latents.detach().cpu().numpy(),
-    obs=student_rna_keep.obs.assign(modality='RNA'),
+    obs=student_rna.obs.assign(modality='RNA'),
 )
 
 atac_adata = sc.AnnData(
     X=student_atac_latents.detach().cpu().numpy(),
-    obs=student_atac_keep.obs.assign(modality='ATAC'),
+    obs=student_atac.obs.assign(modality='ATAC'),
 )
 
+#%% Import latents from other models
+
+## create ordinal_pseudotime Series
+ordinal_pseudotime_adata = pd.concat([student_rna.obs['ordinal_pseudotime'], student_atac.obs['ordinal_pseudotime']])
+
+## scJoint
+scJoint_path = os.path.join(os.environ['OUTPATH'], 'scJoint_data_tmp', '20250903_190439', 'scJoint_latents.h5ad')
+scJoint_adata = sc.read_h5ad(scJoint_path)
+scJoint_adata.obs = scJoint_adata.obs.merge(ordinal_pseudotime_adata, left_index=True, right_index=True)
+
+## scGLUE
+glue_path = os.path.join(os.environ['OUTPATH'], 'glue', '20250904_110231', 'glue_latents.h5ad')
+glue_adata = sc.read_h5ad(glue_path)
+glue_adata.obs = glue_adata.obs.merge(ordinal_pseudotime_adata, left_index=True, right_index=True)
+
+
 #%% PAGA
+from scipy.stats import pearsonr, spearmanr, kendalltau
+from scib.metrics.lisi import clisi_graph, ilisi_graph, nmi # install scib from github, see scib documentation for details
+from scib.metrics import nmi, ari
 
 def paga_analysis(adata):
 
     ## graph construction
     sc.pp.pca(adata)
-    sc.pp.neighbors(adata, n_neighbors=5)
+    sc.pp.neighbors(adata, n_neighbors=15)
     sc.tl.leiden(adata)
 
     ## UMAP
-    sc.tl.umap(adata)
+    if 'X_umap' not in adata.obsm:
+        sc.tl.umap(adata)
     sc.pl.umap(adata, color=['leiden', 'modality', cell_group, 'ordinal_pseudotime', dev_group_key])
 
     ## PAGA
@@ -297,9 +317,10 @@ def paga_analysis(adata):
 
     ## Graph based on PAGA
     sc.tl.draw_graph(adata, init_pos='paga')
-    sc.pl.draw_graph(adata, color=['modality', 'Lineage', 'ordinal_pseudotime', dev_group_key])
+    #sc.pl.draw_graph(adata, color=['modality', 'Lineage', 'ordinal_pseudotime', dev_group_key]) # plot generated later too
 
     ## Pseudotime with DPT
+
     # Set iroot as the cell closest to the centroid of 2nd trimester cells
     mask = adata.obs[dev_group_key] == '2nd trimester'
     X = adata.X if not hasattr(adata, 'obsm') or 'X_pca' not in adata.obsm else adata.obsm['X_pca']
@@ -308,51 +329,160 @@ def paga_analysis(adata):
     centroid = X[mask.values].mean(axis=0)
     dists = np.linalg.norm(X - centroid, axis=1)
     adata.uns['iroot'] = np.argmin(np.where(mask.values, dists, np.inf))
+
+    # DPT
     sc.tl.dpt(adata)
     sc.pl.draw_graph(adata, color=['modality', cell_group, 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key])
 
     return adata
 
-subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata)
-eclare_adata = paga_analysis(eclare_adata)
+def trajectory_metrics(adata, modality=None):
 
-#for col in eclare_adata.obs.columns:
-#    if eclare_adata.obs[col].dtype == 'object':
-#        eclare_adata.obs[col] = eclare_adata.obs[col].astype(str)
+    if modality:
+        adata = adata[adata.obs['modality'].str.upper() == modality.upper()]
 
-#output_dir = os.path.join(os.environ['OUTPATH'], f'paga_analysis_{methods_id_dict["eclare"][0]}')
-#os.makedirs(output_dir, exist_ok=True)
-#eclare_adata.write_h5ad(os.path.join(output_dir, 'eclare_adata.h5ad'))
+    pt_adata = adata.obs[[dev_group_key, 'ordinal_pseudotime', 'dpt_pseudotime']]
+    pt_adata[dev_group_key] = pt_adata[dev_group_key].cat.codes.to_numpy()
 
-rna_adata = paga_analysis(rna_adata)
-atac_adata = paga_analysis(atac_adata)
-
-student_rna_keep.obs['modality'] = 'RNA'
-student_atac_keep.obs['modality'] = 'ATAC'
-
-student_rna_keep = paga_analysis(student_rna_keep)
-student_atac_keep = paga_analysis(student_atac_keep)
-
-
-#%% trajectory analysis metrics
-
-from scipy.stats import spearmanr, kendalltau
-
-pt_adata = subsampled_eclare_adata.obs[[dev_group_key, 'dpt_pseudotime', 'ordinal_pseudotime']]
-pt_adata[dev_group_key] = pt_adata[dev_group_key].cat.codes.to_numpy()
-
-def trajectory_metrics(pt_adata):
-    triu_indices = np.triu_indices(pt_adata.shape[1], k=1)
-
+    pearson_corr_matrix = pt_adata.corr(method=lambda x, y: pearsonr(x, y)[0])
     spearman_corr_matrix = pt_adata.corr(method=lambda x, y: spearmanr(x, y)[0])
     kendall_corr_matrix = pt_adata.corr(method=lambda x, y: kendalltau(x, y)[0])
 
-    spearman_corr_values = spearman_corr_matrix.values[triu_indices]
-    kendall_corr_values = kendall_corr_matrix.values[triu_indices]
+    metrics_adata = pd.concat([
+        pearson_corr_matrix['dpt_pseudotime'].iloc[:-1],
+        spearman_corr_matrix['dpt_pseudotime'].iloc[:-1],
+        kendall_corr_matrix['dpt_pseudotime'].iloc[:-1],
+    ], axis=1)
+    metrics_adata.columns = ['pearson', 'spearman', 'kendall']
 
-    return spearman_corr_values, kendall_corr_values
+    ## integration metrics
+    lineage_clisi = clisi_graph(adata, label_key='Lineage', type_='knn', scale=True, n_cores=1)
+    modality_ilisi = ilisi_graph(adata, batch_key='modality', type_='knn', scale=True, n_cores=1)
+    lineage_nmi = nmi(adata, cluster_key='leiden', label_key='Lineage')
+    lineage_ari = ari(adata, cluster_key='leiden', label_key='Lineage')
+    age_range_nmi = nmi(adata, cluster_key='leiden', label_key='Age_Range')
+    age_range_ari = ari(adata, cluster_key='leiden', label_key='Age_Range')
+    integration_adata = pd.DataFrame(
+        np.stack([lineage_clisi, modality_ilisi, lineage_nmi, lineage_ari, age_range_nmi, age_range_ari])[None],
+        columns=['lineage_clisi', 'modality_ilisi', 'lineage_nmi', 'lineage_ari', 'age_range_nmi', 'age_range_ari'])
 
-trajectory_metrics(pt_adata)
+    return metrics_adata, integration_adata
+
+def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None):
+
+    metrics_df = pd.concat([df.T.stack().to_frame() for df in metrics_dfs], axis=1)
+    metrics_df.columns = methods_list
+
+    metrics_df_melted = metrics_df.reset_index().melt(id_vars=['level_0', 'level_1'], var_name='method', value_name='correlation')
+    metrics_df_melted = metrics_df_melted.rename(columns={'level_0': 'metric', 'level_1': 'reference'})
+
+    g = sns.catplot(
+        data=metrics_df_melted,
+        x='reference',
+        y='correlation',
+        col='metric',
+        hue='method',
+        kind='bar',
+        height=5,
+        aspect=.25
+    )
+    for ax in g.axes.flat:
+        for label in ax.get_xticklabels():
+            label.set_rotation(30)
+
+    if suptitle:
+        plt.suptitle(suptitle)
+
+    plt.tight_layout()
+
+    return metrics_df
+
+def integration_metrics_all(integration_dfs, methods_list, suptitle=None):
+
+    integration_df = pd.concat(integration_dfs, axis=0)
+    integration_df.index = methods_list
+
+    integration_df.drop(columns=['lineage_clisi'], inplace=True)
+
+    integration_df_melted = integration_df.reset_index().melt(id_vars=['index'], var_name='method', value_name='score')
+    integration_df_melted.rename(columns={'index': 'method', 'method': 'metric'}, inplace=True)
+
+    plt.figure(figsize=(9, 5))
+    ax = sns.barplot(data=integration_df_melted, x='metric', y='score', hue='method')
+    for label in ax.get_xticklabels():
+        label.set_rotation(30)
+    plt.suptitle(suptitle)
+    plt.tight_layout(rect=[0, 0, 0.8, 1])  # leave space for legend
+    # Place legend outside the main figure
+    ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), title='Method')
+
+    return integration_df
+
+
+#eclare_adata = paga_analysis(eclare_adata)
+subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata)
+scJoint_adata = paga_analysis(scJoint_adata)
+glue_adata = paga_analysis(glue_adata)
+
+subsampled_eclare_adata_rna = paga_analysis(subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'])
+subsampled_eclare_adata_atac = paga_analysis(subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'ATAC'])
+
+scJoint_adata_rna = paga_analysis(scJoint_adata[scJoint_adata.obs['modality'].str.upper() == 'RNA'])
+scJoint_adata_atac = paga_analysis(scJoint_adata[scJoint_adata.obs['modality'].str.upper() == 'ATAC'])
+
+glue_adata_rna = paga_analysis(glue_adata[glue_adata.obs['modality'].str.upper() == 'RNA'])
+glue_adata_atac = paga_analysis(glue_adata[glue_adata.obs['modality'].str.upper() == 'ATAC'])
+
+student_rna.obs['modality'] = 'RNA'
+student_atac.obs['modality'] = 'ATAC'
+
+student_rna = paga_analysis(student_rna)
+student_atac = paga_analysis(student_atac)
+
+#%% draw graphs for all methods
+sc.pl.draw_graph(subsampled_eclare_adata[np.random.permutation(len(subsampled_eclare_adata))], color=['modality','Lineage','Age_Range'], wspace=0.5)
+sc.pl.draw_graph(scJoint_adata[np.random.permutation(len(scJoint_adata))], color=['modality','Lineage','Age_Range'], wspace=0.5)
+sc.pl.draw_graph(glue_adata[np.random.permutation(len(glue_adata))], color=['modality','Lineage','Age_Range'], wspace=0.5)
+
+#%% trajectory analysis metrics
+
+methods_list = ['ECLARE', 'scJoint', 'scGLUE']
+
+## multi-modal
+sub_eclare_metrics, sub_eclare_integration = trajectory_metrics(subsampled_eclare_adata)
+scJoint_metrics, scJoint_integration = trajectory_metrics(scJoint_adata)
+glue_metrics, glue_integration = trajectory_metrics(glue_adata)
+trajectory_metrics_all([sub_eclare_metrics, scJoint_metrics, glue_metrics], methods_list, suptitle='Multi-modal')
+integration_metrics_all([sub_eclare_integration, scJoint_integration, glue_integration], methods_list, suptitle='Multi-modal')
+
+## RNA
+sub_eclare_metrics_rna, sub_eclare_integration_rna = trajectory_metrics(subsampled_eclare_adata_rna)
+scJoint_metrics_rna, scJoint_integration_rna = trajectory_metrics(scJoint_adata_rna)
+glue_metrics_rna, glue_integration_rna = trajectory_metrics(glue_adata_rna)
+trajectory_metrics_all([sub_eclare_metrics_rna, scJoint_metrics_rna, glue_metrics_rna], methods_list, suptitle='RNA')
+integration_metrics_all([sub_eclare_integration_rna, scJoint_integration_rna, glue_integration_rna], methods_list, suptitle='RNA')
+
+## ATAC
+sub_eclare_metrics_atac, sub_eclare_integration_atac = trajectory_metrics(subsampled_eclare_adata_atac)
+scJoint_metrics_atac, scJoint_integration_atac = trajectory_metrics(scJoint_adata_atac)
+glue_metrics_atac, glue_integration_atac = trajectory_metrics(glue_adata_atac)
+trajectory_metrics_all([sub_eclare_metrics_atac, scJoint_metrics_atac, glue_metrics_atac], methods_list, suptitle='ATAC')
+integration_metrics_all([sub_eclare_integration_atac, scJoint_integration_atac, glue_integration_atac], methods_list, suptitle='ATAC')
+
+## RNA, sampled from multimodal data
+sub_eclare_metrics_rna, sub_eclare_integration_rna = trajectory_metrics(subsampled_eclare_adata, modality='RNA')
+scJoint_metrics_rna, scJoint_integration_rna = trajectory_metrics(scJoint_adata, modality='RNA')
+trajectory_metrics_all([sub_eclare_metrics_rna, scJoint_metrics_rna], methods_list, suptitle='RNA, sampled from multimodal data')
+integration_metrics_all([sub_eclare_integration_rna, scJoint_integration_rna], methods_list, suptitle='RNA, sampled from multimodal data')
+
+## ATAC, sampled from multimodal data
+sub_eclare_metrics_atac, sub_eclare_integration_atac = trajectory_metrics(subsampled_eclare_adata, modality='ATAC')
+scJoint_metrics_atac, scJoint_integration_atac = trajectory_metrics(scJoint_adata, modality='ATAC')
+trajectory_metrics_all([sub_eclare_metrics_atac, scJoint_metrics_atac], methods_list, suptitle='ATAC, sampled from multimodal data')
+integration_metrics_all([sub_eclare_integration_atac, scJoint_integration_atac], methods_list, suptitle='ATAC, sampled from multimodal data')
+
+
+
 
 #%% create PHATE embeddings
 import phate
@@ -369,7 +499,7 @@ phate_atac = phate_op.fit_transform(student_atac_latents.detach().cpu().numpy())
 #%% plot PHATE embeddings
 import matplotlib.pyplot as plt
 
-dev_labels = student_atac_keep.obs[dev_group_key]
+dev_labels = student_atac.obs[dev_group_key]
 cmap_colors = plt.get_cmap('plasma', len(dev_labels.unique()))
 cmap = {dev_labels.unique()[i]: cmap_colors(i) for i in range(len(dev_labels.unique()))}
 phate.plot.scatter2d(phate_op, c=dev_labels, xticklabels=False, yticklabels=False, xlabel='PHATE 1', ylabel='PHATE 2', cmap=cmap)
