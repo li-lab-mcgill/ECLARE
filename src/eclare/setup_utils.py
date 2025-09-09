@@ -1039,9 +1039,6 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         atac = atac[keep_atac].to_memory()
         rna = rna[keep_rna].to_memory()
 
-        ## create dev_stage labels
-        rna.obs['dev_stage'] = rna.obs['Donor ID'].apply(lambda x: x[:-1])
-        atac.obs['dev_stage'] = atac.obs['Donor ID'].apply(lambda x: x[:-1])
 
     elif args.genes_by_peaks_str is None:
 
@@ -1145,6 +1142,10 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         print('Genes match:', (rna.var.index == genes_peaks_dict['genes']).all())
         print('Peaks match:', (atac.var.index == genes_peaks_dict['peaks']).all())
 
+        ## create dev_stage labels
+        rna.obs['dev_stage'] = rna.obs['Donor ID'].apply(lambda x: x[:-1])
+        atac.obs['dev_stage'] = atac.obs['Donor ID'].apply(lambda x: x[:-1])
+
     ## Count number of cells per dev stage
     dev_stage_counts_df = pd.merge(
         rna.obs[dev_group_key].value_counts().to_frame(), atac.obs[dev_group_key].value_counts().to_frame(),
@@ -1157,8 +1158,8 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     ## ensure that developmental stages are in the correct order
-    atac.obs[dev_group_key] = pd.Categorical(atac.obs[dev_group_key], categories=dev_stages, ordered=True)
-    rna.obs[dev_group_key] = pd.Categorical(rna.obs[dev_group_key], categories=dev_stages, ordered=True)
+    atac.obs[cell_group] = pd.Categorical(atac.obs[dev_group_key], categories=dev_stages, ordered=True)
+    rna.obs[cell_group] = pd.Categorical(rna.obs[dev_group_key], categories=dev_stages, ordered=True)
 
     ## Set split type and key
     split_key = 'cell_type'
@@ -1244,6 +1245,11 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
         atac_fullpath = os.path.join(atac_datapath, ATAC_file)
         rna_fullpath = os.path.join(rna_datapath, RNA_file)
 
+        if return_backed:
+            rna = anndata.read_h5ad(rna_fullpath, backed='r')
+            atac = anndata.read_h5ad(atac_fullpath, backed='r')
+            return rna, atac, cell_group, dev_group_key, dev_stages
+
         atac = anndata.read_h5ad(atac_fullpath)
         rna  = anndata.read_h5ad(rna_fullpath)
 
@@ -1271,8 +1277,6 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
             keep_atac = keep_atac_subj
             keep_rna = keep_rna_subj
 
-        if return_backed:
-            return rna, atac, cell_group, dev_group_key, dev_stages
 
         ## TMP - keep only ExNeu cells
         #print('!!!! TMP - keeping only ExNeu and IN cells !!!!')
@@ -1291,12 +1295,34 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
         atac = anndata.read_h5ad(os.path.join(atac_datapath, "atac_unprocessed.h5ad"))
         rna = anndata.read_h5ad(os.path.join(rna_datapath, "rna.h5ad"))
 
+        ## add generlal meta data
         rna_meta = pd.read_csv(os.path.join(rna_datapath, "meta.tsv"), sep='\t')
         rna.obs = rna_meta.merge(rna.obs, left_on='Cell_ID', right_index=True).set_index('Cell_ID')
         rna.var['protein_coding'] = (rna.var['feature_type'] == 'protein_coding')
         rna.var = rna.var.reset_index().set_index('feature_name')
         rna.obs['Individual'] = rna.obs['Individual'].astype(str)
-        
+
+        ## concatenate cell type meta data
+        ct_meta_dfs = []
+        ct_meta_files = glob(os.path.join(datapath, "meta", "*_meta.tsv"))
+        for ct_meta_file in ct_meta_files:
+            ct_meta = pd.read_csv(ct_meta_file, sep='\t')
+            if any(col.lower() == "cell_type" for col in ct_meta.columns):
+                cell_id_col = ct_meta.columns[0]
+                ct_meta.set_index(cell_id_col, inplace=True)
+                ct_meta_dfs.append(ct_meta)
+            else:
+                print(f'{os.path.splitext(os.path.basename(ct_meta_file))[0]} does not contain cell_type column')
+
+        ## merge cell type meta data
+        ct_meta_df = pd.concat(ct_meta_dfs, axis=0)
+        ct_meta_df.rename(columns={'Cell_Type':'sub_cell_type', 'Pseudotime':'velmeshev_pseudotime'}, inplace=True)
+        ct_meta_df = ct_meta_df[['sub_cell_type','velmeshev_pseudotime']]
+        rna.obs = rna.obs.merge(ct_meta_df, left_index=True, right_index=True, how='left')
+
+        ## fill NaNs in 'sub_cell_type' with 'Lineage'
+        rna.obs['sub_cell_type'] = rna.obs['sub_cell_type'].fillna(rna.obs['Lineage'])
+
         ## Subset to protein-coding genes
         if protein_coding_only:
             rna = rna[:, rna.var['feature_type'] == 'protein_coding'].copy()
@@ -1306,7 +1332,9 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
 
         ## create counts layer
         atac.layers['counts'] = atac.X.copy()
-        rna.layers['counts'] = rna.X.copy() 
+
+        rna_counts = rna.raw[:,rna.raw.var_names.isin(rna.var['index'])].X.copy()
+        rna.layers['counts'] = rna_counts
         del rna.raw # raw replaced by counts layer
 
         ## Normalize data
@@ -1326,6 +1354,7 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
             sc.pp.highly_variable_genes(rna, n_top_genes=10000, subset=False, batch_key=None) # sc.pl.highly_variable_genes(rna) # batch_key=None to avoid error
             rna = rna[:, rna.var['highly_variable'].astype(bool)].to_memory()
 
+        ''' not needed now that we have cell type meta data
         # min-max scaling
         adult_predictions = celltypist.annotate(rna, majority_voting=True, model=adult_celltypist_model_path, over_clustering='Seurat_clusters')
         dev_predictions = celltypist.annotate(rna, majority_voting=True, model=dev_celltypist_model_path, over_clustering='Seurat_clusters')
@@ -1338,6 +1367,7 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
         rna.obs.loc[is_fetal, 'Seurat_clusters_celltypist'] = dev_predictions.predicted_labels['majority_voting'][is_fetal]
         rna.obs.loc[~is_fetal, 'celltypist'] = adult_predictions.predicted_labels['predicted_labels'][~is_fetal]
         rna.obs.loc[is_fetal, 'celltypist'] = dev_predictions.predicted_labels['predicted_labels'][is_fetal]
+        '''
 
         sc.pp.scale(atac, zero_center=False, max_value=10)
         sc.pp.scale(rna, zero_center=False,  max_value=10)
@@ -1616,7 +1646,7 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
 
     ## Count number of cells per dev stage
     dev_stage_counts_df = pd.merge(
-        rna.obs['dev_stage'].value_counts().to_frame(), atac.obs['dev_stage'].value_counts().to_frame(),
+        rna.obs[dev_group_key].value_counts().to_frame(), atac.obs[dev_group_key].value_counts().to_frame(),
         left_index=True, right_index=True, how='outer')
     dev_stage_counts_df.columns = ['rna_n_cells', 'atac_n_cells']
     dev_stage_counts_df.index = pd.Categorical(dev_stage_counts_df.index, categories=dev_stages, ordered=True)
@@ -2114,16 +2144,21 @@ def get_genes_by_peaks_str(datasets = ["PFC_Zhu", "DLPFC_Anderson", "DLPFC_Ma", 
     genes_by_peaks_str_timestamp_df.to_csv(os.path.join(datapath, 'genes_by_peaks_str_timestamp.csv'))
 
 
-def teachers_setup(model_paths, args, device, dataset_idx_dict=None):
+def teachers_setup(model_paths, args, device, return_type='loaders', dataset_idx_dict=None):
     import mlflow.pytorch
     from mlflow.models import Model
     
     datasets = []
     models = {}
-    target_rna_train_loaders = {}
-    target_atac_train_loaders = {}
-    target_rna_valid_loaders = {}
-    target_atac_valid_loaders = {}
+
+    if return_type == 'loaders':
+        target_rna_train_loaders = {}
+        target_atac_train_loaders = {}
+        target_rna_valid_loaders = {}
+        target_atac_valid_loaders = {}
+    elif return_type == 'data':
+        target_rna_adatas = {}
+        target_atac_adatas = {}
     
     for m, model_path in enumerate(model_paths):
 
@@ -2169,16 +2204,31 @@ def teachers_setup(model_paths, args, device, dataset_idx_dict=None):
         args_tmp.genes_by_peaks_str = genes_by_peaks_str
         
         overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
-        target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
-            target_setup_func(args_tmp, return_type='loaders')
+
+        if return_type == 'loaders':
+
+            target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
+                target_setup_func(args_tmp, return_type=return_type)
+
+            target_rna_train_loaders[dataset] = target_rna_train_loader
+            target_atac_train_loaders[dataset] = target_atac_train_loader
+            target_rna_valid_loaders[dataset] = target_rna_valid_loader
+            target_atac_valid_loaders[dataset] = target_atac_valid_loader
+
+        elif return_type == 'data':
+
+            target_rna_adata, target_atac_adata, _, _, _ = \
+                target_setup_func(args_tmp, return_type=return_type, return_backed=True)
         
-        target_rna_train_loaders[dataset] = target_rna_train_loader
-        target_atac_train_loaders[dataset] = target_atac_train_loader
-        target_rna_valid_loaders[dataset] = target_rna_valid_loader
-        target_atac_valid_loaders[dataset] = target_atac_valid_loader
+            target_rna_adatas[dataset] = target_rna_adata
+            target_atac_adatas[dataset] = target_atac_adata
 
-
-    return datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders
+    if return_type == 'loaders':
+        return datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders
+    elif return_type == 'data':
+        return datasets, models, target_rna_adatas, target_atac_adatas
+    else:
+        return datasets, models
 
 
 def spatialLIBD_setup(batch_size, total_epochs, cell_group='Cluster', hvg_only=True, protein_coding_only=True, return_type='loaders', return_raw_data=False, dataset='spatialLIBD'):
