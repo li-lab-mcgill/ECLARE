@@ -44,7 +44,6 @@ try:
 except Exception as _e:
     print(f"[INFO] Skipping ECLARE env setup: {_e}")
 
-
 class SCENICPlusDownstreamAnalyzer:
     """
     A comprehensive class for performing downstream analysis of SCENIC+ results
@@ -646,28 +645,35 @@ def atac_to_cistopic_object(atac):
 
     return cistopic_obj
 
-def load_data(source_dataset='Cortex_Velmeshev', target_dataset=None, genes_by_peaks_str='9584_by_66620'):
+def load_data(source_dataset='Cortex_Velmeshev', target_dataset=None, genes_by_peaks_str='9584_by_66620', valid_cell_ids=None):
     rna = ad.read_h5ad(os.path.join(os.environ['DATAPATH'], source_dataset, "rna", f"rna_{genes_by_peaks_str}.h5ad"), backed='r')
     atac = ad.read_h5ad(os.path.join(os.environ['DATAPATH'], source_dataset, "atac", f"atac_{genes_by_peaks_str}.h5ad"), backed='r')
 
-    ## Subsample to 1000 cells for prototyping
-    rna = rna[:100000].to_memory()
-    atac = atac[:100000].to_memory()
+    if valid_cell_ids is not None:
+        rna = rna[rna.obs_names.isin(valid_cell_ids)].to_memory()
+        atac = atac[atac.obs_names.isin(valid_cell_ids)].to_memory()
 
     return rna, atac
 
 if __name__ == "__main__":
-    ## Load data
-    rna_adata, atac = load_data(source_dataset='PFC_V1_Wang', target_dataset=None, genes_by_peaks_str='9914_by_63404')
 
+    ## Load ECLARE adata arising from developmental post-hoc analysis
+    eclare_adata = ad.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata.h5ad'))
+        
+    ## Load data
+    source_dataset = 'Cortex_Velmeshev'
+    target_dataset = None
+    genes_by_peaks_str = '9584_by_66620'
+
+    rna_adata, atac = load_data(source_dataset=source_dataset, target_dataset=target_dataset, genes_by_peaks_str=genes_by_peaks_str, valid_cell_ids=eclare_adata.obs_names.tolist())
     rna_adata.obs_names = rna_adata.obs_names + '___cisTopic'
+
+    #cistopic_obj = atac_to_cistopic_object(atac)
+    #with open(os.path.join(os.environ['OUTPATH'], 'cistopic_obj.pkl'), 'wb') as f:
+    #    pickle.dump(cistopic_obj, f)
     
-    cistopic_obj = atac_to_cistopic_object(atac)
-    with open(os.path.join(os.environ['OUTPATH'], 'cistopic_obj.pkl'), 'wb') as f:
-        pickle.dump(cistopic_obj, f)
-    
-    #with open(os.path.join(os.environ['OUTPATH'], 'cistopic_obj.pkl'), 'rb') as f:
-    #    cistopic_obj = pickle.load(f)
+    with open(os.path.join(os.environ['OUTPATH'], 'cistopic_obj.pkl'), 'rb') as f:
+        cistopic_obj = pickle.load(f)
 
     ## Run the main function
     main(rna_adata, cistopic_obj)
