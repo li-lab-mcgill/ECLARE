@@ -61,7 +61,7 @@ clip_job_id='25165730'
 #genes_by_peaks_str='17563_by_100000'
 
 ## Define total number of epochs
-total_epochs=10
+total_epochs=100
 target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
 
 ## Make new sub-directory for current job ID and assign to "TMPDIR" variable
