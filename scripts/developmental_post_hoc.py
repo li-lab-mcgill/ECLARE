@@ -35,7 +35,7 @@ subsample = 5000
 methods_id_dict = {
     'clip': '25165730',
     'kd_clip': '25173640',
-    'eclare': ['04164533'],
+    'eclare': ['09123817'],
     'ordinal': '27204131',
 }
 
@@ -58,12 +58,12 @@ search_strings_to_dataset = {
 
 experiment_name = f"clip_{target_dataset.lower()}_{methods_id_dict['clip']}"
 
-if os.path.exists(os.path.join(os.environ['OUTPATH'], experiment_name, "runs.csv")):
-    print(f"Found runs.csv for {experiment_name} in {os.environ['OUTPATH']}")
-    all_metrics_csv_path = os.path.join(os.environ['OUTPATH'], experiment_name, "runs.csv")
-else:
-    print(f"Downloading runs.csv for {experiment_name} from MLflow")
-    all_metrics_csv_path = download_mlflow_runs(experiment_name)
+#if os.path.exists(os.path.join(os.environ['OUTPATH'], experiment_name, "runs.csv")):
+#    print(f"Found runs.csv for {experiment_name} in {os.environ['OUTPATH']}")
+#    all_metrics_csv_path = os.path.join(os.environ['OUTPATH'], experiment_name, "runs.csv")
+#else:
+print(f"Downloading runs.csv for {experiment_name} from MLflow")
+all_metrics_csv_path = download_mlflow_runs(experiment_name)
 
 all_metrics_df = pd.read_csv(all_metrics_csv_path)
 
@@ -358,6 +358,10 @@ obs_df = pd.merge(ordinal_pseudotime_adata, student_rna_sub.obs['sub_cell_type']
 scJoint_job_id  = '20250905_125142'
 glue_job_id     = '20250906_003832'
 
+## add to dictionary
+methods_id_dict['scJoint'] = scJoint_job_id
+methods_id_dict['scGLUE'] = glue_job_id
+
 ## scJoint
 scJoint_path = os.path.join(os.environ['OUTPATH'], 'scJoint_data_tmp', scJoint_job_id, 'scJoint_latents.h5ad')
 scJoint_adata = sc.read_h5ad(scJoint_path)
@@ -440,8 +444,10 @@ def paga_analysis(adata):
     if 'X_umap' not in adata.obsm:
         sc.tl.umap(adata)
     sc.pl.umap(adata, color='leiden')
-    #sc.pl.umap(adata, color=['modality', cell_group, 'sub_cell_type', 'velmeshev_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
-    sc.pl.umap(adata, color=['modality', cell_group, 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
+    if 'sub_cell_type' in adata.obs.columns:
+        sc.pl.umap(adata, color=['modality', cell_group, 'sub_cell_type', 'velmeshev_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
+    else:
+        sc.pl.umap(adata, color=['modality', cell_group, 'velmeshev_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
 
     ## PAGA
     sc.tl.paga(adata, groups="leiden")
@@ -466,6 +472,7 @@ def paga_analysis(adata):
 
     ## DPT
     sc.tl.dpt(adata)
+    sc.pl.draw_graph(adata, color='leiden')
     
     if 'sub_cell_type' in adata.obs.columns:
         sc.pl.draw_graph(adata, color=['modality', cell_group, 'sub_cell_type', 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
@@ -496,13 +503,13 @@ def trajectory_metrics(adata, modality=None):
     ## integration metrics
     lineage_clisi = clisi_graph(adata, label_key='Lineage', type_='knn', scale=True, n_cores=1)
     modality_ilisi = ilisi_graph(adata, batch_key='modality', type_='knn', scale=True, n_cores=1)
-    lineage_nmi = nmi(adata, cluster_key='leiden', label_key='sub_cell_type')
-    lineage_ari = ari(adata, cluster_key='leiden', label_key='sub_cell_type')
+    lineage_nmi = nmi(adata[adata.obs['modality'] == 'RNA'], cluster_key='leiden', label_key='sub_cell_type')
+    lineage_ari = ari(adata[adata.obs['modality'] == 'RNA'], cluster_key='leiden', label_key='sub_cell_type')
     age_range_nmi = nmi(adata, cluster_key='leiden', label_key='Age_Range')
     age_range_ari = ari(adata, cluster_key='leiden', label_key='Age_Range')
     integration_adata = pd.DataFrame(
         np.stack([lineage_clisi, modality_ilisi, lineage_nmi, lineage_ari, age_range_nmi, age_range_ari])[None],
-        columns=['lineage_clisi', 'modality_ilisi', 'ct_nmi', 'ct_ari', 'age_range_nmi', 'age_range_ari'])
+        columns=['lineage_clisi', 'modality_ilisi', 'ct_rna_nmi', 'ct_rna_ari', 'age_range_nmi', 'age_range_ari'])
 
     return metrics_adata, integration_adata
 
@@ -630,8 +637,9 @@ for source_dataset in source_datasets:
     clip_integration[source_dataset] = subsampled_clip_integration
 
 trajectory_metrics_all([sub_eclare_metrics, *kd_clip_metrics.values(), *clip_metrics.values()], methods_list, suptitle=None)
-integration_metrics_all([sub_eclare_integration, *kd_clip_integration.values(), *clip_iimage.pngntegration.values()], methods_list, suptitle='Multi-modal')
+integration_metrics_all([sub_eclare_integration, *kd_clip_integration.values(), *clip_integration.values()], methods_list, suptitle='Multi-modal')
 
+'''
 ## RNA
 sub_eclare_metrics_rna, sub_eclare_integration_rna = trajectory_metrics(subsampled_eclare_adata_rna)
 scJoint_metrics_rna, scJoint_integration_rna = trajectory_metrics(scJoint_adata_rna)
@@ -657,9 +665,57 @@ sub_eclare_metrics_atac, sub_eclare_integration_atac = trajectory_metrics(subsam
 scJoint_metrics_atac, scJoint_integration_atac = trajectory_metrics(scJoint_adata, modality='ATAC')
 trajectory_metrics_all([sub_eclare_metrics_atac, scJoint_metrics_atac], methods_list, suptitle='ATAC, sampled from multimodal data')
 integration_metrics_all([sub_eclare_integration_atac, scJoint_integration_atac], methods_list, suptitle='ATAC, sampled from multimodal data')
+'''
 
+#%% save results
 
+## add JOB ID to adatas
+subsampled_eclare_adata.uns['job_id'] = methods_id_dict['eclare']
+scJoint_adata.uns['job_id'] = methods_id_dict['scJoint']
+glue_adata.uns['job_id'] = methods_id_dict['scGLUE']
 
+for source_dataset in source_datasets:
+    subsampled_kd_clip_adatas[source_dataset].uns['job_id'] = methods_id_dict[f'kd_clip']
+    subsampled_clip_adatas[source_dataset].uns['job_id'] = methods_id_dict[f'clip']
+
+##  add metrics to respective adatas
+subsampled_eclare_adata.uns['metrics'] = sub_eclare_metrics
+scJoint_adata.uns['metrics'] = scJoint_metrics
+glue_adata.uns['metrics'] = glue_metrics
+
+for source_dataset in source_datasets:
+    subsampled_kd_clip_adatas[source_dataset].uns['metrics'] = kd_clip_metrics[source_dataset]
+    subsampled_clip_adatas[source_dataset].uns['metrics'] = clip_metrics[source_dataset]
+
+def cast_object_columns_to_str(adata):
+    """
+    Cast all object dtype columns in adata.obs to str type, if possible.
+    """
+    for col in adata.obs.select_dtypes(include=['object']).columns:
+        try:
+            adata.obs[col] = adata.obs[col].astype(str)
+        except Exception as e:
+            print(f"Could not cast column {col} to str: {e}")
+
+## save adatas
+os.makedirs(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results'), exist_ok=True)
+
+# Cast object columns to str before saving
+cast_object_columns_to_str(subsampled_eclare_adata)
+subsampled_eclare_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata.h5ad'))
+
+cast_object_columns_to_str(scJoint_adata)
+scJoint_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'scJoint_adata.h5ad'))
+
+cast_object_columns_to_str(glue_adata)
+glue_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'glue_adata.h5ad'))
+
+for source_dataset in source_datasets:
+    cast_object_columns_to_str(subsampled_kd_clip_adatas[source_dataset])
+    subsampled_kd_clip_adatas[source_dataset].write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_kd_clip_adatas_{source_dataset}.h5ad'))
+
+    cast_object_columns_to_str(subsampled_clip_adatas[source_dataset])
+    subsampled_clip_adatas[source_dataset].write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_clip_adatas_{source_dataset}.h5ad'))
 
 #%% create PHATE embeddings
 import phate

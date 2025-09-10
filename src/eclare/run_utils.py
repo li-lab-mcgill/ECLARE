@@ -599,7 +599,9 @@ def eclare_pass(
             metrics_dict[f'total_loss_{dataset}']   = epoch_total_losses[dataset] / num_batches
             
     # Add weights_temperature to metrics
-    metrics_dict['weights_temperature'] = knowledge_distillation_fn.weights_temperature.item()
+    metrics_dict['weights_temperature'] = knowledge_distillation_fn.get_temperature_scaling(
+        knowledge_distillation_fn.weights_temperature
+    ).item()
 
     # Clear accumulated lists at the end of each outer iteration
     del teacher_weights, teacher_T_weights, distil_losses, align_losses, distil_losses_T, align_losses_T, offsets, offsets_T, distil_loss, align_loss_scaled, total_loss, mean_distil_loss
