@@ -1304,7 +1304,7 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
 
         ## concatenate cell type meta data
         ct_meta_dfs = []
-        ct_meta_files = glob(os.path.join(datapath, "meta", "*_meta.tsv"))
+        ct_meta_files = glob(os.path.join(datapath, '*', "meta", "*_meta.tsv"))
         for ct_meta_file in ct_meta_files:
             ct_meta = pd.read_csv(ct_meta_file, sep='\t')
             if any(col.lower() == "cell_type" for col in ct_meta.columns):
@@ -1318,7 +1318,10 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
         ct_meta_df = pd.concat(ct_meta_dfs, axis=0)
         ct_meta_df.rename(columns={'Cell_Type':'sub_cell_type', 'Pseudotime':'velmeshev_pseudotime'}, inplace=True)
         ct_meta_df = ct_meta_df[['sub_cell_type','velmeshev_pseudotime']]
+
+        ## merge cell type meta data
         rna.obs = rna.obs.merge(ct_meta_df, left_index=True, right_index=True, how='left')
+        atac.obs = atac.obs.merge(ct_meta_df, left_index=True, right_index=True, how='left')
 
         ## fill NaNs in 'sub_cell_type' with 'Lineage'
         rna.obs['sub_cell_type'] = rna.obs['sub_cell_type'].fillna(rna.obs['Lineage'])

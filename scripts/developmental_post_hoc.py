@@ -122,7 +122,7 @@ for source_dataset in source_datasets:
     kd_clip_student_model, kd_clip_student_model_metadata     = load_model_and_metadata(f'kd_clip_{target_dataset.lower()}_{methods_id_dict["kd_clip"]}', best_kd_clip, device, target_dataset=os.path.join(target_dataset, source_dataset))
     kd_clip_student_models[source_dataset] = kd_clip_student_model
 
-#%% Get student loaders
+#%% Get student data
 
 student_setup_func = return_setup_func_from_dataset(target_dataset)
 
@@ -164,7 +164,7 @@ student_rna_keep = student_rna[keep_rna].to_memory()
 student_atac_keep = student_atac[keep_atac].to_memory()
 '''
 
-#%% Teacher models and loaders
+#%% Teacher models and data
 from eclare.setup_utils import teachers_setup
 
 ## Load CLIP teacher models
@@ -373,7 +373,7 @@ glue_adata = sc.read_h5ad(glue_path)
 glue_adata.obs = glue_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
 
 ## find overlapping cell IDs between ECLARE and scJoint/scGLUE
-valid_ids = set(subsampled_eclare_adata.obs_names) & set(scJoint_adata.obs_names) & set(glue_adata.obs_names)
+valid_ids = set(subsampled_eclare_adata.obs_names) & set(glue_adata.obs_names) & set(scJoint_adata.obs_names)
 
 ## keep only overlapping cells
 subsampled_eclare_adata = subsampled_eclare_adata[subsampled_eclare_adata.obs_names.isin(valid_ids)]
@@ -666,6 +666,108 @@ scJoint_metrics_atac, scJoint_integration_atac = trajectory_metrics(scJoint_adat
 trajectory_metrics_all([sub_eclare_metrics_atac, scJoint_metrics_atac], methods_list, suptitle='ATAC, sampled from multimodal data')
 integration_metrics_all([sub_eclare_integration_atac, scJoint_integration_atac], methods_list, suptitle='ATAC, sampled from multimodal data')
 '''
+
+#%% OT-based pairing
+import ot
+import ot.plot
+from sklearn.metrics import pairwise_distances
+
+def diffusion_distances(adata, t=1.0):
+    X_diffmap = adata.obsm["X_diffmap"]
+    evals = adata.uns["diffmap_evals"]
+
+    evals = np.asarray(evals)
+    mask = evals > 1e-12
+    Xw = X_diffmap[:, mask] * (evals[mask] ** t)[None, :]
+    # Euclidean on the scaled coords
+    return pairwise_distances(Xw, metric="euclidean")
+
+X_key = 'X_draw_graph_fa'
+plot_key = 'X_draw_graph_fa'
+
+X_rna = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'].obsm[X_key]
+X_atac = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'ATAC'].obsm[X_key]
+
+plot_rna = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'].obsm[plot_key]
+plot_atac = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'ATAC'].obsm[plot_key]
+
+a = np.ones(len(X_rna)) / len(X_rna)
+b = np.ones(len(X_atac)) / len(X_atac)
+
+if X_key == 'X_diffmap':
+    D = diffusion_distances(subsampled_eclare_adata, t=2.0)
+    M = D[:len(X_rna), len(X_rna):]
+else:
+    M = ot.dist(X_rna, X_atac, metric='sqeuclidean')
+    #M_full = subsampled_eclare_adata.obsp['connectivities']
+    #M = M_full[:len(X_rna), len(X_rna):].toarray()
+    #M = 1 - M
+
+reg = M[~np.isnan(M)].mean() / 100
+
+#G = ot.sinkhorn(a, b, M, 1e-3)
+#G = ot.emd(a, b, M)
+G = ot.partial.partial_wasserstein(a, b, M, m=0.75)
+#res = ot.solve(M, reg=None)
+#G = res.plan
+
+## get matching
+atac2rna_matching = np.argmax(G, axis=0) #RNA IDs, length of X_atac (i.e. one RNA ID per ATAC cell)
+atac2rna_matching_weights = np.max(G, axis=0)
+assert len(atac2rna_matching) == len(X_atac), 'Number of ATAC-to-RNA matches does not match number of RNA cells'
+
+atac_ids = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'ATAC'].obs_names
+rna_ids = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'].obs_names
+atac2rna_ids = rna_ids[atac2rna_matching]
+
+G_plot = np.zeros_like(G)
+G_plot[atac2rna_matching, np.arange(len(atac2rna_matching))] = G[atac2rna_matching, np.arange(len(atac2rna_matching))]
+
+# Plot for all cells
+plt.figure(figsize=[6,6])
+ot.plot.plot2D_samples_mat(plot_rna, plot_atac, G_plot, thr=0.02, alpha=0.05)
+plt.plot(plot_rna[:,0], plot_rna[:,1], ".b", markersize=1)
+plt.plot(plot_atac[:,0], plot_atac[:,1], ".r", markersize=1)
+plt.gca().tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+plt.axis('on')
+
+## remove cells with no matching weight
+rna_ids_dict = {rna_id: i for i, rna_id in enumerate(rna_ids)}
+atac_ids_dict = {atac_id: i for i, atac_id in enumerate(atac_ids)}
+
+remaining_rna_ids = atac2rna_ids[atac2rna_matching_weights>0]
+remaining_atac_ids = atac_ids[atac2rna_matching_weights>0]
+
+remaining_rna_idxs = [rna_ids_dict[rna_id] for rna_id in remaining_rna_ids]
+remaining_atac_idxs = [atac_ids_dict[atac_id] for atac_id in remaining_atac_ids]
+
+subsampled_eclare_adata = subsampled_eclare_adata[subsampled_eclare_adata.obs_names.isin(list(remaining_rna_ids) + list(remaining_atac_ids))].copy()
+subsampled_eclare_adata.obs['Cell_ID_OT'] = subsampled_eclare_adata.obs_names.to_list()
+subsampled_eclare_adata.obs.loc[subsampled_eclare_adata.obs['modality'] == 'ATAC', 'Cell_ID_OT'] = remaining_rna_ids.to_list() # transfered labels from RNA to ATAC
+
+#G_plot_trim = np.zeros_like(G_plot)
+#G_plot_trim[remaining_rna_idxs, remaining_atac_idxs] = G_plot[remaining_rna_idxs, remaining_atac_idxs]
+plot_rna_trim = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'].obsm[plot_key]
+plot_atac_trim = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'ATAC'].obsm[plot_key]
+
+plt.figure(figsize=[6,6])
+ot.plot.plot2D_samples_mat(plot_rna, plot_atac, G_plot, thr=0.02, alpha=0.05)
+plt.plot(plot_rna_trim[:,0], plot_rna_trim[:,1], ".b", markersize=1)
+plt.plot(plot_atac_trim[:,0], plot_atac_trim[:,1], ".r", markersize=1)
+plt.gca().tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+plt.axis('on')
+
+plt.figure(figsize=[6,6])
+ot.plot.plot2D_samples_mat(plot_rna, plot_atac, G_plot, thr=0.02, alpha=0.3)
+plt.gca().tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+plt.axis('on')
+
+## density plots
+sc.tl.embedding_density(subsampled_eclare_adata, basis='draw_graph_fa', groupby='modality')
+sc.pl.embedding_density(subsampled_eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_modality')
+
+sc.tl.embedding_density(subsampled_eclare_adata, basis='draw_graph_fa', groupby='Lineage')
+sc.pl.embedding_density(subsampled_eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_Lineage')
 
 #%% save results
 
