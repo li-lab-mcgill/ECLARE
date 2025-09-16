@@ -2,14 +2,6 @@
  
 conda activate eclare_env
 cd $ECLARE_ROOT
- 
-## Make new sub-directory for current job ID and assign to "TMPDIR" variable
-JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
-mkdir -p ${OUTPATH}/eclare_${JOB_ID}
-TMPDIR=${OUTPATH}/eclare_${JOB_ID}
- 
-## Copy scripts to sub-directory for reproducibility
-cp ./scripts/eclare_scripts/eclare_run.py ./scripts/eclare_scripts/eclare_dev_stages.sh $TMPDIR
 
 ## Define target datasets
 #target_dataset=("PFC_Zhu")
@@ -17,12 +9,20 @@ cp ./scripts/eclare_scripts/eclare_run.py ./scripts/eclare_scripts/eclare_dev_st
 #clip_job_id='18175628'
 #ordinal_job_id='21125926'
 
-target_dataset=("PFC_V1_Wang")
-genes_by_peaks_str=("9914_by_63404")
-clip_job_id='20194800'
-ordinal_job_id='21141050'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
+target_dataset=("Cortex_Velmeshev")
+genes_by_peaks_str=("9584_by_66620")
+clip_job_id='16155618'
+ordinal_job_id=None  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
 
-total_epochs=100
+total_epochs=10
+
+## Make new sub-directory for current job ID and assign to "TMPDIR" variable
+JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
+mkdir -p ${OUTPATH}/eclare_${target_dataset_lowercase}_${JOB_ID}
+TMPDIR=${OUTPATH}/eclare_${target_dataset_lowercase}_${JOB_ID}
+ 
+## Copy scripts to sub-directory for reproducibility
+cp ./scripts/eclare_scripts/eclare_run.py ./scripts/eclare_scripts/eclare_dev_stages.sh $TMPDIR
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6
@@ -88,7 +88,6 @@ run_eclare_task_on_gpu() {
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
     --replicate_idx=$task_idx \
     --clip_job_id=$clip_job_id \
-    --ordinal_job_id=$ordinal_job_id \
     --experiment_job_id=$experiment_job_id \
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \

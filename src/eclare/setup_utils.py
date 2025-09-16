@@ -1163,7 +1163,7 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
 
     ## Set split type and key
     split_key = 'cell_type'
-    split_type = 'balanced'
+    split_type = 'stratified'
 
     if return_type == 'loaders':
         rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, split_type=split_type, split_key=split_key, cell_group_key=cell_group, batch_key=batch_group)
@@ -1519,17 +1519,6 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
         atac = anndata.read_h5ad(atac_fullpath)
         rna  = anndata.read_h5ad(rna_fullpath)
 
-        ## map cell types to cell_group if not already done, according to Fig 1B from Wang et al.
-        if pd.api.types.is_integer_dtype(rna.obs[cell_group]) or pd.api.types.is_integer_dtype(atac.obs[cell_group]):
-            cell_type_map = {0: "RG-vRG", 1: "RG-tRG", 2: "RG-oRG", 3: "IPC-EN", 4: "EN-newborn", 5: "EN-IT-immature", 6: "EN-L2_3-IT", 7: "EN-L4-IT", 8: "EN-L5-IT", 9: "EN-L6-IT", 10: "EN-non-IT-immature", 11: "EN-L5-ET", 12: "EN-L5_6-NP", 13: "EN-L6-CT", 14: "EN-L6b", 15: "IN-dLGE-immature", 16: "IN-CGE-immature", 17: "IN-CGE-VIP", 18: "IN-CGE-SNCG", 19: "IN-mix-LAMP5", 20: "IN-MGE-immature", 21: "IN-MGE-SST", 22: "IN-MGE-PV", 23: "IPC-glia", 24: "Astrocyte-immature", 25: "Astrocyte-protoplasmic", 26: "Astrocyte-fibrous", 27: "OPC", 28: "Oligodendrocyte-immature", 29: "Oligodendrocyte", 30: "Cajal–Retzius cell", 31: "Microglia", 32: "Vascular", 33: "Unknown"}
-            atac.obs[cell_group] = atac.obs[cell_group].map(cell_type_map)
-            rna.obs[cell_group] = rna.obs[cell_group].map(cell_type_map)
-
-        ## create dev_stage labels by mapping dev_group_key to dev_stage
-        dev_stage_mapper = {0: 'FirstTrim', 1: 'SecTrim', 2:'ThirdTrim', 3:'Inf', 4:'Adol'}
-        rna.obs['dev_stage'] = rna.obs[dev_group_key].map(dev_stage_mapper)
-        atac.obs['dev_stage'] = atac.obs[dev_group_key].map(dev_stage_mapper)
-
         ## retain from specific developmental stages
         keep_atac_subj = atac.obs['dev_stage'].str.contains('|'.join(keep_group), regex=True) # if keep_group=[''], then keeps all subjects
         keep_rna_subj = rna.obs['dev_stage'].str.contains('|'.join(keep_group), regex=True)
@@ -1551,9 +1540,9 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
         assert (keep_atac == keep_rna).all()
 
         ## TMP - keep only ExNeu cells
-        print('!!!! TMP - keeping only cells from EN lineage !!!!')
-        keep_atac = keep_atac & atac.obs[cell_group].isin(EN_cell_type_branches.keys())
-        keep_rna = keep_rna & rna.obs[cell_group].isin(EN_cell_type_branches.keys())
+        #print('!!!! TMP - keeping only cells from EN lineage !!!!')
+        #keep_atac = keep_atac & atac.obs[cell_group].isin(EN_cell_type_branches.keys())
+        #keep_rna = keep_rna & rna.obs[cell_group].isin(EN_cell_type_branches.keys())
 
         atac = atac[keep_atac].to_memory()
         rna = rna[keep_rna].to_memory()
@@ -1647,6 +1636,17 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
         genes_peaks_dict['peaks'] = pd.DataFrame(genes_peaks_dict['peaks'].str.split('[-:]', expand=True).to_list()).apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1).values
         atac.var.index = genes_peaks_dict['peaks']
 
+        ## map cell types to cell_group if not already done, according to Fig 1B from Wang et al.
+        if pd.api.types.is_integer_dtype(rna.obs[cell_group]) or pd.api.types.is_integer_dtype(atac.obs[cell_group]):
+            cell_type_map = {0: "RG-vRG", 1: "RG-tRG", 2: "RG-oRG", 3: "IPC-EN", 4: "EN-newborn", 5: "EN-IT-immature", 6: "EN-L2_3-IT", 7: "EN-L4-IT", 8: "EN-L5-IT", 9: "EN-L6-IT", 10: "EN-non-IT-immature", 11: "EN-L5-ET", 12: "EN-L5_6-NP", 13: "EN-L6-CT", 14: "EN-L6b", 15: "IN-dLGE-immature", 16: "IN-CGE-immature", 17: "IN-CGE-VIP", 18: "IN-CGE-SNCG", 19: "IN-mix-LAMP5", 20: "IN-MGE-immature", 21: "IN-MGE-SST", 22: "IN-MGE-PV", 23: "IPC-glia", 24: "Astrocyte-immature", 25: "Astrocyte-protoplasmic", 26: "Astrocyte-fibrous", 27: "OPC", 28: "Oligodendrocyte-immature", 29: "Oligodendrocyte", 30: "Cajal–Retzius cell", 31: "Microglia", 32: "Vascular", 33: "Unknown"}
+            atac.obs[cell_group] = atac.obs[cell_group].map(cell_type_map)
+            rna.obs[cell_group] = rna.obs[cell_group].map(cell_type_map)
+
+        ## create dev_stage labels by mapping dev_group_key to dev_stage
+        dev_stage_mapper = {0: 'FirstTrim', 1: 'SecTrim', 2:'ThirdTrim', 3:'Inf', 4:'Adol'}
+        rna.obs['dev_stage'] = rna.obs[dev_group_key].map(dev_stage_mapper)
+        atac.obs['dev_stage'] = atac.obs[dev_group_key].map(dev_stage_mapper)
+
     ## Count number of cells per dev stage
     dev_stage_counts_df = pd.merge(
         rna.obs[dev_group_key].value_counts().to_frame(), atac.obs[dev_group_key].value_counts().to_frame(),
@@ -1659,12 +1659,12 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     ## ensure that developmental stages are in the correct order
-    atac.obs[dev_group_key] = pd.Categorical(atac.obs[dev_group_key], categories=dev_stages, ordered=True)
-    rna.obs[dev_group_key] = pd.Categorical(rna.obs[dev_group_key], categories=dev_stages, ordered=True)
+    atac.obs['dev_stage'] = pd.Categorical(atac.obs['dev_stage'], categories=dev_stages, ordered=True)
+    rna.obs['dev_stage'] = pd.Categorical(rna.obs['dev_stage'], categories=dev_stages, ordered=True)
 
     ## Set split type and key
     split_key = 'cell_type'
-    split_type = 'balanced'
+    split_type = 'stratified'
 
     if return_type == 'loaders':
         rna_train_loader, rna_valid_loader, rna_valid_idx, _, _, _, _, _, _ = create_loaders(rna, dataset, args.batch_size, args.total_epochs, split_type=split_type, split_key=split_key, cell_group_key=cell_group, batch_key=batch_group)
@@ -2155,13 +2155,13 @@ def teachers_setup(model_paths, args, device, return_type='loaders', dataset_idx
     models = {}
 
     if return_type == 'loaders':
-        target_rna_train_loaders = {}
-        target_atac_train_loaders = {}
-        target_rna_valid_loaders = {}
-        target_atac_valid_loaders = {}
+        teacher_rna_train_loaders = {}
+        teacher_atac_train_loaders = {}
+        teacher_rna_valid_loaders = {}
+        teacher_atac_valid_loaders = {}
     elif return_type == 'data':
-        target_rna_adatas = {}
-        target_atac_adatas = {}
+        teacher_rna_adatas = {}
+        teacher_atac_adatas = {}
     
     for m, model_path in enumerate(model_paths):
 
@@ -2177,7 +2177,7 @@ def teachers_setup(model_paths, args, device, return_type='loaders', dataset_idx
         #dataset = model_metadata.metadata['source_dataset']
         dataset = model_path.split('/')[-3] # TEMPORARY - get dataset from model path
         genes_by_peaks_str = model_metadata.metadata['genes_by_peaks_str']
-        target_setup_func = return_setup_func_from_dataset(args.target_dataset)
+        teacher_setup_func = return_setup_func_from_dataset(args.target_dataset)
 
         ## Check if dataset contains 'multiome', in which case convert to '10x'
         if 'multiome' in dataset:
@@ -2203,33 +2203,33 @@ def teachers_setup(model_paths, args, device, return_type='loaders', dataset_idx
         #if args.ordinal_job_id is None:
         ## TMP - create deepcopy of args
         args_tmp = deepcopy(args)
-        args_tmp.source_dataset = dataset
+        args_tmp.source_dataset = dataset if (dataset == model_metadata.metadata['source_dataset']) else dataset.split(model_metadata.metadata['source_dataset']+'_')[-1] # if disagreement between model and args, probably involves individual dev stages
         args_tmp.genes_by_peaks_str = genes_by_peaks_str
         
         overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
 
         if return_type == 'loaders':
 
-            target_rna_train_loader, target_atac_train_loader, _, _, _, target_rna_valid_loader, target_atac_valid_loader, _, _, _, _, _, _, _, _ =\
-                target_setup_func(args_tmp, return_type=return_type)
+            teacher_rna_train_loader, teacher_atac_train_loader, _, _, _, teacher_rna_valid_loader, teacher_atac_valid_loader, _, _, _, _, _, _, _, _ =\
+                teacher_setup_func(args_tmp, return_type=return_type)
 
-            target_rna_train_loaders[dataset] = target_rna_train_loader
-            target_atac_train_loaders[dataset] = target_atac_train_loader
-            target_rna_valid_loaders[dataset] = target_rna_valid_loader
-            target_atac_valid_loaders[dataset] = target_atac_valid_loader
+            teacher_rna_train_loaders[dataset] = teacher_rna_train_loader
+            teacher_atac_train_loaders[dataset] = teacher_atac_train_loader
+            teacher_rna_valid_loaders[dataset] = teacher_rna_valid_loader
+            teacher_atac_valid_loaders[dataset] = teacher_atac_valid_loader
 
         elif return_type == 'data':
 
-            target_rna_adata, target_atac_adata, _, _, _ = \
-                target_setup_func(args_tmp, return_type=return_type, return_backed=True)
+            teacher_rna_adata, teacher_atac_adata, _, _, _ = \
+                teacher_setup_func(args_tmp, return_type=return_type, return_backed=True)
         
-            target_rna_adatas[dataset] = target_rna_adata
-            target_atac_adatas[dataset] = target_atac_adata
+            teacher_rna_adatas[dataset] = teacher_rna_adata
+            teacher_atac_adatas[dataset] = teacher_atac_adata
 
     if return_type == 'loaders':
-        return datasets, models, target_rna_train_loaders, target_atac_train_loaders, target_rna_valid_loaders, target_atac_valid_loaders
+        return datasets, models, teacher_rna_train_loaders, teacher_atac_train_loaders, teacher_rna_valid_loaders, teacher_atac_valid_loaders
     elif return_type == 'data':
-        return datasets, models, target_rna_adatas, target_atac_adatas
+        return datasets, models, teacher_rna_adatas, teacher_atac_adatas
     else:
         return datasets, models
 

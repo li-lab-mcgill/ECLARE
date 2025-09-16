@@ -84,7 +84,7 @@ if __name__ == "__main__":
             source_setup_func(args, return_type='loaders', keep_group=[args.keep_group])
 
         args_tmp = deepcopy(args)
-        args_tmp.target_dataset = None
+        #args_tmp.target_dataset = None
 
         _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
             target_setup_func(args_tmp, return_type='loaders', keep_group=['']) # keep_group=[''] to keep all subjects

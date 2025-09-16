@@ -2,23 +2,24 @@
  
 conda activate eclare_env
 cd $ECLARE_ROOT
- 
-## Make new sub-directory for current job ID and assign to "TMPDIR" variable
-JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
-mkdir -p ${OUTPATH}/clip_${JOB_ID}
-TMPDIR=${OUTPATH}/clip_${JOB_ID}
- 
-## Copy scripts to sub-directory for reproducibility
-cp ./scripts/clip_scripts/clip_run.py ./scripts/clip_scripts/clip_dev_stages.sh $TMPDIR
-
+  
 #dev_stages=("EaFet" "LaFet" "Inf" "Child" "Adol" "Adult")
 #dataset=("PFC_Zhu")
 #genes_by_peaks_str=("9832_by_70751")
 
 dev_stages=("FirstTrim" "SecTrim" "ThirdTrim" "Inf" "Adol")
-dataset=("PFC_V1_Wang")
-genes_by_peaks_str=("9914_by_63404")
+source_dataset=("PFC_V1_Wang")
+target_dataset=("Cortex_Velmeshev")
+target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
+genes_by_peaks_str=("6124_by_19914")
 
+## Make new sub-directory for current job ID and assign to "TMPDIR" variable
+JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
+mkdir -p ${OUTPATH}/clip_${target_dataset_lowercase}_${JOB_ID}
+TMPDIR=${OUTPATH}/clip_${target_dataset_lowercase}_${JOB_ID}
+
+## Copy scripts to sub-directory for reproducibility
+cp ./scripts/clip_scripts/clip_run.py ./scripts/clip_scripts/clip_dev_stages.sh $TMPDIR
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6 # only relevant for multi-replicate tasks
@@ -70,26 +71,27 @@ echo "Idle GPUs: ${idle_gpus[@]}"
 # Function to run a task on a specific GPU
 run_clip_task_on_gpu() {
     local gpu_id=$1
-    local dataset=$2
-    local dev_stage=$3
-    local task_idx=$4
-    local random_state=$5
-    local genes_by_peaks_str=$6
-    local feature=$7
+    local source_dataset=$2
+    local target_dataset=$3
+    local dev_stage=$4
+    local task_idx=$5
+    local random_state=$6
+    local genes_by_peaks_str=$7
+    local feature=$8
 
     echo "Running '${feature}' on GPU $gpu_id"
     CUDA_VISIBLE_DEVICES=$gpu_id \
     python ${ECLARE_ROOT}/scripts/clip_scripts/clip_run.py \
-    --outdir $TMPDIR/$dataset/$dev_stage/$task_idx \
-    --source_dataset=$dataset \
-    --target_dataset=$dataset \
+    --outdir $TMPDIR/$target_dataset/${dev_stage}_${source_dataset}/$task_idx \
+    --source_dataset=$source_dataset \
+    --target_dataset=$target_dataset \
     --keep_group=$dev_stage \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
     --batch_size=800 \
     --feature="${feature}" \
     --metric_to_optimize="1-foscttm" \
-    --job_id=$JOB_ID
+    --job_id=$JOB_ID &
     #--tune_hyperparameters \
     #--n_trials=3 &
 }
@@ -97,7 +99,7 @@ run_clip_task_on_gpu() {
 ## Create experiment ID (or detect if it already exists)
 python -c "
 from src.eclare.run_utils import get_or_create_experiment; 
-experiment = get_or_create_experiment('clip_${JOB_ID}')
+experiment = get_or_create_experiment('clip_${target_dataset_lowercase}_${JOB_ID}')
 experiment_id = experiment.experiment_id
 print(experiment_id)
 
@@ -117,16 +119,16 @@ for dev_stage in "${dev_stages[@]}"; do
     for task_idx in $(seq 0 $((N_REPLICATES-1))); do
 
         random_state=${random_states[$task_idx]}
-        feature="${dataset}_${dev_stage}-${task_idx}"
+        feature="${source_dataset}-to-${target_dataset}-${dev_stage}-${task_idx}"
 
         ## Make new sub-sub-directory for source dataset
-        mkdir -p $TMPDIR/$dataset/$dev_stage/$task_idx
+        mkdir -p $TMPDIR/$target_dataset/${dev_stage}_${source_dataset}/$task_idx
         
         # Assign task to an idle GPU, ensuring both source_dataset_idx and task_idx are used for load balancing
         gpu_id=${idle_gpus[$(((dev_stage_idx * N_REPLICATES + task_idx) % ${#idle_gpus[@]}))]}
 
         # Run CLIP task on idle GPU
-        run_clip_task_on_gpu $gpu_id $dataset $dev_stage $task_idx $random_state $genes_by_peaks_str $feature
+        run_clip_task_on_gpu $gpu_id $source_dataset $target_dataset $dev_stage $task_idx $random_state $genes_by_peaks_str $feature
     done
 
     dev_stage_idx=$((dev_stage_idx + 1))
