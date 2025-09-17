@@ -2203,28 +2203,46 @@ def teachers_setup(model_paths, args, device, return_type='loaders', dataset_idx
         #if args.ordinal_job_id is None:
         ## TMP - create deepcopy of args
         args_tmp = deepcopy(args)
-        args_tmp.source_dataset = dataset if (dataset == model_metadata.metadata['source_dataset']) else dataset.split(model_metadata.metadata['source_dataset']+'_')[-1] # if disagreement between model and args, probably involves individual dev stages
         args_tmp.genes_by_peaks_str = genes_by_peaks_str
+
+        ## if disagreement between model and args, probably involves individual dev stages
+        are_dev_teachers = (dataset != model_metadata.metadata['source_dataset'])
+        if not are_dev_teachers:
+            args_tmp.source_dataset = dataset
+        elif are_dev_teachers:
+            print("Teachers are likely dev stages")
+            args_tmp.source_dataset = dataset.split(model_metadata.metadata['source_dataset']+'_')[-1] # remove dev stage from dataset name to isolate dataset name
         
         overlapping_subjects_only = False #True if args.dataset == 'roussos' else False
 
-        if return_type == 'loaders':
+        if (not are_dev_teachers) or (m==0):
 
-            teacher_rna_train_loader, teacher_atac_train_loader, _, _, _, teacher_rna_valid_loader, teacher_atac_valid_loader, _, _, _, _, _, _, _, _ =\
-                teacher_setup_func(args_tmp, return_type=return_type)
+            if return_type == 'loaders':
 
-            teacher_rna_train_loaders[dataset] = teacher_rna_train_loader
-            teacher_atac_train_loaders[dataset] = teacher_atac_train_loader
-            teacher_rna_valid_loaders[dataset] = teacher_rna_valid_loader
-            teacher_atac_valid_loaders[dataset] = teacher_atac_valid_loader
+                teacher_rna_train_loader, teacher_atac_train_loader, _, _, _, teacher_rna_valid_loader, teacher_atac_valid_loader, _, _, _, _, _, _, _, _ =\
+                    teacher_setup_func(args_tmp, return_type=return_type)
 
-        elif return_type == 'data':
+                teacher_rna_train_loaders[dataset] = teacher_rna_train_loader
+                teacher_atac_train_loaders[dataset] = teacher_atac_train_loader
+                teacher_rna_valid_loaders[dataset] = teacher_rna_valid_loader
+                teacher_atac_valid_loaders[dataset] = teacher_atac_valid_loader
 
-            teacher_rna_adata, teacher_atac_adata, _, _, _ = \
-                teacher_setup_func(args_tmp, return_type=return_type, return_backed=True)
-        
-            teacher_rna_adatas[dataset] = teacher_rna_adata
-            teacher_atac_adatas[dataset] = teacher_atac_adata
+            elif return_type == 'data':
+
+                teacher_rna_adata, teacher_atac_adata, _, _, _ = \
+                    teacher_setup_func(args_tmp, return_type=return_type, return_backed=True)
+            
+                teacher_rna_adatas[dataset] = teacher_rna_adata
+                teacher_atac_adatas[dataset] = teacher_atac_adata
+
+    if are_dev_teachers:
+        ## reuse first teacher for all dev stages, since they all the same teacher data is dev teachers
+        for dataset in datasets:
+            if dataset != model_metadata.metadata['source_dataset']:
+                teacher_rna_train_loaders[dataset] = teacher_rna_train_loaders[datasets[0]]
+                teacher_atac_train_loaders[dataset] = teacher_atac_train_loaders[datasets[0]]
+                teacher_rna_valid_loaders[dataset] = teacher_rna_valid_loaders[datasets[0]]
+                teacher_atac_valid_loaders[dataset] = teacher_atac_valid_loaders[datasets[0]]
 
     if return_type == 'loaders':
         return datasets, models, teacher_rna_train_loaders, teacher_atac_train_loaders, teacher_rna_valid_loaders, teacher_atac_valid_loaders

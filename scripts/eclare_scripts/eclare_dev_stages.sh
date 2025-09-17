@@ -13,6 +13,7 @@ target_dataset=("Cortex_Velmeshev")
 genes_by_peaks_str=("9584_by_66620")
 clip_job_id='16155618'
 ordinal_job_id=None  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
+target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
 
 total_epochs=10
 
@@ -92,7 +93,7 @@ run_eclare_task_on_gpu() {
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --batch_size=200 \
+    --batch_size=800 \
     --feature="'$feature'"
     #--tune_hyperparameters \
     #--total_epochs=10 \
@@ -103,7 +104,7 @@ run_eclare_task_on_gpu() {
 ## Create experiment ID (or detect if it already exists)
 python -c "
 from src.eclare.run_utils import get_or_create_experiment; 
-experiment = get_or_create_experiment('clip_${clip_job_id}')
+experiment = get_or_create_experiment('clip_${target_dataset_lowercase}_${clip_job_id}')
 experiment_id = experiment.experiment_id
 print(experiment_id)
 
