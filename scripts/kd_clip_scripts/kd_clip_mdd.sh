@@ -19,13 +19,13 @@ datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 source_datasets=("PFC_Zhu" "PFC_V1_Wang")
 
 ## Preset target dataset
-clip_job_id='25165730'
-target_dataset="Cortex_Velmeshev"
-genes_by_peaks_str='9584_by_66620'
+#target_dataset="Cortex_Velmeshev"
+#clip_job_id='25165730'
+#genes_by_peaks_str='9584_by_66620'
 
-#clip_job_id='30153403'
-#target_dataset="MDD"
-#genes_by_peaks_str='17563_by_100000'
+target_dataset="MDD"
+clip_job_id='17082349'
+genes_by_peaks_str='17563_by_100000'
 
 ## Define total number of epochs
 total_epochs=10

@@ -168,13 +168,13 @@ if __name__ == "__main__":
         teachers_setup(model_uri_paths, args, device)
     
     ## Extract validation cell IDs
-    valid_cell_ids_rna = student_rna_valid_loader.dataset.obs['Cell_ID'].tolist()
-    valid_cell_ids_atac = student_atac_valid_loader.dataset.obs['Cell_ID'].tolist()
+    valid_cell_ids_rna = student_rna_valid_loader.dataset.obs_names.tolist()
+    valid_cell_ids_atac = student_atac_valid_loader.dataset.obs_names.tolist()
 
     ## Confirm that validation cell IDs are the same for all teachers and student
     for dataset in datasets:
-        valid_cell_ids_rna_ = teacher_rna_valid_loaders[dataset].dataset.obs['Cell_ID'].tolist()
-        valid_cell_ids_atac_ = teacher_atac_valid_loaders[dataset].dataset.obs['Cell_ID'].tolist()
+        valid_cell_ids_rna_ = teacher_rna_valid_loaders[dataset].dataset.obs_names.tolist()
+        valid_cell_ids_atac_ = teacher_atac_valid_loaders[dataset].dataset.obs_names.tolist()
         assert set(valid_cell_ids_rna) == set(valid_cell_ids_rna_), f'Validation RNA cell IDs do not match in {dataset}'
         assert set(valid_cell_ids_atac) == set(valid_cell_ids_atac_), f'Validation ATAC cell IDs do not match in {dataset}'
 

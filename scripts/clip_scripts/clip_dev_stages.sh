@@ -9,9 +9,9 @@ cd $ECLARE_ROOT
 
 dev_stages=("FirstTrim" "SecTrim" "ThirdTrim" "Inf" "Adol")
 source_dataset=("PFC_V1_Wang")
-target_dataset=("Cortex_Velmeshev")
+target_dataset=("MDD")
 target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
-genes_by_peaks_str=("6124_by_19914")
+genes_by_peaks_str=("17279_by_66623")
 
 ## Make new sub-directory for current job ID and assign to "TMPDIR" variable
 JOB_ID=$(date +%d%H%M%S)  # very small chance of collision

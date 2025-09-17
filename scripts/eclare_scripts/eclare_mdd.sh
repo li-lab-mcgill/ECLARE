@@ -2,6 +2,26 @@
  
 conda activate eclare_env
 cd $ECLARE_ROOT
+
+# Parse command line arguments
+usage() {
+    echo "Usage: $0 [-g GPU_IDS] [-h]"
+    echo "  -g GPU_IDS     Comma-separated list of GPU IDs to use (e.g., '0,1,2')"
+    echo "  -h             Show this help message"
+    exit 1
+}
+
+# Default values
+gpu_ids=""
+
+# Parse arguments
+while getopts "g:h" opt; do
+    case $opt in
+        g) gpu_ids="$OPTARG" ;;
+        h) usage ;;
+        \?) echo "Invalid option: -$OPTARG" >&2; usage ;;
+    esac
+done
  
 ## Copy scripts to sub-directory for reproducibility
 #cp ./scripts/eclare_scripts/eclare_run.py ./scripts/eclare_scripts/eclare_mdd.sh $TMPDIR
@@ -19,18 +39,18 @@ datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 source_datasets=("PFC_V1_Wang" "PFC_Zhu")
 
 ## Preset target dataset
-target_dataset="Cortex_Velmeshev"
-genes_by_peaks_str='9584_by_66620'
-clip_job_id='25165730'
+#target_dataset="Cortex_Velmeshev"
+#genes_by_peaks_str='9584_by_66620'
+#clip_job_id='25165730'
 #ordinal_job_id='25195201'
 #eclare_job_id='26214511'
 
-#clip_job_id='30153403'
-#target_dataset="MDD"
-#genes_by_peaks_str='17563_by_100000'
+target_dataset="MDD"
+genes_by_peaks_str='17563_by_100000'
+clip_job_id='17082349'
 
 ## Define total number of epochs
-total_epochs=100
+total_epochs=10
 target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
 
 ## Make new sub-directory for current job ID and assign to "TMPDIR" variable
@@ -70,18 +90,53 @@ is_gpu_idle() {
     fi
 }
 
-# Get the number of GPUs
-num_gpus=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+# GPU selection logic
+if [ -n "$gpu_ids" ]; then
+    # Use the provided GPU IDs
+    echo "Using specified GPUs: $gpu_ids"
+    IFS=',' read -ra gpu_array <<< "$gpu_ids"
+    
+    # Validate that all specified GPUs exist
+    num_gpus=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+    for gpu_id in "${gpu_array[@]}"; do
+        if [ "$gpu_id" -ge "$num_gpus" ] || [ "$gpu_id" -lt 0 ]; then
+            echo "Error: GPU ID $gpu_id is out of range. Available GPUs: 0 to $((num_gpus-1))"
+            exit 1
+        fi
+    done
+    
+    # Check if the specified GPUs are idle (optional warning)
+    for gpu_id in "${gpu_array[@]}"; do
+        if ! is_gpu_idle $gpu_id; then
+            echo "Warning: Specified GPU $gpu_id is not idle. Proceeding anyway..."
+        fi
+    done
+else
+    # Automatic idle GPU detection (original logic)
+    echo "No GPUs specified, detecting idle GPUs automatically..."
+    
+    # Get the number of GPUs
+    num_gpus=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 
-# Find idle GPUs
-idle_gpus=()
-for ((i=0; i<num_gpus; i++)); do
-    if is_gpu_idle $i; then
-        idle_gpus+=($i)
+    # Find idle GPUs
+    idle_gpus=()
+    for ((i=0; i<num_gpus; i++)); do
+        if is_gpu_idle $i; then
+            idle_gpus+=($i)
+        fi
+    done
+
+    echo "Idle GPUs: ${idle_gpus[@]}"
+    
+    # Check if any idle GPUs were found
+    if [ ${#idle_gpus[@]} -eq 0 ]; then
+        echo "Error: No idle GPUs found. Please specify GPUs manually with -g option."
+        exit 1
     fi
-done
-
-echo "Idle GPUs: ${idle_gpus[@]}"
+    
+    # Use idle GPUs
+    gpu_array=("${idle_gpus[@]}")
+fi
 
 # Function to check if a CPU core is idle
 is_cpu_idle() {
@@ -178,8 +233,8 @@ for task_idx in $(seq 0 $((N_REPLICATES-1))); do
     ## Make new sub-sub-directory for source dataset
     mkdir -p $TMPDIR/$target_dataset/$task_idx
     
-    # Assign task to an idle GPU
-    gpu_id=${idle_gpus[$((target_datasets_idx % ${#idle_gpus[@]}))]}
+    # Assign task to a GPU (cycling through available GPUs)
+    gpu_id=${gpu_array[$((task_idx % ${#gpu_array[@]}))]}
     
     # Assign an idle CPU core (cycling through idle cores)
     cpu_core=${idle_cpu_cores[$((task_idx % ${#idle_cpu_cores[@]}))]}
