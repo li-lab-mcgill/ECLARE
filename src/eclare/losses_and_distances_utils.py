@@ -184,7 +184,7 @@ class Knowledge_distillation_fn(torch.nn.Module):
 
         return loss, loss_T
     
-    def ot_clip_loss_forward(self, teacher_logits, student_logits=None, ot_clip_loss_weights=None):
+    def ot_clip_loss_forward(self, teacher_logits, student_logits=None, ot_clip_loss_weights=None, weigh_distil_by_align_type='batch'):
 
         # student loss
         if (student_logits is not None):
@@ -193,7 +193,11 @@ class Knowledge_distillation_fn(torch.nn.Module):
                 ## obtain teacher weights - without temperature scaling, teacher weights very uniform
                 weights_temperature = self.get_temperature_scaling(self.weights_temperature)
                 ot_clip_loss_logits = (1 - torch.stack(self.all_teacher_ot_values)) / weights_temperature
-                ot_clip_loss_weights = ot_clip_loss_logits.softmax(dim=0).to(device=self.device)  # in principle, would also have values & weights for plan_T
+                #ot_clip_loss_weights = ot_clip_loss_logits.softmax(dim=0).to(device=self.device)
+
+                ot_clip_loss_weights = torch.zeros_like(ot_clip_loss_logits)
+                ot_clip_loss_weights[torch.argmax(ot_clip_loss_logits, axis=0)] = 1.0
+                ot_clip_loss_weights = ot_clip_loss_weights.to(device=self.device)
 
             ot_clip_loss = torch.zeros(len(student_logits), device=self.device)
             ot_clip_loss_T = torch.zeros(len(student_logits), device=self.device)
@@ -204,12 +208,12 @@ class Knowledge_distillation_fn(torch.nn.Module):
                 labels = torch.argmax(teacher_ot_plan, dim=1)
                 labels_T = torch.argmax(teacher_ot_plan.T, dim=1)
 
-                ot_clip_loss = torch.nn.functional.cross_entropy(student_logits, labels, reduction='none')
-                ot_clip_loss_T = torch.nn.functional.cross_entropy(student_logits.T, labels_T, reduction='none')
+                ot_clip_loss_t = torch.nn.functional.cross_entropy(student_logits, labels, reduction='none')
+                ot_clip_loss_T_t = torch.nn.functional.cross_entropy(student_logits.T, labels_T, reduction='none')
 
-                ## apply teacher weight
-                ot_clip_loss = ot_clip_loss + (ot_clip_loss_weights[t] * ot_clip_loss)
-                ot_clip_loss_T = ot_clip_loss_T + (ot_clip_loss_weights[t] * ot_clip_loss_T)
+                ## apply teacher weight and update losses
+                ot_clip_loss = ot_clip_loss + (ot_clip_loss_weights[t] * ot_clip_loss_t)
+                ot_clip_loss_T = ot_clip_loss_T + (ot_clip_loss_weights[t] * ot_clip_loss_T_t)
 
             ## reset teacher plans and values, update in next forward pass
             self.all_teacher_ot_plans = []
@@ -224,7 +228,10 @@ class Knowledge_distillation_fn(torch.nn.Module):
             plan = ot_res.plan
             plan_T = plan.T
             #plan_T = ot_solve(teacher_cost.T).plan  # empirically, plan_T != plan.T
-            value = ot_res.value_linear
+            if weigh_distil_by_align_type == 'batch':
+                value = ot_res.value_linear # equal to (teacher_cost * plan).sum()
+            elif weigh_distil_by_align_type == 'sample':
+                value = (teacher_cost * plan)[plan>0]
 
             self.all_teacher_ot_plans.append(plan)
             self.all_teacher_ot_values.append(value)

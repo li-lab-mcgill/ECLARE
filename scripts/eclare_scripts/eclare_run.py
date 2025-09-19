@@ -283,7 +283,7 @@ if __name__ == "__main__":
 
                 model_str = "trained_model"
 
-            else:
+            elif args.tune_hyperparameters:
                 optuna.logging.set_verbosity(optuna.logging.ERROR)
                 best_params = tune_ECLARE(args, experiment_id, run_args, device)
 

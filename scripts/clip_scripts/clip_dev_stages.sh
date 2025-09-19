@@ -7,11 +7,12 @@ cd $ECLARE_ROOT
 #dataset=("PFC_Zhu")
 #genes_by_peaks_str=("9832_by_70751")
 
-dev_stages=("FirstTrim" "SecTrim" "ThirdTrim" "Inf" "Adol")
+#dev_stages=("FirstTrim" "SecTrim" "ThirdTrim" "Inf" "Adol")
+dev_stages=("FirstTrim")
 source_dataset=("PFC_V1_Wang")
 target_dataset=("MDD")
 target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
-genes_by_peaks_str=("17279_by_66623")
+genes_by_peaks_str=("9646_by_12863")
 
 ## Make new sub-directory for current job ID and assign to "TMPDIR" variable
 JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
@@ -91,7 +92,7 @@ run_clip_task_on_gpu() {
     --batch_size=800 \
     --feature="${feature}" \
     --metric_to_optimize="1-foscttm" \
-    --job_id=$JOB_ID &
+    --job_id=$JOB_ID
     #--tune_hyperparameters \
     #--n_trials=3 &
 }

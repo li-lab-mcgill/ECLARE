@@ -27,16 +27,20 @@ n_cudas = torch.cuda.device_count()
 device = 'cpu'
 
 ## Define target and source datasets
-target_dataset = 'Cortex_Velmeshev'
-source_datasets = ['PFC_V1_Wang', 'PFC_Zhu']
+#target_dataset = 'Cortex_Velmeshev'
+#genes_by_peaks_str = '9584_by_66620'
+#source_datasets = ['FirstTrim', 'SecTrim', 'ThirdTrim', 'Inf', 'Adol']
+target_dataset = 'MDD'
+genes_by_peaks_str = '17563_by_100000'
+source_datasets = ['PFC_Zhu', 'PFC_V1_Wang']
 subsample = 5000
 
 ## Create dict for methods and job_ids
 methods_id_dict = {
-    'clip': '25165730',
-    'kd_clip': '25173640',
-    'eclare': ['09123817'],
-    'ordinal': '27204131',
+    'clip': '17082349',
+    'kd_clip': '18101058',
+    'eclare': ['18113825'],
+    'ordinal': '17144224',
 }
 
 ## define search strings
@@ -129,7 +133,7 @@ student_setup_func = return_setup_func_from_dataset(target_dataset)
 args = SimpleNamespace(
     source_dataset=target_dataset,
     target_dataset=None,
-    genes_by_peaks_str='9584_by_66620',
+    genes_by_peaks_str=genes_by_peaks_str,
     ignore_sources=[None],
     source_dataset_embedder=None,
     batch_size=1000,
@@ -140,8 +144,15 @@ student_rna, student_atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_d
 #student_rna_keep = student_rna
 #student_atac_keep = student_atac
 
-dev_group_key = 'Age_Range'
-dev_stages = student_rna.obs[dev_group_key].cat.categories.tolist()
+if target_dataset == 'MDD':
+    dev_group_key = 'Age'
+    dev_stages = pd.Categorical(student_rna.obs[dev_group_key].sort_values().unique().tolist(), ordered=True)
+elif target_dataset == 'Cortex_Velmeshev':
+    dev_group_key = 'Age_Range'
+    dev_stages = student_rna.obs[dev_group_key].cat.categories.tolist()
+else:
+    raise ValueError(f'Target dataset {target_dataset} not supported')
+
 
 ## Load validation cell IDs
 validation_cell_ids_path = os.path.join(os.environ['OUTPATH'], f'eclare_{target_dataset.lower()}_{methods_id_dict["eclare"][0]}', args.source_dataset, best_eclare, 'valid_cell_ids.pkl')
@@ -188,6 +199,7 @@ for source_dataset in source_datasets:
 
 #%% load ordinal model
 import mlflow
+from mlflow.models import Model
 
 ordinal_model_uri_paths_str = f"ordinal_*{methods_id_dict['ordinal']}/model_uri.txt"
 ordinal_model_uri_paths = glob(os.path.join(os.environ['OUTPATH'], ordinal_model_uri_paths_str))
@@ -199,6 +211,10 @@ with open(ordinal_model_uri_paths[0], 'r') as f:
 
 mlflow.set_tracking_uri('file:///home/mcb/users/dmannk/scMultiCLIP/ECLARE/mlruns')
 ordinal_model = mlflow.pytorch.load_model(model_uri, device=device)
+
+ordinal_model_metadata = Model.load(model_uri)
+ordinal_source_dataset = ordinal_model_metadata.metadata['source_dataset']
+
 
 #%% extract student latents for analysis
 from eclare.post_hoc_utils import create_celltype_palette
@@ -230,28 +246,31 @@ def subsample_adata(adata, cell_group, dev_group_key, subsample, subsample_type=
 #print('Using KD-CLIP student model'); student_model = deepcopy(kd_clip_student_models['PFC_V1_Wang'])
 
 ## subsample validation data
-lineages = ['ExNeu', 'IN']
-rna_idxs = np.where(student_rna.obs_names.isin(valid_rna_ids) & student_rna.obs['Lineage'].isin(lineages))[0]
-atac_idxs = np.where(student_atac.obs_names.isin(valid_atac_ids) & student_atac.obs['Lineage'].isin(lineages))[0]
+if cell_group == 'Lineage':
+    lineages = ['ExNeu', 'IN']
+    if student_rna.obs_names.isin(valid_rna_ids).any():
+        rna_idxs = np.where(student_rna.obs_names.isin(valid_rna_ids) & student_rna.obs['Lineage'].isin(lineages))[0]
+        atac_idxs = np.where(student_atac.obs_names.isin(valid_atac_ids) & student_atac.obs['Lineage'].isin(lineages))[0]
+    else:
+        print('WARNING: obs_names not in valid_rna_ids, resorting to reset_index().index.astype(str)')
+        rna_idxs = np.where(student_rna.obs.reset_index().index.astype(str).isin(valid_rna_ids) & student_rna.obs['Lineage'].isin(lineages))[0]
+        atac_idxs = np.where(student_atac.obs.reset_index().index.astype(str).isin(valid_atac_ids) & student_atac.obs['Lineage'].isin(lineages))[0]
+
+elif cell_group == 'ClustersMapped':
+    clusters = ['ExN', 'InN']
+    if student_rna.obs_names.isin(valid_rna_ids).any():
+        rna_idxs = np.where(student_rna.obs_names.isin(valid_rna_ids) & student_rna.obs['ClustersMapped'].isin(clusters))[0]
+        atac_idxs = np.where(student_atac.obs_names.isin(valid_atac_ids) & student_atac.obs['ClustersMapped'].isin(clusters))[0]
+    else:
+        print('WARNING: obs_names not in valid_rna_ids, resorting to reset_index().index.astype(str)')
+        rna_idxs = np.where(student_rna.obs.reset_index().index.astype(str).isin(valid_rna_ids) & student_rna.obs['ClustersMapped'].isin(clusters))[0]
+        atac_idxs = np.where(student_atac.obs.reset_index().index.astype(str).isin(valid_atac_ids) & student_atac.obs['ClustersMapped'].isin(clusters))[0]
 
 student_rna_sub = subsample_adata(student_rna[rna_idxs], cell_group, dev_group_key, subsample, subsample_type='balanced')
 student_atac_sub = subsample_adata(student_atac[atac_idxs], cell_group, dev_group_key, subsample, subsample_type='balanced')
 
 student_rna_cells_sub = torch.from_numpy(student_rna_sub.X.toarray().astype(np.float32))
 student_atac_cells_sub = torch.from_numpy(student_atac_sub.X.toarray().astype(np.float32))
-
-## project data through ordinal model and assign to adata
-ordinal_rna_logits_sub, ordinal_rna_probas_sub, ordinal_rna_latents_sub = ordinal_model.to('cpu')(student_rna_cells_sub, modality=0)
-ordinal_atac_logits_sub, ordinal_atac_probas_sub, ordinal_atac_latents_sub = ordinal_model.to('cpu')(student_atac_cells_sub, modality=1)
-
-ordinal_rna_prebias_sub = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents_sub)
-ordinal_atac_prebias_sub = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_atac_latents_sub)
-
-ordinal_rna_pt_sub = torch.sigmoid(ordinal_rna_prebias_sub / ordinal_rna_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
-ordinal_atac_pt_sub = torch.sigmoid(ordinal_atac_prebias_sub / ordinal_atac_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
-
-student_rna_sub.obs['ordinal_pseudotime'] = ordinal_rna_pt_sub
-student_atac_sub.obs['ordinal_pseudotime'] = ordinal_atac_pt_sub
 
 ## get subset data latents
 student_rna_latents_sub, _ = eclare_student_model.to('cpu')(student_rna_cells_sub, modality=0)
@@ -348,43 +367,10 @@ atac_adata = sc.AnnData(
 )
 '''
 
-#%% Import latents from other models
-
-## create ordinal_pseudotime Series and merge with sub_cell_type
-ordinal_pseudotime_adata = pd.concat([student_rna_sub.obs['ordinal_pseudotime'], student_atac_sub.obs['ordinal_pseudotime']])
-obs_df = pd.merge(ordinal_pseudotime_adata, student_rna_sub.obs['sub_cell_type'], left_index=True, right_index=True, how='left')
-
-## specify job IDs
-scJoint_job_id  = '20250905_125142'
-glue_job_id     = '20250906_003832'
-
-## add to dictionary
-methods_id_dict['scJoint'] = scJoint_job_id
-methods_id_dict['scGLUE'] = glue_job_id
-
-## scJoint
-scJoint_path = os.path.join(os.environ['OUTPATH'], 'scJoint_data_tmp', scJoint_job_id, 'scJoint_latents.h5ad')
-scJoint_adata = sc.read_h5ad(scJoint_path)
-scJoint_adata.obs = scJoint_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
-
-## scGLUE
-glue_path = os.path.join(os.environ['OUTPATH'], 'glue', glue_job_id, 'glue_latents.h5ad')
-glue_adata = sc.read_h5ad(glue_path)
-glue_adata.obs = glue_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
-
-## find overlapping cell IDs between ECLARE and scJoint/scGLUE
-valid_ids = set(subsampled_eclare_adata.obs_names) & set(glue_adata.obs_names) & set(scJoint_adata.obs_names)
-
-## keep only overlapping cells
-subsampled_eclare_adata = subsampled_eclare_adata[subsampled_eclare_adata.obs_names.isin(valid_ids)]
-
-for source_dataset in source_datasets:
-    subsampled_kd_clip_adatas[source_dataset] = subsampled_kd_clip_adatas[source_dataset][subsampled_kd_clip_adatas[source_dataset].obs_names.isin(valid_ids)]
-
-scJoint_adata = scJoint_adata[scJoint_adata.obs_names.isin(valid_ids)]
-glue_adata = glue_adata[glue_adata.obs_names.isin(valid_ids)]
-
 #%% create adatas for teacher data
+
+valid_ids = subsampled_eclare_adata.obs_names # will get overwritten below
+
 subsampled_clip_adatas = {}
 for source_dataset in source_datasets:
 
@@ -420,12 +406,81 @@ for source_dataset in source_datasets:
         obs=obs,
     )
 
-    ## add ordinal_pseudotime and sub_cell_type
-    adata.obs = adata.obs.merge(ordinal_pseudotime_adata, left_index=True, right_index=True, how='left')
+    if ordinal_source_dataset == source_dataset:
+
+        ordinal_rna_logits_sub, ordinal_rna_probas_sub, ordinal_rna_latents_sub = ordinal_model.to('cpu')(teacher_rna, modality=0)
+        ordinal_atac_logits_sub, ordinal_atac_probas_sub, ordinal_atac_latents_sub = ordinal_model.to('cpu')(teacher_atac, modality=1)
+
+        ordinal_rna_prebias_sub = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents_sub)
+        ordinal_atac_prebias_sub = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_atac_latents_sub)
+
+        ordinal_rna_pt_sub = torch.sigmoid(ordinal_rna_prebias_sub / ordinal_rna_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+        ordinal_atac_pt_sub = torch.sigmoid(ordinal_atac_prebias_sub / ordinal_atac_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+        
 
     ## add to dictionary
     subsampled_clip_adatas[source_dataset] = adata
 
+#%% project data through ordinal model and assign to adata
+
+## if ordinal model not already associated with source datasets, then boils down to student data
+if ordinal_source_dataset == target_dataset:
+
+    student_rna_cells_sub = torch.from_numpy(student_rna_sub.to_memory().X.toarray().astype(np.float32))
+    student_atac_cells_sub = torch.from_numpy(student_atac_sub.to_memory().X.toarray().astype(np.float32))
+
+    ordinal_rna_logits_sub, ordinal_rna_probas_sub, ordinal_rna_latents_sub = ordinal_model.to('cpu')(student_rna_cells_sub, modality=0)
+    ordinal_atac_logits_sub, ordinal_atac_probas_sub, ordinal_atac_latents_sub = ordinal_model.to('cpu')(student_atac_cells_sub, modality=1)
+
+    ordinal_rna_prebias_sub = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents_sub)
+    ordinal_atac_prebias_sub = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_atac_latents_sub)
+
+    ordinal_rna_pt_sub = torch.sigmoid(ordinal_rna_prebias_sub / ordinal_rna_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+    ordinal_atac_pt_sub = torch.sigmoid(ordinal_atac_prebias_sub / ordinal_atac_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+
+## add to adata
+dpt_pseudotimes = np.concatenate([ordinal_rna_pt_sub, ordinal_atac_pt_sub], axis=0)
+subsampled_eclare_adata.obs['ordinal_pseudotime'] = dpt_pseudotimes
+for source_dataset in source_datasets:
+    subsampled_kd_clip_adatas[source_dataset].obs['ordinal_pseudotime'] = dpt_pseudotimes
+    subsampled_clip_adatas[source_dataset].obs['ordinal_pseudotime'] = dpt_pseudotimes
+
+## create ordinal_pseudotime Series and merge with sub_cell_type
+#ordinal_pseudotime_adata = pd.concat([student_rna_sub.obs['ordinal_pseudotime'], student_atac_sub.obs['ordinal_pseudotime']])
+obs_df = pd.merge(subsampled_eclare_adata.obs['ordinal_pseudotime'], subsampled_eclare_adata.obs[cell_group], left_index=True, right_index=True, how='left')
+
+
+#%% Import latents from other models
+
+## specify job IDs
+scJoint_job_id  = '20250905_125142'
+glue_job_id     = '20250906_003832'
+
+## add to dictionary
+methods_id_dict['scJoint'] = scJoint_job_id
+methods_id_dict['scGLUE'] = glue_job_id
+
+## scJoint
+scJoint_path = os.path.join(os.environ['OUTPATH'], 'scJoint_data_tmp', scJoint_job_id, 'scJoint_latents.h5ad')
+scJoint_adata = sc.read_h5ad(scJoint_path)
+scJoint_adata.obs = scJoint_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
+
+## scGLUE
+glue_path = os.path.join(os.environ['OUTPATH'], 'glue', glue_job_id, 'glue_latents.h5ad')
+glue_adata = sc.read_h5ad(glue_path)
+glue_adata.obs = glue_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
+
+## find overlapping cell IDs between ECLARE and scJoint/scGLUE
+valid_ids = set(subsampled_eclare_adata.obs_names) & set(glue_adata.obs_names) & set(scJoint_adata.obs_names)
+
+## keep only overlapping cells
+subsampled_eclare_adata = subsampled_eclare_adata[subsampled_eclare_adata.obs_names.isin(valid_ids)]
+
+for source_dataset in source_datasets:
+    subsampled_kd_clip_adatas[source_dataset] = subsampled_kd_clip_adatas[source_dataset][subsampled_kd_clip_adatas[source_dataset].obs_names.isin(valid_ids)]
+
+scJoint_adata = scJoint_adata[scJoint_adata.obs_names.isin(valid_ids)]
+glue_adata = glue_adata[glue_adata.obs_names.isin(valid_ids)]
 
 #%% PAGA
 ## install scib from github, see scib documentation for details
@@ -433,7 +488,7 @@ from scib.metrics.lisi import clisi_graph, ilisi_graph
 from scib.metrics import nmi, ari
 from scipy.stats import pearsonr, spearmanr, kendalltau
 
-def paga_analysis(adata):
+def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage'):
 
     ## graph construction
     sc.pp.pca(adata)
@@ -444,14 +499,14 @@ def paga_analysis(adata):
     if 'X_umap' not in adata.obsm:
         sc.tl.umap(adata)
     sc.pl.umap(adata, color='leiden')
-    if 'sub_cell_type' in adata.obs.columns:
+    if ('sub_cell_type' in adata.obs.columns) and ('velmeshev_pseudotime' in adata.obs.columns):
         sc.pl.umap(adata, color=['modality', cell_group, 'sub_cell_type', 'velmeshev_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
     else:
-        sc.pl.umap(adata, color=['modality', cell_group, 'velmeshev_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
+        sc.pl.umap(adata, color=['modality', cell_group, 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
 
     ## PAGA
     sc.tl.paga(adata, groups="leiden")
-    sc.pl.paga(adata, color=["leiden", "modality", "Lineage", "ordinal_pseudotime"])
+    sc.pl.paga(adata, color=["leiden", "modality", cell_group_key, "ordinal_pseudotime"])
 
     ## Graph based on PAGA
     sc.tl.draw_graph(adata, init_pos='paga')
@@ -569,12 +624,12 @@ def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_c
 
 
 ## run PAGA
-subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata)
-scJoint_adata = paga_analysis(scJoint_adata)
-glue_adata = paga_analysis(glue_adata)
+subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata, dev_group_key='sex', cell_group_key=cell_group)
+scJoint_adata = paga_analysis(scJoint_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
+glue_adata = paga_analysis(glue_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
 
-for source_dataset in source_datasets: subsampled_kd_clip_adatas[source_dataset] = paga_analysis(subsampled_kd_clip_adatas[source_dataset])
-for source_dataset in source_datasets: subsampled_clip_adatas[source_dataset] = paga_analysis(subsampled_clip_adatas[source_dataset])
+for source_dataset in source_datasets: subsampled_kd_clip_adatas[source_dataset] = paga_analysis(subsampled_kd_clip_adatas[source_dataset], dev_group_key='sex', cell_group_key=cell_group)
+for source_dataset in source_datasets: subsampled_clip_adatas[source_dataset] = paga_analysis(subsampled_clip_adatas[source_dataset], dev_group_key='sex', cell_group_key=cell_group)
 
 '''
 subsampled_eclare_adata_rna = paga_analysis(subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'])

@@ -12,8 +12,14 @@ cd $ECLARE_ROOT
 target_dataset=("Cortex_Velmeshev")
 genes_by_peaks_str=("9584_by_66620")
 clip_job_id='16155618'
-ordinal_job_id=None  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
+ordinal_job_id='01134633'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
 target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
+
+#target_dataset=("MDD")
+#genes_by_peaks_str=("17563_by_100000")
+#clip_job_id='18093416'
+#ordinal_job_id='17144224'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
+#target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
 
 total_epochs=10
 

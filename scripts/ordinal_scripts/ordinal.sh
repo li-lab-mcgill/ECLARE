@@ -34,15 +34,19 @@ cp ./scripts/ordinal_scripts/ordinal_run.py ./scripts/ordinal_scripts/ordinal.sh
 ## Define total number of epochs
 total_epochs=10
 
+source_dataset="PFC_V1_Wang"
+target_dataset="MDD"
+genes_by_peaks_str="9646_by_12863"
+
 #source_dataset="Cortex_Velmeshev"
 #genes_by_peaks_str="9584_by_66620"
 
 #source_dataset="PFC_V1_Wang"
 #genes_by_peaks_str="9914_by_63404"
 
-source_dataset="PFC_V1_Wang"
-target_dataset="Cortex_Velmeshev"
-genes_by_peaks_str="6124_by_19914"
+#source_dataset="PFC_V1_Wang"
+#target_dataset="Cortex_Velmeshev"
+#genes_by_peaks_str="6124_by_19914"
 
 #source_dataset="PFC_Zhu"
 #genes_by_peaks_str="9832_by_70751"
@@ -136,6 +140,7 @@ python ${ECLARE_ROOT}/scripts/ordinal_scripts/ordinal_run.py \
 --total_epochs=$total_epochs \
 --source_dataset=$source_dataset \
 --target_dataset=$target_dataset \
+--source_or_target="source" \
 --genes_by_peaks_str=$genes_by_peaks_str \
 --feature=$source_dataset \
 --job_id $JOB_ID
