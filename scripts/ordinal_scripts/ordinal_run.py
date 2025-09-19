@@ -168,6 +168,7 @@ if __name__ == "__main__":
                 "genes_by_peaks_str": args.genes_by_peaks_str,
                 "source_dataset": args.source_dataset,
                 "target_dataset": args.target_dataset,
+                "source_or_target": args.source_or_target,
             }
 
             ## log model with mlflow.pytorch.log_model

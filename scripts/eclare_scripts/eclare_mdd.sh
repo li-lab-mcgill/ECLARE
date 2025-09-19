@@ -36,8 +36,6 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-source_datasets=("PFC_V1_Wang" "PFC_Zhu")
-
 ## Preset target dataset
 #target_dataset="Cortex_Velmeshev"
 #genes_by_peaks_str='9584_by_66620'
@@ -177,7 +175,7 @@ run_eclare_task_on_gpu() {
     local feature=$7
     local cpu_core=$8  # New parameter for CPU core
 
-    echo "Running ${source_dataset} to ${target_dataset} (task $task_idx) on GPU $gpu_id and CPU core $cpu_core"
+    echo "Running ECLARE on ${target_dataset} (task $task_idx) on GPU $gpu_id and CPU core $cpu_core"
 
     # Use taskset to bind the process to a specific CPU core
     CUDA_VISIBLE_DEVICES=$gpu_id \
@@ -191,12 +189,11 @@ run_eclare_task_on_gpu() {
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
     --batch_size=800 \
-    --feature="'$feature'" &
+    --feature="'$feature'" \
+    --tune_hyperparameters \
+    --n_trials=3 &
     #--ordinal_job_id=$ordinal_job_id \
     #--eclare_job_id=$eclare_job_id \
-    #--tune_hyperparameters \
-    #--args.total_epochs=10 \
-    #--n_trials=3 &
 }
 
 ## Create experiment ID (or detect if it already exists)

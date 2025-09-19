@@ -16,7 +16,7 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-source_datasets=("PFC_Zhu" "PFC_V1_Wang")
+source_datasets=("PFC_V1_Wang" "PFC_Zhu")
 
 ## Preset target dataset
 #target_dataset="Cortex_Velmeshev"
@@ -24,8 +24,8 @@ source_datasets=("PFC_Zhu" "PFC_V1_Wang")
 #genes_by_peaks_str='9584_by_66620'
 
 target_dataset="MDD"
-clip_job_id='17082349'
 genes_by_peaks_str='17563_by_100000'
+clip_job_id='17082349'
 
 ## Define total number of epochs
 total_epochs=10
@@ -105,7 +105,9 @@ run_eclare_task_on_gpu() {
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
     --batch_size=800 \
-    --feature="'$feature'" &
+    --feature="'$feature'" \
+    --tune_hyperparameters \
+    --n_trials=3 &
 
     # Increment job counter
     ((current_jobs++))

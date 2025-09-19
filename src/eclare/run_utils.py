@@ -543,7 +543,7 @@ def eclare_pass(
 
                 ## get weighted align loss
                 _, _, align_loss_scaled, _, _, _ = \
-                    knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'student', ot_clip_loss_weights=teacher_weights.T)
+                    knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'student', ot_clip_loss_weights=0.5*(teacher_T_weights + teacher_T_weights).T)
 
 
             else:
@@ -786,7 +786,7 @@ def run_ORDINAL(
     mlflow.log_param("paired", paired_target)
     mlflow.log_param("n_genes", n_genes)
     mlflow.log_param("n_peaks", n_peaks)
-
+    mlflow.log_param("target_dataset", args.target_dataset); mlflow.log_param(f"source_dataset", args.source_dataset); mlflow.log_param(f"source_or_target", args.source_or_target);
     ## initialize metrics dict
     metrics = {}
 

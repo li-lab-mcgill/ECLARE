@@ -708,6 +708,7 @@ def mdd_setup(
         args,
         cell_groups=dict({'atac':'ClustersMapped','rna':'Broad'}),
         batch_groups=dict({'atac':'BrainID','rna':'OriginalSub'}),
+        dev_group_key="Age",
         hvg_only=True,
         protein_coding_only=True,
         do_gas=False,
@@ -715,7 +716,9 @@ def mdd_setup(
         return_type='loaders',
         overlapping_subjects_only=False,
         return_raw_data=False,
-        dataset='MDD'):
+        dataset='MDD',
+        keep_group=None,
+        return_backed=False):
 
     rna_datapath = atac_datapath = os.path.join(os.environ['DATAPATH'], 'mdd_data')
 
@@ -736,6 +739,14 @@ def mdd_setup(
 
         rna_fullpath = os.path.join(rna_datapath, RNA_file)
         atac_fullpath = os.path.join(atac_datapath, ATAC_file)
+
+        if return_backed:
+            rna = anndata.read_h5ad(rna_fullpath, backed='r')
+            atac = anndata.read_h5ad(atac_fullpath, backed='r')
+            dev_stages = pd.Categorical(\
+                np.unique(rna.obs[dev_group_key].tolist() + atac.obs[dev_group_key].tolist()).astype(str),
+                ordered=True)
+            return rna, atac, cell_groups, dev_group_key, dev_stages
 
         atac = anndata.read_h5ad(atac_fullpath)
         rna  = anndata.read_h5ad(rna_fullpath)
@@ -1649,7 +1660,7 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
 
     ## Count number of cells per dev stage
     dev_stage_counts_df = pd.merge(
-        rna.obs[dev_group_key].value_counts().to_frame(), atac.obs[dev_group_key].value_counts().to_frame(),
+        rna.obs['dev_stage'].value_counts().to_frame(), atac.obs['dev_stage'].value_counts().to_frame(),
         left_index=True, right_index=True, how='outer')
     dev_stage_counts_df.columns = ['rna_n_cells', 'atac_n_cells']
     dev_stage_counts_df.index = pd.Categorical(dev_stage_counts_df.index, categories=dev_stages, ordered=True)
