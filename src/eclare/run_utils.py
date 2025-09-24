@@ -686,15 +686,9 @@ def run_ECLARE(
         align_loss_scale = (target_distil_loss / target_align_loss)
         knowledge_distillation_fn.align_loss_scale = align_loss_scale
 
-        ## Retroactively scale teacher & student CLIP losses
-        #datasets = list(teacher_rna_valid_loaders.keys())
-        #for dataset in datasets+[args.target_dataset]:
-        #    valid_losses['align_loss_'+dataset] = valid_losses['align_loss_'+dataset] * align_loss_scale
-        #    valid_losses['total_loss_'+dataset] = (params.get('distil_lambda', 0.1) * valid_losses['distil_loss_'+dataset]) + ((1-params.get('distil_lambda', 0.1)) * valid_losses['align_loss_'+dataset])
-
         ## get metrics
         metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device, paired=paired)
-        metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
+        #metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)}) # remove valid losses at first epoch due to distortion caused by alignment loss scale
 
         # Log all metrics at once with MLflow
         mlflow.log_metrics(metrics, step=0)

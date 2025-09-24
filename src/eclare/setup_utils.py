@@ -751,6 +751,15 @@ def mdd_setup(
         atac = anndata.read_h5ad(atac_fullpath)
         rna  = anndata.read_h5ad(rna_fullpath)
 
+        ## align ATAC columns to RNA columns
+        atac.obs.rename(columns={'condition': 'Condition', 'sex': 'Sex'}, inplace=True)
+
+        ## set Sex and Condition to lowercase
+        rna.obs['Sex'] = rna.obs['Sex'].str.lower()
+        rna.obs['Condition'] = rna.obs['Condition'].str.lower()
+        atac.obs['Sex'] = atac.obs['Sex'].str.lower()
+        atac.obs['Condition'] = atac.obs['Condition'].str.lower()
+
         ## already being loaded by other dataset, datapath of which genes-to-peaks mask is stored
         genes_to_peaks_binary_mask = genes_peaks_dict = None
 
@@ -1169,8 +1178,8 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
 
     ## ensure that developmental stages are in the correct order
-    atac.obs[cell_group] = pd.Categorical(atac.obs[dev_group_key], categories=dev_stages, ordered=True)
-    rna.obs[cell_group] = pd.Categorical(rna.obs[dev_group_key], categories=dev_stages, ordered=True)
+    atac.obs[dev_group_key] = pd.Categorical(atac.obs[dev_group_key], categories=dev_stages, ordered=True)
+    rna.obs[dev_group_key] = pd.Categorical(rna.obs[dev_group_key], categories=dev_stages, ordered=True)
 
     ## Set split type and key
     split_key = 'cell_type'

@@ -50,8 +50,8 @@ class CLIP(nn.Module):
             'default': inv_softplus(0.005)
         },
         'distil_lambda': {
-            'suggest_distribution': FloatDistribution(low=0.01, high=0.99),
-            'default': 0.1
+            'suggest_distribution': FloatDistribution(low=0.0, high=1.0),
+            'default': 0.006
         },
         'decoder_loss': {
             'suggest_distribution': CategoricalDistribution(

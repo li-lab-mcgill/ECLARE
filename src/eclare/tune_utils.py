@@ -124,7 +124,7 @@ def tune_ECLARE(args, experiment_id, run_args, device):
 
             params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters,
                 override_with_default=[
-                    'dropout_p', 'teacher_temperature', 'student_temperature', 'weights_temperature', 'decoder_loss'
+                    'dropout_p', 'teacher_temperature', 'student_temperature', 'weights_temperature', 'decoder_loss', 'num_layers'
                     ])
             run_args['trial'] = trial
 

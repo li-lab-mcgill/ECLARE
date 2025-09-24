@@ -7,8 +7,7 @@ cd $ECLARE_ROOT
 #dataset=("PFC_Zhu")
 #genes_by_peaks_str=("9832_by_70751")
 
-#dev_stages=("FirstTrim" "SecTrim" "ThirdTrim" "Inf" "Adol")
-dev_stages=("FirstTrim")
+dev_stages=("FirstTrim" "SecTrim" "ThirdTrim" "Inf" "Adol")
 source_dataset=("PFC_V1_Wang")
 target_dataset=("MDD")
 target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
@@ -34,7 +33,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-total_epochs=10
+total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)
