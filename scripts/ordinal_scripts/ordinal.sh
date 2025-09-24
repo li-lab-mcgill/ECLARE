@@ -32,11 +32,11 @@ TMPDIR=${OUTPATH}/ordinal_${JOB_ID}
 cp ./scripts/ordinal_scripts/ordinal_run.py ./scripts/ordinal_scripts/ordinal.sh $TMPDIR
  
 ## Define total number of epochs
-total_epochs=10
+total_epochs=50
 
-source_dataset="PFC_V1_Wang"
+source_dataset="PFC_Zhu"
 target_dataset="MDD"
-genes_by_peaks_str="9646_by_12863"
+genes_by_peaks_str="6816_by_55284"
 
 #source_dataset="Cortex_Velmeshev"
 #genes_by_peaks_str="9584_by_66620"

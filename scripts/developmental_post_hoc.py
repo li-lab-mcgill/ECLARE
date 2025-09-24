@@ -37,16 +37,16 @@ subsample = 5000
 
 ## Create dict for methods and job_ids
 methods_id_dict = {
-    'clip': '17082349',
-    'kd_clip': '18101058',
-    'eclare': ['18113825'],
-    'ordinal': '17144224',
+    'clip': '21164436',
+    'kd_clip': '22142531',
+    'eclare': ['22105844'],
+    'ordinal': '22130216',
 }
 
 ## define search strings
 search_strings = {
     'clip': 'CLIP' + '_' + methods_id_dict['clip'],
-    'kd_clip': 'KD_CLIP' + '_' + methods_id_dict['kd_clip'],
+    'kd_clip': ['KD_CLIP' + '_' + job_id for job_id in methods_id_dict['kd_clip']],
     'eclare': ['ECLARE' + '_' + job_id for job_id in methods_id_dict['eclare']]
 }
 
@@ -72,7 +72,7 @@ all_metrics_csv_path = download_mlflow_runs(experiment_name)
 all_metrics_df = pd.read_csv(all_metrics_csv_path)
 
 CLIP_header_idx = np.where(all_metrics_df['run_name'].str.startswith(search_strings['clip']))[0]
-KD_CLIP_header_idx = np.where(all_metrics_df['run_name'].str.startswith(search_strings['kd_clip']))[0]
+KD_CLIP_header_idx = np.where(all_metrics_df['run_name'].apply(lambda x: any(x.startswith(s) for s in search_strings['kd_clip'])))[0]
 ECLARE_header_idx = np.where(all_metrics_df['run_name'].apply(lambda x: any(x.startswith(s) for s in search_strings['eclare'])))[0]
 
 CLIP_run_id = all_metrics_df.iloc[CLIP_header_idx]['run_id']
@@ -116,7 +116,7 @@ import pickle
 ## Find path to best ECLARE model
 best_eclare     = str(ECLARE_metrics_df['compound_metric'].argmax())
 eclare_student_model, eclare_student_model_metadata     = load_model_and_metadata(f'eclare_{target_dataset.lower()}_{methods_id_dict["eclare"][0]}', best_eclare, device, target_dataset=target_dataset)
-eclare_student_model = eclare_student_model.eval().to(device=device)
+eclare_student_model = eclare_student_model.to(device=device)
 
 ## Load KD_CLIP student models
 best_kd_clip = '0'
@@ -126,7 +126,7 @@ for source_dataset in source_datasets:
     kd_clip_student_model, kd_clip_student_model_metadata     = load_model_and_metadata(f'kd_clip_{target_dataset.lower()}_{methods_id_dict["kd_clip"]}', best_kd_clip, device, target_dataset=os.path.join(target_dataset, source_dataset))
     kd_clip_student_models[source_dataset] = kd_clip_student_model
 
-#%% Get student data
+#%% Get ECLARE student data
 
 student_setup_func = return_setup_func_from_dataset(target_dataset)
 
@@ -193,9 +193,9 @@ args = SimpleNamespace(
 ## Setup teachers
 datasets, models, teacher_rnas, teacher_atacs = teachers_setup(model_uri_paths, args, device, return_type='data')
 
-for source_dataset in source_datasets:
-    teacher_rna = teacher_rnas[source_dataset][valid_rna_ids]
-    teacher_atac = teacher_atacs[source_dataset]
+#for source_dataset in source_datasets:
+#    teacher_rna = teacher_rnas[source_dataset][valid_rna_ids]
+#    teacher_atac = teacher_atacs[source_dataset]
 
 #%% load ordinal model
 import mlflow
@@ -223,7 +223,7 @@ from imblearn.under_sampling import RandomUnderSampler
 from collections import Counter
 
 def subsample_adata(adata, cell_group, dev_group_key, subsample, subsample_type='balanced'):
-    combinations = adata.obs[[cell_group, dev_group_key]].apply(lambda x: ' - '.join(x), axis=1).values
+    combinations = adata.obs[[cell_group, dev_group_key]].astype(str).apply(lambda x: ' - '.join(x), axis=1).values
 
     if subsample_type == 'stratified':
         n_cells = adata.n_obs
@@ -257,7 +257,8 @@ if cell_group == 'Lineage':
         atac_idxs = np.where(student_atac.obs.reset_index().index.astype(str).isin(valid_atac_ids) & student_atac.obs['Lineage'].isin(lineages))[0]
 
 elif cell_group == 'ClustersMapped':
-    clusters = ['ExN', 'InN']
+    #clusters = student_rna.obs['ClustersMapped'].cat.categories.tolist()
+    clusters = ['ExN', 'InN', 'Oli']
     if student_rna.obs_names.isin(valid_rna_ids).any():
         rna_idxs = np.where(student_rna.obs_names.isin(valid_rna_ids) & student_rna.obs['ClustersMapped'].isin(clusters))[0]
         atac_idxs = np.where(student_atac.obs_names.isin(valid_atac_ids) & student_atac.obs['ClustersMapped'].isin(clusters))[0]
@@ -266,8 +267,8 @@ elif cell_group == 'ClustersMapped':
         rna_idxs = np.where(student_rna.obs.reset_index().index.astype(str).isin(valid_rna_ids) & student_rna.obs['ClustersMapped'].isin(clusters))[0]
         atac_idxs = np.where(student_atac.obs.reset_index().index.astype(str).isin(valid_atac_ids) & student_atac.obs['ClustersMapped'].isin(clusters))[0]
 
-student_rna_sub = subsample_adata(student_rna[rna_idxs], cell_group, dev_group_key, subsample, subsample_type='balanced')
-student_atac_sub = subsample_adata(student_atac[atac_idxs], cell_group, dev_group_key, subsample, subsample_type='balanced')
+student_rna_sub = subsample_adata(student_rna[rna_idxs], cell_group, dev_group_key, subsample, subsample_type='stratified')
+student_atac_sub = subsample_adata(student_atac[atac_idxs], cell_group, dev_group_key, subsample, subsample_type='stratified')
 
 student_rna_cells_sub = torch.from_numpy(student_rna_sub.X.toarray().astype(np.float32))
 student_atac_cells_sub = torch.from_numpy(student_atac_sub.X.toarray().astype(np.float32))
@@ -406,7 +407,12 @@ for source_dataset in source_datasets:
         obs=obs,
     )
 
+    from sklearn.preprocessing import quantile_transform
+    from skimage.exposure import match_histograms
+
     if ordinal_source_dataset == source_dataset:
+
+        print(f'Projecting data through ordinal model for {source_dataset}')
 
         ordinal_rna_logits_sub, ordinal_rna_probas_sub, ordinal_rna_latents_sub = ordinal_model.to('cpu')(teacher_rna, modality=0)
         ordinal_atac_logits_sub, ordinal_atac_probas_sub, ordinal_atac_latents_sub = ordinal_model.to('cpu')(teacher_atac, modality=1)
@@ -414,9 +420,15 @@ for source_dataset in source_datasets:
         ordinal_rna_prebias_sub = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents_sub)
         ordinal_atac_prebias_sub = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_atac_latents_sub)
 
-        ordinal_rna_pt_sub = torch.sigmoid(ordinal_rna_prebias_sub / ordinal_rna_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
-        ordinal_atac_pt_sub = torch.sigmoid(ordinal_atac_prebias_sub / ordinal_atac_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
-        
+        #ordinal_rna_pt_sub = torch.sigmoid(ordinal_rna_prebias_sub / ordinal_rna_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+        #ordinal_atac_pt_sub = torch.sigmoid(ordinal_atac_prebias_sub / ordinal_atac_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+
+        #ordinal_rna_pt_sub = torch.from_numpy(quantile_transform(ordinal_rna_prebias_sub.detach().cpu().numpy(), output_distribution='normal'))
+        #ordinal_atac_pt_sub = torch.from_numpy(quantile_transform(ordinal_atac_prebias_sub.detach().cpu().numpy(), output_distribution='normal'))
+
+        ordinal_rna_pt_sub = torch.from_numpy(match_histograms(ordinal_rna_prebias_sub.detach().cpu().numpy().flatten(), teacher_rna_sub.obs[dev_group_key].values))
+        ordinal_atac_pt_sub = torch.from_numpy(match_histograms(ordinal_atac_prebias_sub.detach().cpu().numpy().flatten(), teacher_atac_sub.obs[dev_group_key].values))
+
 
     ## add to dictionary
     subsampled_clip_adatas[source_dataset] = adata
@@ -435,15 +447,21 @@ if ordinal_source_dataset == target_dataset:
     ordinal_rna_prebias_sub = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents_sub)
     ordinal_atac_prebias_sub = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_atac_latents_sub)
 
-    ordinal_rna_pt_sub = torch.sigmoid(ordinal_rna_prebias_sub / ordinal_rna_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
-    ordinal_atac_pt_sub = torch.sigmoid(ordinal_atac_prebias_sub / ordinal_atac_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+    #ordinal_rna_pt_sub = torch.sigmoid(ordinal_rna_prebias_sub / ordinal_rna_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+    #ordinal_atac_pt_sub = torch.sigmoid(ordinal_atac_prebias_sub / ordinal_atac_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+
+    #ordinal_rna_pt_sub = torch.from_numpy(quantile_transform(ordinal_rna_prebias_sub.detach().cpu().numpy(), output_distribution='uniform'))
+    #ordinal_atac_pt_sub = torch.from_numpy(quantile_transform(ordinal_atac_prebias_sub.detach().cpu().numpy(), output_distribution='uniform'))
+
+    ordinal_rna_pt_sub = torch.from_numpy(match_histograms(ordinal_rna_prebias_sub.detach().cpu().numpy().flatten(), student_rna_sub.obs[dev_group_key].values))
+    ordinal_atac_pt_sub = torch.from_numpy(match_histograms(ordinal_atac_prebias_sub.detach().cpu().numpy().flatten(), student_atac_sub.obs[dev_group_key].values))
 
 ## add to adata
-dpt_pseudotimes = np.concatenate([ordinal_rna_pt_sub, ordinal_atac_pt_sub], axis=0)
-subsampled_eclare_adata.obs['ordinal_pseudotime'] = dpt_pseudotimes
+ordinal_pseudotimes = np.concatenate([ordinal_rna_pt_sub, ordinal_atac_pt_sub], axis=0)
+subsampled_eclare_adata.obs['ordinal_pseudotime'] = ordinal_pseudotimes
 for source_dataset in source_datasets:
-    subsampled_kd_clip_adatas[source_dataset].obs['ordinal_pseudotime'] = dpt_pseudotimes
-    subsampled_clip_adatas[source_dataset].obs['ordinal_pseudotime'] = dpt_pseudotimes
+    subsampled_kd_clip_adatas[source_dataset].obs['ordinal_pseudotime'] = ordinal_pseudotimes
+    subsampled_clip_adatas[source_dataset].obs['ordinal_pseudotime'] = ordinal_pseudotimes
 
 ## create ordinal_pseudotime Series and merge with sub_cell_type
 #ordinal_pseudotime_adata = pd.concat([student_rna_sub.obs['ordinal_pseudotime'], student_atac_sub.obs['ordinal_pseudotime']])
@@ -491,18 +509,26 @@ from scipy.stats import pearsonr, spearmanr, kendalltau
 def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage'):
 
     ## graph construction
-    sc.pp.pca(adata)
-    sc.pp.neighbors(adata, n_neighbors=15)
+    sc.pp.pca(adata, n_comps=50)
+    sc.pp.neighbors(adata, n_neighbors=50, n_pcs=30, use_rep='X_pca', random_state=0)
     sc.tl.leiden(adata)
 
     ## UMAP
     if 'X_umap' not in adata.obsm:
         sc.tl.umap(adata)
-    sc.pl.umap(adata, color='leiden')
+    #sc.pl.umap(adata, color='leiden')
+
+    color = ['modality', cell_group, 'ordinal_pseudotime', dev_group_key]
+
     if ('sub_cell_type' in adata.obs.columns) and ('velmeshev_pseudotime' in adata.obs.columns):
-        sc.pl.umap(adata, color=['modality', cell_group, 'sub_cell_type', 'velmeshev_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
-    else:
-        sc.pl.umap(adata, color=['modality', cell_group, 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
+        color += ['sub_cell_type', 'velmeshev_pseudotime']
+    if ('Age' in adata.obs.columns) and (dev_group_key != 'Age'):
+        color += ['Age']
+        adata.obs['Age'] = adata.obs['Age'].astype(float)
+    elif dev_group_key != 'Age':
+        adata.obs['Age'] = adata.obs['Age'].astype(float)
+
+    sc.pl.umap(adata, color=color, ncols=3, wspace=0.5)
 
     ## PAGA
     sc.tl.paga(adata, groups="leiden")
@@ -515,19 +541,32 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage'):
     ## Pseudotime with DPT
 
     ## find centroid of 2nd trimester cells
-    mask = adata.obs[dev_group_key] == '2nd trimester'
-    X = adata.X if not hasattr(adata, 'obsm') or 'X_pca' not in adata.obsm else adata.obsm['X_pca']
-    if hasattr(X, 'toarray'):  # handle sparse matrices
-        X = X.toarray()
-    centroid = X[mask.values].mean(axis=0)
-    dists = np.linalg.norm(X - centroid, axis=1)
+    if '2nd trimester' in adata.obs[dev_group_key].values:
 
-    ## Set iroot as the cell closest to the centroid of 2nd trimester cells
-    adata.uns['iroot'] = np.argmin(np.where(mask.values, dists, np.inf))
+        mask = adata.obs[dev_group_key] == '2nd trimester'
+        X = adata.X if not hasattr(adata, 'obsm') or 'X_pca' not in adata.obsm else adata.obsm['X_pca']
+        if hasattr(X, 'toarray'):  # handle sparse matrices
+            X = X.toarray()
+        centroid = X[mask.values].mean(axis=0)
+        dists = np.linalg.norm(X - centroid, axis=1)
+
+        ## Set iroot as the cell closest to the centroid of 2nd trimester cells
+        adata.uns['iroot'] = np.argmin(np.where(mask.values, dists, np.inf))
+
+    elif cell_group_key in adata.obs.columns: # should be True in all cases
+
+        p = adata.obs.groupby('leiden')[cell_group_key].value_counts(normalize=True)
+        entropy_per_leiden = (-p*np.log(p)).groupby('leiden').mean().sort_values()
+        max_entropy_leiden = entropy_per_leiden.index[-1] # last leiden with highest entropy across cell groups
+        iroot_cell_id = adata.obs.loc[adata.obs['leiden'] == max_entropy_leiden, 'ordinal_pseudotime'].idxmin()
+        adata.uns['iroot'] = adata.obs_names.tolist().index(iroot_cell_id)
+
+    elif 'ordinal_pseudotime' in adata.obs.columns:
+        adata.uns['iroot'] = adata.obs['ordinal_pseudotime'].argmin()
 
     ## DPT
     sc.tl.dpt(adata)
-    sc.pl.draw_graph(adata, color='leiden')
+    #sc.pl.draw_graph(adata, color='leiden')
     
     if 'sub_cell_type' in adata.obs.columns:
         sc.pl.draw_graph(adata, color=['modality', cell_group, 'sub_cell_type', 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
@@ -544,9 +583,9 @@ def trajectory_metrics(adata, modality=None):
     pt_adata = adata.obs[[dev_group_key, 'ordinal_pseudotime', 'dpt_pseudotime']]
     pt_adata[dev_group_key] = pt_adata[dev_group_key].cat.codes.to_numpy()
 
-    pearson_corr_matrix = pt_adata.corr(method=lambda x, y: pearsonr(x, y)[0])
-    spearman_corr_matrix = pt_adata.corr(method=lambda x, y: spearmanr(x, y)[0])
-    kendall_corr_matrix = pt_adata.corr(method=lambda x, y: kendalltau(x, y)[0])
+    pearson_corr_matrix     = pt_adata.corr(method=lambda x, y: pearsonr(x, y)[0])
+    spearman_corr_matrix    = pt_adata.corr(method=lambda x, y: spearmanr(x, y)[0])
+    kendall_corr_matrix     = pt_adata.corr(method=lambda x, y: kendalltau(x, y)[0])
 
     metrics_adata = pd.concat([
         pearson_corr_matrix['dpt_pseudotime'].iloc[:-1],
@@ -622,14 +661,14 @@ def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_c
 
     return integration_df
 
+#%% run PAGA
+print('ECLARE'); subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata, dev_group_key='Sex', cell_group_key=cell_group)
+#print('scJoint'); scJoint_adata = paga_analysis(scJoint_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
+#print('scGLUE'); glue_adata = paga_analysis(glue_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
 
-## run PAGA
-subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata, dev_group_key='sex', cell_group_key=cell_group)
-scJoint_adata = paga_analysis(scJoint_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
-glue_adata = paga_analysis(glue_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
-
-for source_dataset in source_datasets: subsampled_kd_clip_adatas[source_dataset] = paga_analysis(subsampled_kd_clip_adatas[source_dataset], dev_group_key='sex', cell_group_key=cell_group)
-for source_dataset in source_datasets: subsampled_clip_adatas[source_dataset] = paga_analysis(subsampled_clip_adatas[source_dataset], dev_group_key='sex', cell_group_key=cell_group)
+for source_dataset in source_datasets:
+    print(f'KD-CLIP {source_dataset}'); subsampled_kd_clip_adatas[source_dataset] = paga_analysis(subsampled_kd_clip_adatas[source_dataset], dev_group_key='Sex', cell_group_key=cell_group)
+    print(f'CLIP {source_dataset}'); subsampled_clip_adatas[source_dataset] = paga_analysis(subsampled_clip_adatas[source_dataset], dev_group_key='Sex', cell_group_key=cell_group)
 
 '''
 subsampled_eclare_adata_rna = paga_analysis(subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'])
@@ -647,6 +686,58 @@ student_atac.obs['modality'] = 'ATAC'
 student_rna = paga_analysis(student_rna)
 student_atac = paga_analysis(student_atac)
 '''
+
+#%%
+import scipy.stats as stats
+
+# Perform t-test between Condition for each ClustersMapped
+# Assumes 'subsampled_eclare_adata' is the AnnData object of interest
+
+clusters = subsampled_eclare_adata.obs['ClustersMapped'].unique()
+ttest_results = []
+
+for cluster in clusters:
+    cluster_mask = subsampled_eclare_adata.obs['ClustersMapped'] == cluster
+    cluster_df = subsampled_eclare_adata.obs[cluster_mask]
+    conds = cluster_df['Condition'].unique()
+    if len(conds) == 2:
+        group1 = cluster_df[cluster_df['Condition'] == conds[0]]['ordinal_pseudotime'].dropna()
+        group2 = cluster_df[cluster_df['Condition'] == conds[1]]['ordinal_pseudotime'].dropna()
+        # Only perform t-test if both groups have at least 2 samples
+        if len(group1) > 1 and len(group2) > 1:
+            tstat, pval = stats.ttest_ind(group1, group2, equal_var=False)
+        else:
+            tstat, pval = float('nan'), float('nan')
+        ttest_results.append({'ClustersMapped': cluster, 
+                              'Condition1': conds[0], 
+                              'Condition2': conds[1], 
+                              't-stat': tstat, 
+                              'p-value': pval,
+                              'n1': len(group1),
+                              'n2': len(group2)})
+    else:
+        ttest_results.append({'ClustersMapped': cluster, 
+                              'Condition1': None, 
+                              'Condition2': None, 
+                              't-stat': float('nan'), 
+                              'p-value': float('nan'),
+                              'n1': 0,
+                              'n2': 0})
+
+ttest_df = pd.DataFrame(ttest_results)
+print("T-test results between Condition for each ClustersMapped:")
+print(ttest_df)
+
+# Optional: visualize the barplot as described
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(10, 5))
+sns.barplot(data=subsampled_eclare_adata.obs, x='ClustersMapped', y='ordinal_pseudotime', hue='Condition', errorbar='se')
+plt.title('Ordinal Pseudotime by ClustersMapped and Condition')
+plt.tight_layout()
+plt.show()
+
 #%% draw graphs for all methods
 
 permute_idxs = np.random.permutation(len(subsampled_eclare_adata))

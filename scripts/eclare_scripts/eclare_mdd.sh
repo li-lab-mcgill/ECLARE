@@ -45,7 +45,7 @@ datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
 target_dataset="MDD"
 genes_by_peaks_str='17563_by_100000'
-clip_job_id='17082349'
+clip_job_id='21164436'
 
 ## Define total number of epochs
 total_epochs=10
@@ -189,9 +189,9 @@ run_eclare_task_on_gpu() {
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
     --batch_size=800 \
-    --feature="'$feature'" \
-    --tune_hyperparameters \
-    --n_trials=3 &
+    --feature="'$feature'" &
+    #--tune_hyperparameters \
+    #--n_trials=50 &
     #--ordinal_job_id=$ordinal_job_id \
     #--eclare_job_id=$eclare_job_id \
 }

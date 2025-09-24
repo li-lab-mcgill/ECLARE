@@ -3,9 +3,6 @@
 conda activate eclare_env
 cd $ECLARE_ROOT
  
-## Copy scripts to sub-directory for reproducibility
-cp ./scripts/eclare_scripts/eclare_run.py ./scripts/kd_clip_scripts/kd_clip_mdd.sh $TMPDIR
- 
 ## https://docs.alliancecan.ca/wiki/PyTorch#PyTorch_with_Multiple_GPUs
 export NCCL_BLOCKING_WAIT=1  #Set this environment variable if you wish to use the NCCL backend for inter-GPU communication.
 export MASTER_ADDR=$(hostname)
@@ -16,7 +13,7 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-source_datasets=("PFC_V1_Wang" "PFC_Zhu")
+source_datasets=("PFC_Zhu" "PFC_V1_Wang")
 
 ## Preset target dataset
 #target_dataset="Cortex_Velmeshev"
@@ -24,8 +21,8 @@ source_datasets=("PFC_V1_Wang" "PFC_Zhu")
 #genes_by_peaks_str='9584_by_66620'
 
 target_dataset="MDD"
-genes_by_peaks_str='17563_by_100000'
-clip_job_id='17082349'
+genes_by_peaks_str="NULL" #'17563_by_100000'
+clip_job_id='21164436'
 
 ## Define total number of epochs
 total_epochs=10
@@ -35,6 +32,9 @@ target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]'
 JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
 mkdir -p ${OUTPATH}/kd_clip_${target_dataset_lowercase}_${JOB_ID}
 TMPDIR=${OUTPATH}/kd_clip_${target_dataset_lowercase}_${JOB_ID}
+
+## Copy scripts to sub-directory for reproducibility
+cp ./scripts/eclare_scripts/eclare_run.py ./scripts/kd_clip_scripts/kd_clip_mdd.sh $TMPDIR
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 N_CORES=2
@@ -87,9 +87,10 @@ run_eclare_task_on_gpu() {
     local gpu_id=$3
     local source_dataset=$4
     local target_dataset=$5
-    local task_idx=$6
-    local random_state=$7
-    local feature=$8
+    local genes_by_peaks_str=$6
+    local task_idx=$7
+    local random_state=$8
+    local feature=$9
 
     echo "Running ${source_dataset} to ${target_dataset} (task $task_idx) on GPU $gpu_id"
 
@@ -105,9 +106,9 @@ run_eclare_task_on_gpu() {
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
     --batch_size=800 \
-    --feature="'$feature'" \
-    --tune_hyperparameters \
-    --n_trials=3 &
+    --feature="'$feature'" &
+    #--tune_hyperparameters \
+    #--n_trials=50 &
 
     # Increment job counter
     ((current_jobs++))
@@ -121,6 +122,43 @@ run_eclare_task_on_gpu() {
 
 # Initialize job counter
 current_jobs=0
+
+extract_genes_by_peaks_str() {
+    local csv_file=$1
+    local source_dataset=$2
+    local target_dataset=$3
+    
+    local genes_by_peaks_str=$(awk -F',' -v source="$source_dataset" -v target="$target_dataset" '
+        NR == 1 {
+            for (i = 1; i <= NF; i++) {
+                if ($i == target) target_idx = i
+            }
+        }
+        $1 == source {
+            print $(target_idx)
+        }
+    ' "$csv_file")
+    
+    ## Check if the value was successfully extracted
+    if [ -z "$genes_by_peaks_str" ]; then
+        echo "Warning: No value found for source=$source_dataset, target=$target_dataset"
+
+        ## Check for possible malformed header with extra bracket (e.g., ]mdd)
+        header_check=$(awk -F',' 'NR==1 { for (i=1; i<=NF; i++) if ($i ~ /^\]/) print $i }' "$csv_file")
+        if [ -n "$header_check" ]; then
+            echo "Detected malformed header field(s): $header_check"
+            echo "This may be caused by Windows-style carriage returns (\r)."
+            echo "Suggested fix: Clean the CSV using the following command:"
+            echo "    sed -i 's/\r\$//' \"$csv_file\""
+            echo "Or preprocess with: dos2unix \"$csv_file\""
+        fi
+        
+        return 1
+    fi
+    
+    echo "$genes_by_peaks_str"
+    return 0
+}
 
 ## Create experiment ID (or detect if it already exists)
 python -c "
@@ -138,6 +176,14 @@ client.create_run(experiment_id, run_name=run_name)
 ## Middle loop: iterate over datasets as the source_dataset
 source_datasets_idx=0
 for source_dataset in "${source_datasets[@]}"; do
+
+    ## Extract the value of `genes_by_peaks_str` for the current target
+    # If genes_by_peaks_str is set to "NULL", extract it from the csv_file
+    if [ "$genes_by_peaks_str" = "NULL" ]; then
+        genes_by_peaks_str_itr=$(extract_genes_by_peaks_str "$csv_file" "$source_dataset" "$target_dataset")
+    else
+        genes_by_peaks_str_itr="$genes_by_peaks_str"
+    fi
 
     # Skip the case where source and target datasets are the same
     if [ "$source_dataset" != "$target_dataset" ]; then
@@ -160,7 +206,7 @@ for source_dataset in "${source_datasets[@]}"; do
             gpu_id=${idle_gpus[$((source_datasets_idx % ${#idle_gpus[@]}))]}
 
             # Run ECLARE task on idle GPU
-            run_eclare_task_on_gpu $clip_job_id $JOB_ID $gpu_id $source_dataset $target_dataset $task_idx $random_state $feature
+            run_eclare_task_on_gpu $clip_job_id $JOB_ID $gpu_id $source_dataset $target_dataset $genes_by_peaks_str_itr $task_idx $random_state $feature
         done
 
     fi
@@ -171,6 +217,9 @@ done
 wait
 
 cp $commands_file $TMPDIR
+
+# Kill all background python jobs started by this script
+pkill -f python
 
 ## Remove write permission from sub-directory and its files to prevent accidental corruption
 #chmod -R -w $TMPDIR
