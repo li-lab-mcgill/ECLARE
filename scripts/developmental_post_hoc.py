@@ -31,14 +31,14 @@ device = 'cpu'
 #genes_by_peaks_str = '9584_by_66620'
 #source_datasets = ['FirstTrim', 'SecTrim', 'ThirdTrim', 'Inf', 'Adol']
 target_dataset = 'MDD'
-genes_by_peaks_str = '17563_by_100000'
-source_datasets = ['PFC_Zhu', 'PFC_V1_Wang']
+genes_by_peaks_str = '6816_by_55284'
+source_datasets = ['PFC_Zhu']
 subsample = 5000
 
 ## Create dict for methods and job_ids
 methods_id_dict = {
     'clip': '21164436',
-    'kd_clip': '22142531',
+    'kd_clip': '24112954',
     'eclare': ['22105844'],
     'ordinal': '22130216',
 }
@@ -131,8 +131,8 @@ for source_dataset in source_datasets:
 student_setup_func = return_setup_func_from_dataset(target_dataset)
 
 args = SimpleNamespace(
-    source_dataset=target_dataset,
-    target_dataset=None,
+    source_dataset=source_datasets[0], # target_dataset,
+    target_dataset=target_dataset,#None,
     genes_by_peaks_str=genes_by_peaks_str,
     ignore_sources=[None],
     source_dataset_embedder=None,
@@ -155,7 +155,7 @@ else:
 
 
 ## Load validation cell IDs
-validation_cell_ids_path = os.path.join(os.environ['OUTPATH'], f'eclare_{target_dataset.lower()}_{methods_id_dict["eclare"][0]}', args.source_dataset, best_eclare, 'valid_cell_ids.pkl')
+validation_cell_ids_path = os.path.join(os.environ['OUTPATH'], f'eclare_{target_dataset.lower()}_{methods_id_dict["eclare"][0]}', target_dataset, best_eclare, 'valid_cell_ids.pkl')
 with open(validation_cell_ids_path, 'rb') as f:
     validation_cell_ids = pickle.load(f)
     valid_rna_ids = validation_cell_ids['valid_cell_ids_rna']
@@ -191,7 +191,7 @@ args = SimpleNamespace(
 )
 
 ## Setup teachers
-datasets, models, teacher_rnas, teacher_atacs = teachers_setup(model_uri_paths, args, device, return_type='data')
+datasets, clip_models, teacher_rnas, teacher_atacs = teachers_setup(model_uri_paths, args, device, return_type='data')
 
 #for source_dataset in source_datasets:
 #    teacher_rna = teacher_rnas[source_dataset][valid_rna_ids]
@@ -309,7 +309,7 @@ for source_dataset in source_datasets:
     kd_student_latents_sub = np.vstack([kd_student_rna_latents_sub, kd_student_atac_latents_sub])
     subsampled_kd_clip_adatas[source_dataset] = sc.AnnData(
         X=kd_student_latents_sub,
-        obs=subsampled_eclare_adata.obs,
+        obs=obs,
     )
 
 ## define color palettes
@@ -317,60 +317,9 @@ cmap_dev = plt.get_cmap('plasma', len(dev_stages))
 cmap_dev = {dev_stages[i]: cmap_dev(i) for i in range(len(dev_stages))}
 cmap_ct = create_celltype_palette(student_rna_sub.obs[cell_group].values, student_atac_sub.obs[cell_group].values, plot_color_palette=False)
 
-
-'''
-## project data through student model
-student_rna_cells = torch.from_numpy(student_rna.X.toarray().astype(np.float32))
-student_atac_cells = torch.from_numpy(student_atac.X.toarray().astype(np.float32))
-
-student_rna_latents, _ = student_model.to('cpu')(student_rna_cells, modality=0)
-student_atac_latents, _ = student_model.to('cpu')(student_atac_cells, modality=1)
-
-## project data through ordinal model and assign to adata
-ordinal_rna_logits, ordinal_rna_probas, ordinal_rna_latents = ordinal_model.to('cpu')(student_rna_cells, modality=0)
-ordinal_atac_logits, ordinal_atac_probas, ordinal_atac_latents = ordinal_model.to('cpu')(student_atac_cells, modality=1)
-
-ordinal_rna_prebias = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents)
-ordinal_atac_prebias = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_atac_latents)
-
-ordinal_rna_pt = torch.sigmoid(ordinal_rna_prebias / ordinal_rna_logits.var().pow(0.5)).flatten().detach().cpu().numpy()
-ordinal_atac_pt = torch.sigmoid(ordinal_atac_prebias / ordinal_atac_logits.var().pow(0.5)).flatten().detach().cpu().numpy()
-
-student_rna.obs['ordinal_pseudotime'] = ordinal_rna_pt
-student_atac.obs['ordinal_pseudotime'] = ordinal_atac_pt
-
-## create ECLARE adata for full data
-X = np.vstack([
-    student_rna_latents.detach().cpu().numpy(),
-    student_atac_latents.detach().cpu().numpy()
-    ])
-
-obs = pd.concat([
-    student_rna.obs.assign(modality='RNA'),
-    student_atac.obs.assign(modality='ATAC')
-    ])
-
-eclare_adata = sc.AnnData(
-    X=X,
-    obs=obs,
-)
-eclare_adata.obs[dev_group_key] = eclare_adata.obs[dev_group_key].cat.reorder_categories(dev_stages, ordered=True)
-
-## create unimodal ECLARE adatas
-rna_adata = sc.AnnData(
-    X=student_rna_latents.detach().cpu().numpy(),
-    obs=student_rna.obs.assign(modality='RNA'),
-)
-
-atac_adata = sc.AnnData(
-    X=student_atac_latents.detach().cpu().numpy(),
-    obs=student_atac.obs.assign(modality='ATAC'),
-)
-'''
-
 #%% create adatas for teacher data
 
-valid_ids = subsampled_eclare_adata.obs_names # will get overwritten below
+valid_ids = obs.index # will get overwritten below
 
 subsampled_clip_adatas = {}
 for source_dataset in source_datasets:
@@ -387,8 +336,8 @@ for source_dataset in source_datasets:
     teacher_rna = torch.from_numpy(teacher_rna_sub.to_memory().X.toarray().astype(np.float32))
     teacher_atac = torch.from_numpy(teacher_atac_sub.to_memory().X.toarray().astype(np.float32))
 
-    teacher_rna_latents, _ = models[source_dataset].to('cpu')(teacher_rna, modality=0)
-    teacher_atac_latents, _ = models[source_dataset].to('cpu')(teacher_atac, modality=1)
+    teacher_rna_latents, _ = clip_models[source_dataset].to('cpu')(teacher_rna, modality=0)
+    teacher_atac_latents, _ = clip_models[source_dataset].to('cpu')(teacher_atac, modality=1)
 
     teacher_rna_latents = teacher_rna_latents.detach().cpu().numpy()
     teacher_atac_latents = teacher_atac_latents.detach().cpu().numpy()
@@ -518,7 +467,7 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage'):
         sc.tl.umap(adata)
     #sc.pl.umap(adata, color='leiden')
 
-    color = ['modality', cell_group, 'ordinal_pseudotime', dev_group_key]
+    color = ['modality', cell_group_key, 'ordinal_pseudotime', dev_group_key]
 
     if ('sub_cell_type' in adata.obs.columns) and ('velmeshev_pseudotime' in adata.obs.columns):
         color += ['sub_cell_type', 'velmeshev_pseudotime']
@@ -536,7 +485,6 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage'):
 
     ## Graph based on PAGA
     sc.tl.draw_graph(adata, init_pos='paga')
-    #sc.pl.draw_graph(adata, color=['modality', 'Lineage', 'ordinal_pseudotime', dev_group_key]) # plot generated later too
 
     ## Pseudotime with DPT
 
@@ -566,7 +514,6 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage'):
 
     ## DPT
     sc.tl.dpt(adata)
-    #sc.pl.draw_graph(adata, color='leiden')
     
     if 'sub_cell_type' in adata.obs.columns:
         sc.pl.draw_graph(adata, color=['modality', cell_group, 'sub_cell_type', 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
@@ -661,6 +608,60 @@ def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_c
 
     return integration_df
 
+from scipy import sparse
+
+def gene_obs_pearson(adata, obs_key, layer=None, mask=None):
+    """
+    Pearson r for each gene vs adata.obs[obs_key], using sparse algebra.
+    Returns a pandas Series indexed by adata.var_names.
+    """
+    # pick matrix
+    X = adata.layers[layer] if layer is not None else adata.X
+    if not sparse.isspmatrix(X):
+        X = sparse.csr_matrix(X)  # ok if already dense, but we keep API consistent
+
+    # cells to use
+    y = adata.obs[obs_key].to_numpy()
+    valid = np.isfinite(y)
+    if mask is not None:
+        valid &= mask
+    X = X[valid]
+    y = y[valid].astype(float)
+
+    n = y.shape[0]
+    if n < 2:
+        raise ValueError("Not enough valid cells.")
+
+    # center y
+    y = y - y.mean()
+    # precompute ||y_centered||
+    y_norm = np.sqrt(np.dot(y, y))
+    if y_norm == 0:
+        # y is constant → correlations undefined
+        return pd.Series(np.nan, index=adata.var_names, name=f"corr({obs_key})")
+
+    # sparse algebra:
+    # num_j = (x_j · y_centered)
+    # den_j = sqrt( sum(x_j^2) - (sum(x_j)^2)/n ) * ||y_centered||
+    # r_j = num_j / den_j
+    # All of this is vectorized across genes.
+
+    # sums per gene (1×G)
+    s1 = np.asarray(X.sum(axis=0)).ravel()                      # sum x_j
+    s2 = np.asarray(X.power(2).sum(axis=0)).ravel()             # sum x_j^2
+    # dot with centered y (G,)
+    num = X.T.dot(y)                                            # x_j · y
+
+    varx = s2 - (s1**2) / n                                     # n * Var(x_j) with population defn
+    den = np.sqrt(varx) * y_norm
+
+    # avoid divide-by-zero for constant genes
+    with np.errstate(divide='ignore', invalid='ignore'):
+        r = num / den
+        r[~np.isfinite(r)] = np.nan
+
+    return pd.Series(r, index=adata.var_names, name=f"corr({obs_key})")
+
 #%% run PAGA
 print('ECLARE'); subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata, dev_group_key='Sex', cell_group_key=cell_group)
 #print('scJoint'); scJoint_adata = paga_analysis(scJoint_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
@@ -686,6 +687,248 @@ student_atac.obs['modality'] = 'ATAC'
 student_rna = paga_analysis(student_rna)
 student_atac = paga_analysis(student_atac)
 '''
+
+#%% import source datasets
+
+source_adatas = {}
+
+for source_dataset in source_datasets:
+
+    args = SimpleNamespace(
+        source_dataset=source_dataset,
+        target_dataset=target_dataset,
+        genes_by_peaks_str=genes_by_peaks_str,
+        ignore_sources=[None],
+        source_dataset_embedder=None,
+    )
+
+    source_setup_func = return_setup_func_from_dataset(source_dataset)
+    source_rna, source_atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath = source_setup_func(args, return_type='data')
+
+    clusters = ['EN-fetal-late', 'IN-fetal', 'RG', 'IN-CGE', 'IN-MGE', 'EN-fetal-early', 'IPC', 'EN', 'Oligodendrocytes']
+    #all: ['EN-fetal-late', 'IN-fetal', 'VSMC', 'Endothelial', 'RG', 'OPC', 'IN-CGE', 'Microglia', 'IN-MGE', 'EN-fetal-early', 'Astrocytes', 'IPC', 'Pericytes', 'EN', 'Oligodendrocytes']
+
+    source_rna_sub = subsample_adata(source_rna[source_rna.obs[cell_group].isin(clusters)], cell_group, 'dev_stage', subsample, subsample_type='stratified')
+    source_atac_sub = subsample_adata(source_atac[source_atac.obs[cell_group].isin(clusters)], cell_group, 'dev_stage', subsample, subsample_type='stratified')
+
+    source_rna_cells_sub = torch.from_numpy(source_rna_sub.X.toarray().astype(np.float32))
+    source_atac_cells_sub = torch.from_numpy(source_atac_sub.X.toarray().astype(np.float32))
+    
+    source_rna_latents_sub, _ = kd_clip_student_models[source_dataset](source_rna_cells_sub, modality=0)
+    source_atac_latents_sub, _ = kd_clip_student_models[source_dataset](source_atac_cells_sub, modality=1)
+
+    source_rna_latents_sub = source_rna_latents_sub.detach().cpu().numpy()
+    source_atac_latents_sub = source_atac_latents_sub.detach().cpu().numpy()
+
+    source_latents_sub = np.vstack([source_rna_latents_sub, source_atac_latents_sub])
+    source_adatas[source_dataset] = sc.AnnData(
+        X=source_latents_sub,
+        obs=pd.concat([source_rna_sub.obs.assign(modality='RNA'), source_atac_sub.obs.assign(modality='ATAC')], axis=0),
+    )
+
+    if ordinal_source_dataset == source_dataset:
+
+        ordinal_rna_logits_sub, ordinal_rna_probas_sub, ordinal_rna_latents_sub = ordinal_model.to('cpu')(source_rna_cells_sub, modality=0)
+        ordinal_atac_logits_sub, ordinal_atac_probas_sub, ordinal_atac_latents_sub = ordinal_model.to('cpu')(source_atac_cells_sub, modality=1)
+
+        ordinal_rna_prebias_sub = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents_sub)
+        ordinal_atac_prebias_sub = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_atac_latents_sub)
+
+        ordinal_rna_pt_sub = torch.from_numpy(match_histograms(ordinal_rna_prebias_sub.detach().cpu().numpy().flatten(), subsampled_kd_clip_adatas[source_dataset].obs['ordinal_pseudotime'].values))
+        ordinal_atac_pt_sub = torch.from_numpy(match_histograms(ordinal_atac_prebias_sub.detach().cpu().numpy().flatten(), subsampled_kd_clip_adatas[source_dataset].obs['ordinal_pseudotime'].values))
+
+        source_adatas[source_dataset].obs['ordinal_pseudotime'] = torch.cat([ordinal_rna_pt_sub, ordinal_atac_pt_sub], axis=0)
+
+
+#for source_dataset in source_datasets:
+#    print(f'KD-CLIP {source_dataset}'); source_adatas[source_dataset] = paga_analysis(source_adatas[source_dataset], dev_group_key='dev_stage', cell_group_key=cell_group)
+
+#%% Combine source and target data
+import anndata
+
+source_adatas[source_dataset].obs.rename(columns={'Cell type': 'ClustersMapped', 'dev_stage': 'Age'}, inplace=True)
+
+source_adatas[source_dataset].obs['source_or_target'] = 'source'
+subsampled_kd_clip_adatas[source_dataset].obs['source_or_target'] = 'target'
+
+source_target_adata = anndata.concat([ source_adatas[source_dataset], subsampled_kd_clip_adatas[source_dataset] ], axis=0)
+
+#~~~~~~
+
+colors = ['source_or_target', 'modality', 'dpt_pseudotime', 'ordinal_pseudotime', 'ClustersMapped']
+
+f1 = sc.pl.draw_graph(adata, color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
+f2 = sc.pl.draw_graph(adata[adata.obs['source_or_target']=='target'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
+f3 = sc.pl.draw_graph(adata[adata.obs['source_or_target']=='source'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
+
+f1.show()
+f2.show()
+f3.show()
+
+#%%
+from collections import Counter
+
+def cross_batch_graph_neighbors_with_summary(
+    adata,
+    from_value="source",
+    to_value="target",
+    batch_key="source_or_target",
+    cluster_key="ClustersMapped",
+    k=5,
+    use="distances",  # or "connectivities"
+    agg_cols=("ordinal_pseudotime", "dpt_pseudotime"),
+):
+    """
+    For each cell in `from_value`, find its k nearest neighbors from `to_value`
+    (using the precomputed neighbors graph in `adata.obsp[use]`), report the most
+    common neighbor cluster, and compute unweighted means of selected obs columns
+    across those neighbors.
+
+    Returns a tidy DataFrame with one row per source cell.
+    """
+    if use not in adata.obsp:
+        raise KeyError(f"`{use}` not found in adata.obsp. Did you run sc.pp.neighbors?")
+
+    G = adata.obsp[use].tocsr()
+
+    from_mask = (adata.obs[batch_key].values == from_value)
+    to_mask   = (adata.obs[batch_key].values == to_value)
+
+    # Ensure agg_cols exist
+    agg_cols = tuple(agg_cols) if agg_cols is not None else tuple()
+    missing = [c for c in agg_cols if c not in adata.obs.columns]
+    if missing:
+        raise KeyError(f"Columns missing in adata.obs: {missing}")
+
+    rows = []
+    for i in np.where(from_mask)[0]:
+        idx = G[i].indices
+        vals = G[i].data
+
+        # keep only neighbors in the target dataset
+        keep = to_mask[idx]
+        idx, vals = idx[keep], vals[keep]
+
+        if idx.size == 0:
+            # no cross-dataset neighbors → NaNs
+            row = {"cell": adata.obs_names[i],
+                   "most_common_cluster": np.nan,
+                   "cluster_count": 0}
+            for c in agg_cols:
+                row[f"mean_neighbors_{c}"] = np.nan
+            rows.append(row)
+            continue
+
+        # choose top-k neighbors
+        order = np.argsort(vals if use == "distances" else -vals)[:k]
+        n_idx = idx[order]
+
+        neighbor_clusters = adata.obs[cluster_key].iloc[n_idx].to_numpy()
+        counts = Counter(neighbor_clusters)
+        top_cluster, top_count = counts.most_common(1)[0]
+
+        row = {
+            "cell": adata.obs_names[i],
+            "most_common_cluster": top_cluster,
+            "cluster_count": int(top_count),
+        }
+
+        # compute plain means for each column
+        for c in agg_cols:
+            vals_c = adata.obs[c].iloc[n_idx].to_numpy()
+            row[f"mean_neighbors_{c}"] = np.nanmean(vals_c)
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+# Example usage:
+df = cross_batch_graph_neighbors_with_summary(
+    adata,
+    from_value="target",
+    to_value="source",
+    batch_key="source_or_target",
+    cluster_key="ClustersMapped",
+    k=10,
+    use="distances",
+    agg_cols=("ordinal_pseudotime", "dpt_pseudotime")
+)
+df.head()
+
+df['most_common_cluster'] = pd.Categorical(df['most_common_cluster'], categories=['RG', 'IPC', 'EN-fetal-early', 'EN-fetal-late', 'EN'], ordered=True)
+
+count_in_source = adata.obs.loc[adata.obs['source_or_target'] == 'source', 'ClustersMapped'].value_counts()
+count_in_source.name = 'count_in_source'
+
+count_in_match = df['most_common_cluster'].value_counts()
+count_in_match.name = 'count_in_match'
+
+df = df[df['most_common_cluster'].isin(count_in_match[count_in_match > 10].index)]
+df['most_common_cluster'] = df['most_common_cluster'].cat.remove_unused_categories()
+
+df = df.merge(adata.obs.loc[adata.obs['source_or_target']=='target', ['ordinal_pseudotime', 'dpt_pseudotime']], left_on='cell', right_index=True, how='left')
+df = df.merge(subsampled_kd_clip_adatas[source_dataset].obs['Condition'], left_on='cell', right_index=True, how='left')
+
+## merge most_common_cluster onto adata.obs
+adata.obs = adata.obs.merge(df[['cell','most_common_cluster', 'Condition']], left_on='cell', right_on='cell', how='left')
+
+
+fig, ax = plt.subplots(1, 2, figsize=[10, 7], sharex=True)
+#sns.boxplot(df, x='most_common_cluster', y='mean_neighbors_ordinal_pseudotime', ax=ax[0])
+#sns.boxplot(df, x='most_common_cluster', y='mean_neighbors_dpt_pseudotime', ax=ax[1])
+sns.barplot(df, x='most_common_cluster', y='mean_neighbors_ordinal_pseudotime', errorbar='se', ax=ax[0])
+sns.barplot(df, x='most_common_cluster', y='mean_neighbors_dpt_pseudotime', errorbar='se', ax=ax[1])
+ax[0].set_xticklabels(ax[0].get_xticklabels(), rotation=30); ax[1].set_xticklabels(ax[1].get_xticklabels(), rotation=30)
+ax[0].set_ylabel('Ordinal Pseudotime'); ax[1].set_ylabel('DPT Pseudotime')
+ax[0].set_xlabel(''); ax[1].set_xlabel('')
+plt.tight_layout(); plt.show()
+
+fig, ax = plt.subplots(1, 2, figsize=[10, 7], sharex=True)
+#sns.boxplot(df, x='most_common_cluster', y='ordinal_pseudotime', ax=ax[0])
+#sns.boxplot(df, x='most_common_cluster', y='dpt_pseudotime', ax=ax[1])
+sns.barplot(df, x='most_common_cluster', y='ordinal_pseudotime', hue='Condition', errorbar='se', ax=ax[0])
+sns.barplot(df, x='most_common_cluster', y='dpt_pseudotime', hue='Condition', errorbar='se', ax=ax[1])
+ax[0].set_xticklabels(ax[0].get_xticklabels(), rotation=30); ax[1].set_xticklabels(ax[1].get_xticklabels(), rotation=30)
+ax[0].set_ylabel('Ordinal Pseudotime'); ax[1].set_ylabel('DPT Pseudotime')
+ax[0].set_xlabel(''); ax[1].set_xlabel('')
+ax[0].set_ylim(20, 55)
+plt.tight_layout(); plt.show()
+
+pre_EN_mapper = {
+    'EN': 'EN',
+    'EN-fetal-late': 'pre-EN',
+    'EN-fetal-early': 'pre-EN',
+    'IPC': 'pre-EN',
+    'RG': 'pre-EN'
+}
+
+fig, ax = plt.subplots(1, 2, figsize=[10, 7], sharex=True)
+sns.barplot(df.assign(most_common_cluster=df['most_common_cluster'].map(pre_EN_mapper)), x='most_common_cluster', y='mean_neighbors_ordinal_pseudotime', hue='Condition', errorbar='se', ax=ax[0])
+sns.barplot(df.assign(most_common_cluster=df['most_common_cluster'].map(pre_EN_mapper)), x='most_common_cluster', y='mean_neighbors_dpt_pseudotime', hue='Condition', errorbar='se', ax=ax[1])
+ax[0].set_xticklabels(ax[0].get_xticklabels(), rotation=30); ax[1].set_xticklabels(ax[1].get_xticklabels(), rotation=30)
+ax[0].set_ylabel('Ordinal Pseudotime'); ax[1].set_ylabel('DPT Pseudotime')
+ax[0].set_xlabel(''); ax[1].set_xlabel('')
+plt.tight_layout(); plt.show()
+
+fig, ax = plt.subplots(1, 2, figsize=[10, 7], sharex=True)
+sns.barplot(df.assign(most_common_cluster=df['most_common_cluster'].map(pre_EN_mapper)), x='most_common_cluster', y='ordinal_pseudotime', hue='Condition', errorbar='se', ax=ax[0])
+sns.barplot(df.assign(most_common_cluster=df['most_common_cluster'].map(pre_EN_mapper)), x='most_common_cluster', y='dpt_pseudotime', hue='Condition', errorbar='se', ax=ax[1])
+ax[0].set_xticklabels(ax[0].get_xticklabels(), rotation=30); ax[1].set_xticklabels(ax[1].get_xticklabels(), rotation=30)
+ax[0].set_ylabel('Ordinal Pseudotime'); ax[1].set_ylabel('DPT Pseudotime')
+ax[0].set_xlabel(''); ax[1].set_xlabel('')
+ax[0].set_ylim(30, 50)
+plt.tight_layout(); plt.show()
+
+matches_df = df.groupby('most_common_cluster')[['mean_ordinal_pseudotime', 'mean_dpt_pseudotime']].agg(['mean', 'sem'])
+matches_df.sort_values(('mean_ordinal_pseudotime','mean'), inplace=True)
+
+matches_df = matches_df.merge(count_in_source, left_index=True, right_index=True, how='left')
+matches_df = matches_df.merge(count_in_match, left_index=True, right_index=True, how='left')
+
+matches_df = matches_df[matches_df['count_in_match'] > 10]
+display(matches_df)
+
 
 #%%
 import scipy.stats as stats
@@ -736,6 +979,126 @@ plt.figure(figsize=(10, 5))
 sns.barplot(data=subsampled_eclare_adata.obs, x='ClustersMapped', y='ordinal_pseudotime', hue='Condition', errorbar='se')
 plt.title('Ordinal Pseudotime by ClustersMapped and Condition')
 plt.tight_layout()
+plt.show()
+
+#%% 3D embeddings to establish PAGA paths
+
+#sc.tl.umap(adata, n_components=3)
+#sc.pl.umap(adata, color='leiden', projection='3d')
+
+paths = [
+    ('MDD_ExN_3510', ['3', '5', '1', '0']),
+    ('MDD_ExN_2640', ['2', '6', '4', '0']),
+         ]
+paths_leiden_clusters = np.unique(np.hstack([path[1] for path in paths]))
+
+adata_ExN = adata[adata.obs['ClustersMapped'] == 'ExN'].copy()
+adata_in_paths = adata_ExN[adata_ExN.obs['leiden'].isin(paths_leiden_clusters)].copy()
+adata_target = adata_in_paths[adata_in_paths.obs['source_or_target'] == 'target'].copy()
+adata_target_case = adata_target[adata_target.obs['Condition'] == 'Case'].copy()
+adata_target_control = adata_target[adata_target.obs['Condition'] == 'Control'].copy()
+
+r_case = gene_obs_pearson(adata_target_case, "dpt_pseudotime")
+r_control = gene_obs_pearson(adata_target_control, "dpt_pseudotime")
+r = r_case - r_control
+r_tops = pd.concat([r.sort_values(ascending=False).head(10), r.sort_values(ascending=True).head(10)[::-1]], axis=0)
+r_tops_index = r_tops.index.tolist()
+
+_, axs = plt.subplots(ncols=len(paths), figsize=(10, 10), gridspec_kw={
+                     'wspace': 0.05, 'left': 0.12})
+plt.subplots_adjust(left=0.05, right=0.98, top=0.82, bottom=0.2)
+
+for ipath, (descr, path) in enumerate(paths):
+    sc.pl.paga_path(
+        adata=adata_target, 
+        nodes=path, 
+        keys=r_tops_index,
+        annotations=['dpt_pseudotime'],
+        groups_key='leiden',
+        show_node_names=False,
+        ax=axs[ipath],
+        ytick_fontsize=12,
+        left_margin=0.15,
+        n_avg=50,
+        show_yticks=True if ipath == 0 else False,
+        show_colorbar=False,
+        color_map='Greys',
+        color_maps_annotations={'distance': 'viridis'},
+        title='{} path'.format(descr),
+        return_data=True,
+        use_raw=False,
+        show=False)
+
+plt.show()
+
+#%% add new columns to MDD obs data
+
+student_rna_sub.obs = student_rna_sub.obs.merge(adata.obs.set_index('cell')[['most_common_cluster', 'dpt_pseudotime', 'leiden']], left_index=True, right_index=True, how='left')
+rna_tmp = student_rna_sub[student_rna_sub.obs['ClustersMapped'] == 'ExN']
+
+student_atac_sub.obs = student_atac_sub.obs.merge(adata.obs.set_index('cell')[['most_common_cluster', 'dpt_pseudotime', 'leiden']], left_index=True, right_index=True, how='left')
+atac_tmp = student_atac_sub[student_atac_sub.obs['ClustersMapped'] == 'ExN']
+
+r_rna = gene_obs_pearson(rna_tmp, "dpt_pseudotime")
+r_tops_rna = pd.concat([r_rna.sort_values(ascending=False).head(8), r_rna.sort_values(ascending=True).head(8)[::-1]], axis=0)
+r_tops_index_rna = r_tops_rna.index.tolist()
+
+_, axs = plt.subplots(ncols=len(paths), figsize=(10, 10), gridspec_kw={
+                     'wspace': 0.05, 'left': 0.12})
+plt.subplots_adjust(left=0.05, right=0.98, top=0.82, bottom=0.2)
+
+for ipath, (descr, path) in enumerate(paths):
+    sc.pl.paga_path(
+        adata=tmp, 
+        nodes=path, 
+        keys=r_tops_index_rna,
+        annotations=['dpt_pseudotime'],
+        groups_key='leiden',
+        show_node_names=False,
+        ax=axs[ipath],
+        ytick_fontsize=12,
+        left_margin=0.15,
+        n_avg=50,
+        show_yticks=True if ipath == 0 else False,
+        show_colorbar=False,
+        color_map='Greys',
+        color_maps_annotations={'distance': 'viridis'},
+        title='{} path'.format(descr),
+        return_data=True,
+        use_raw=False,
+        show=False)
+
+plt.show()
+
+r_atac = gene_obs_pearson(atac_tmp, "dpt_pseudotime")
+r_tops_atac = pd.concat([r_atac.sort_values(ascending=False).head(8), r_atac.sort_values(ascending=True).head(8)[::-1]], axis=0)
+r_tops_index_atac = r_tops_atac.index.tolist()
+
+_, axs = plt.subplots(ncols=len(paths), figsize=(8, 10), gridspec_kw={
+    'wspace': 0.05, 'left': 0.12})
+plt.subplots_adjust(left=0.05, right=0.98, top=0.82, bottom=0.2)
+
+for ipath, (descr, path) in enumerate(paths):
+    sc.pl.paga_path(
+        adata=atac_tmp, 
+        nodes=path, 
+        keys=r_tops_index_atac,
+        annotations=['dpt_pseudotime'],
+        groups_key='leiden',
+        show_node_names=False,
+        ax=axs[ipath],
+        ytick_fontsize=12,
+        left_margin=0.15,
+        n_avg=50,
+        show_yticks=True if ipath == 0 else False,
+        show_colorbar=False,
+        color_map='Greys',
+        color_maps_annotations={'distance': 'viridis'},
+        title='{} path'.format(descr),
+        return_data=True,
+        use_raw=False,
+        show=False)
+
 plt.show()
 
 #%% draw graphs for all methods
