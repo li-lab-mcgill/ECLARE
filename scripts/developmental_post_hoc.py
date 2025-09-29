@@ -493,7 +493,20 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage'):
     ## graph construction
     sc.pp.pca(adata, n_comps=50)
     sc.pp.neighbors(adata, n_neighbors=50, n_pcs=30, use_rep='X_pca', random_state=0)
-    sc.tl.leiden(adata, resolution=0.5)
+    sc.tl.leiden(adata, resolution=1)
+
+    ## check for imbalanced clusters
+    imb = adata.obs.groupby('leiden')['modality'].agg(
+        proportion=lambda x: x.value_counts(normalize=True).max(),
+        n=lambda x: x.value_counts().max(),
+    )
+
+    Z = (imb['proportion']-0.5) / np.sqrt(0.25/imb['n'])
+    imb['p'] = norm.sf(np.abs(Z))
+    imb['entropy'] = -( (imb['proportion']*np.log(imb['proportion'])) + ((1-imb['proportion'])*np.log(1-imb['proportion'])) )
+
+    keep_leidens = imb[imb['entropy'] > 0.6].index.tolist()
+    adata = adata[adata.obs['leiden'].isin(keep_leidens)]
 
     ## UMAP
     if 'X_umap' not in adata.obsm:
@@ -536,11 +549,18 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage'):
 
     elif cell_group_key in adata.obs.columns: # should be True in all cases
 
-        p = adata.obs.groupby('leiden')[cell_group_key].value_counts(normalize=True)
-        entropy_per_leiden = (-p*np.log(p)).groupby('leiden').mean().sort_values()
-        max_entropy_leiden = entropy_per_leiden.index[-1] # last leiden with highest entropy across cell groups
-        iroot_cell_id = adata.obs.loc[adata.obs['leiden'] == max_entropy_leiden, 'ordinal_pseudotime'].idxmin()
+        root_cell_group = adata.obs.groupby(cell_group_key)['ordinal_pseudotime'].mean().idxmin()
+        print(f'Root cell group: {root_cell_group}')
+
+        median_root_pseudotime = adata.obs.loc[adata.obs[cell_group_key] == root_cell_group, 'ordinal_pseudotime'].median()
+        iroot_cell_id = (adata.obs.loc[adata.obs[cell_group_key] == root_cell_group, 'ordinal_pseudotime'] == median_root_pseudotime).idxmax()
         adata.uns['iroot'] = adata.obs_names.tolist().index(iroot_cell_id)
+
+        #p = adata.obs.groupby('leiden')[cell_group_key].value_counts(normalize=True)
+        #entropy_per_leiden = (-p*np.log(p)).groupby('leiden').mean().sort_values()
+        #max_entropy_leiden = entropy_per_leiden.index[-1] # last leiden with highest entropy across cell groups
+        #iroot_cell_id = adata.obs.loc[adata.obs['leiden'] == max_entropy_leiden, 'ordinal_pseudotime'].idxmin()
+        #adata.uns['iroot'] = adata.obs_names.tolist().index(iroot_cell_id)
 
     elif 'ordinal_pseudotime' in adata.obs.columns:
         adata.uns['iroot'] = adata.obs['ordinal_pseudotime'].argmin()
@@ -810,6 +830,67 @@ def magic_diffusion(adata, var, split_var=None, t=3):
 
     return adata
 
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+from scipy.stats import norm
+
+def hac_weighted_mean_test(df, path, direction='case_more_control'):
+
+    # per-(leiden, condition) summaries
+    g = (df.groupby(['leiden', 'Condition'])['ordinal_pseudotime']
+        .agg(mean='mean', sd='std', n='size')
+        .reset_index())
+    g['se'] = g['sd'] / np.sqrt(g['n'])
+
+    # wide table
+    wide = g.pivot(index='leiden', columns='Condition')
+
+    # enforce the intended Leiden order
+    order = list(path)
+    wide = wide.reindex(order)
+
+    # align means/SEs and compute difference + its SE
+    m_case  = wide['mean']['case']
+    m_ctrl  = wide['mean']['control']
+    se_case = wide['se']['case']
+    se_ctrl = wide['se']['control']
+
+    valid = m_case.notna() & m_ctrl.notna() & se_case.notna() & se_ctrl.notna()
+    m_case, m_ctrl, se_case, se_ctrl = m_case[valid], m_ctrl[valid], se_case[valid], se_ctrl[valid]
+
+    if direction == 'case_more_control':
+        d   = (m_case - m_ctrl)
+    elif direction == 'control_more_case':
+        d   = (m_ctrl - m_case)
+
+    seD = np.sqrt(se_case**2 + se_ctrl**2)
+    d_df = pd.concat([d.to_frame().rename(columns={0:"d"}), seD.to_frame().rename(columns={0:"seD"})], axis=1)
+
+    # inverse-variance weights (clip zeros to avoid inf)
+    eps = 1e-12
+    w = 1.0 / np.maximum(seD**2, eps)
+
+    # intercept-only WLS with HAC (Newey–West) SEs
+    X = np.ones((len(d), 1))
+    ols = sm.WLS(d.values, X, weights=w.values).fit()
+
+    # choose maxlags (e.g., 2 or 3; or ~= n^(1/3))
+    maxlags = max(1, int(round(len(d) ** (1/3))))
+    hac = ols.get_robustcov_results(cov_type='HAC', maxlags=maxlags, use_correction=True)
+
+    beta = hac.params[0]
+    se   = hac.bse[0]
+    z    = beta / se
+
+    # one-sided p for H1: mean(diff) > 0
+    p_one_sided = norm.sf(z)   # == 1 - norm.cdf(z)
+
+    print(f"Leiden K = {len(d)}, HAC maxlags = {maxlags}")
+    print(f"Weighted mean diff = {beta:.3f} (HAC SE {se:.3f}), one-sided p = {p_one_sided:.4g}")
+
+    return d_df, p_one_sided
+
 #%% run PAGA
 print('ECLARE'); subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata, dev_group_key='Sex', cell_group_key=cell_group)
 #print('scJoint'); scJoint_adata = paga_analysis(scJoint_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
@@ -912,7 +993,7 @@ source_target_adata = anndata.concat([ source_adatas[source_dataset], subsampled
 source_target_adata.obs = source_target_adata.obs.merge(subsampled_kd_clip_adatas[source_dataset].obs['Condition'], left_index=True, right_index=True, how='left')
 source_target_adata.obs['Age'] = pd.Categorical(source_target_adata.obs['Age'])
 
-source_target_adata  = source_target_adata[source_target_adata.obs['modality'].isin(['RNA'])]
+#source_target_adata  = source_target_adata[source_target_adata.obs['modality'].isin(['RNA'])]
 
 #source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['InN', 'RG', 'IPC', 'IN-fetal', 'IN-MGE'])]
 source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'EN-fetal-early', 'EN-fetal-late', 'EN'])]
@@ -929,8 +1010,8 @@ source_target_adata = source_target_adata[source_target_adata.obs['ClustersMappe
 
 source_target_adata = paga_analysis(source_target_adata, dev_group_key='Age', cell_group_key='ClustersMapped')
 
-leiden_sorted = source_target_adata.obs.groupby('leiden')['ordinal_pseudotime'].mean().sort_values().index.tolist()
-source_target_adata.obs['leiden'] = pd.Categorical(source_target_adata.obs['leiden'], categories=leiden_sorted, ordered=True)
+#leiden_sorted = source_target_adata.obs.groupby('leiden')['ordinal_pseudotime'].mean().sort_values().index.tolist()
+#source_target_adata.obs['leiden'] = pd.Categorical(source_target_adata.obs['leiden'], categories=leiden_sorted, ordered=True)
 
 ## plot FA embeddings comparing source and target datasets
 colors = ['source_or_target', 'modality', 'dpt_pseudotime', 'ordinal_pseudotime', 'ClustersMapped']
@@ -1052,13 +1133,61 @@ paths = [
     ("MDD_ExN_control_more_case", leiden_sorted_control_more_case),
 ]
 
-for descr, path in paths:
-    plt.figure(figsize=[8,6])
-    path_adata = target_adata[target_adata.obs['leiden'].isin(path)]
-    path_adata.obs['leiden'] = pd.Categorical(path_adata.obs['leiden'], categories=path, ordered=True)
-    sns.lineplot(data=path_adata.obs, x='leiden', y='ordinal_pseudotime', hue='Condition', errorbar='se', marker='.', linewidth=0.2)
-    plt.title(descr)
-    plt.show()
+for modality in source_target_adata.obs['modality'].unique():
+
+    for descr, path in [paths[0]]:
+
+        # subset
+        path_adata = target_adata[(target_adata.obs['leiden'].isin(path)) & (target_adata.obs['modality'] == modality)]
+        path_adata.obs['leiden'] = pd.Categorical(path_adata.obs['leiden'], categories=path, ordered=True)
+
+        df = path_adata.obs.copy()
+        d_df, p_one_sided = hac_weighted_mean_test(df, path, direction=descr.split('MDD_ExN_')[-1])
+
+        fig, ax = plt.subplots(2,1,figsize=[8,9], sharex=True)
+        sns.lineplot(data=path_adata.obs, x='leiden', y='ordinal_pseudotime', hue='Condition', errorbar='se', marker='.', linewidth=0.2, ax=ax[0])
+
+        x = d_df['d'].index; low = (d_df['d'] - d_df['seD']).values; high = (d_df['d'] + d_df['seD']).values
+        plt.fill_between(x, low, high, alpha=0.2, color='grey')
+        sns.lineplot(d_df, x='leiden', y='d', color='grey', errorbar=None, marker='.', linewidth=0.2, ax=ax[1], label=f'p = {p_one_sided:.4g}')
+        ax[1].axhline(0, color='black', linestyle='--', alpha=0.2)
+        ax[1].set_ylabel('case - control' if descr.split('MDD_ExN_')[-1] == 'case_more_control' else 'control - case')
+
+        ax[0].legend(loc='upper left')
+        ax[1].legend(loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=1)
+
+        plt.suptitle(f'{descr} {modality}')
+        plt.show()
+
+## plot rolling mean and standard error of ordinal pseudotime for each leiden cluster
+means = path_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].mean()
+means_pivot = means.reset_index().pivot_table(index='leiden', columns=['modality','Condition'], values='ordinal_pseudotime')
+means_pivot = means_pivot.rolling(3, min_periods=0).mean()
+means_pivot = means_pivot.melt(ignore_index=False).rename(columns={'value': 'ordinal_pseudotime'})
+means_pivot['Condition_modality'] = means_pivot[['Condition','modality']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1)
+
+std_errs = path_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].std() / np.sqrt(path_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].count())
+std_errs_pivot = std_errs.reset_index().pivot_table(index='leiden', columns=['modality','Condition'], values='ordinal_pseudotime')
+std_errs_pivot = std_errs_pivot.rolling(3, min_periods=0).mean()
+std_errs_pivot = std_errs_pivot.melt(ignore_index=False).rename(columns={'value': 'ordinal_pseudotime'})
+std_errs_pivot['Condition_modality'] = std_errs_pivot[['Condition','modality']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1)
+
+for descr, path in [paths[0]]:
+
+    fig, ax = plt.subplots(1,2, figsize=[10,8], sharex=True, sharey=True)
+    sns.lineplot(data=means_pivot[means_pivot['modality']=='RNA'], x='leiden', y='ordinal_pseudotime', hue='Condition_modality', hue_order=['case_RNA', 'control_RNA'], errorbar=None, marker='.', linewidth=1.2, ax=ax[0])
+    sns.lineplot(data=means_pivot[means_pivot['modality']=='ATAC'], x='leiden', y='ordinal_pseudotime', hue='Condition_modality', hue_order=['case_ATAC', 'control_ATAC'], errorbar=None, marker='.', linewidth=1.2, linestyle='--', ax=ax[1])
+
+    x = means_pivot.index; low = (means_pivot['ordinal_pseudotime'] - std_errs_pivot['ordinal_pseudotime']).values; high = (means_pivot['ordinal_pseudotime'] + std_errs_pivot['ordinal_pseudotime']).values
+    ax[0].fill_between(x[(means_pivot['modality']=='RNA') & (means_pivot['Condition']=='case')], low[(means_pivot['modality']=='RNA') & (means_pivot['Condition']=='case')], high[(means_pivot['modality']=='RNA') & (means_pivot['Condition']=='case')], alpha=0.1)
+    ax[0].fill_between(x[(means_pivot['modality']=='RNA') & (means_pivot['Condition']=='control')], low[(means_pivot['modality']=='RNA') & (means_pivot['Condition']=='control')], high[(means_pivot['modality']=='RNA') & (means_pivot['Condition']=='control')], alpha=0.1)
+    ax[1].fill_between(x[(means_pivot['modality']=='ATAC') & (means_pivot['Condition']=='case')], low[(means_pivot['modality']=='ATAC') & (means_pivot['Condition']=='case')], high[(means_pivot['modality']=='ATAC') & (means_pivot['Condition']=='case')], alpha=0.1)
+    ax[1].fill_between(x[(means_pivot['modality']=='ATAC') & (means_pivot['Condition']=='control')], low[(means_pivot['modality']=='ATAC') & (means_pivot['Condition']=='control')], high[(means_pivot['modality']=='ATAC') & (means_pivot['Condition']=='control')], alpha=0.1)
+    #ax[1].fill_between(x, low, high, alpha=0.2, color='grey')
+
+    ax[0].set_title('RNA'); ax[1].set_title('ATAC')
+    plt.suptitle(f'{descr}')
+    plt.tight_layout(); plt.show()
 
 ## case vs control leiden cluster proportions
 plt.figure(figsize=[8,6])
