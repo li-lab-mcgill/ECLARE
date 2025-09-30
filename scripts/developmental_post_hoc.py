@@ -44,7 +44,7 @@ methods_id_dict = {
     'clip': '25165730',
     'kd_clip': '25173640',
     'eclare': ['09123817'],
-    'ordinal': '25195201',
+    'ordinal': '27204131',
 }
 
 ## define search strings
@@ -498,7 +498,7 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage'):
 
     ## graph construction
     sc.pp.pca(adata)
-    sc.pp.neighbors(adata)
+    sc.pp.neighbors(adata, n_neighbors=15)
     sc.tl.leiden(adata)
 
     ## check for imbalanced clusters
