@@ -137,6 +137,7 @@ mean_grn_df = all_dicts[-1]
 
 #%% EnrichR results for MDD-DN pathway
 
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 def get_enrs_mdd_dn_hits_df(enrs_dict, filtered_type='All LR'):
 
@@ -196,6 +197,14 @@ def plot_enrichment_significance(enrs_mdd_dn_hits_df, title='', figsize=(6, 2)):
     # Plot empty scatter plot for colorbar
     ax.scatter(enrs_mdd_dn_hits_df['celltype'], enrs_mdd_dn_hits_df['sex'], alpha=0, s=0)
 
+    # Add colorbar for mlog10_padj
+    scatter = ax.scatter(sig_data['celltype'], sig_data['sex'], c=sig_data['mlog10_padj'], cmap='viridis', alpha=0.6, s=0)
+    # Place colorbar to the right of the main axis, outside the plot
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="3%", pad=0.05)
+    cbar = plt.colorbar(scatter, cax=cax)
+    cbar.ax.set_title('$-log_{10}(p)$', pad=10, fontsize=9)
+
     # Plot non-significant as grey crosses
     if len(non_sig_data) > 0:
         ax.scatter(non_sig_data['celltype'], non_sig_data['sex'], 
@@ -217,10 +226,6 @@ def plot_enrichment_significance(enrs_mdd_dn_hits_df, title='', figsize=(6, 2)):
 
     ax.set_ylim(-0.5, 1.5)
 
-    # Add colorbar for mlog10_padj
-    scatter = ax.scatter(sig_data['celltype'], sig_data['sex'], c=sig_data['mlog10_padj'], cmap='viridis', alpha=0.6, s=0)
-    cbar = plt.colorbar(scatter, ax=ax)
-    cbar.ax.set_title('$-log_{10}(p)$', pad=10, fontsize=9)
 
     # Add size legend for ngenes
     # Create dummy scatter plot for size legend
@@ -229,16 +234,16 @@ def plot_enrichment_significance(enrs_mdd_dn_hits_df, title='', figsize=(6, 2)):
     size_labels = np.array([sizes_describe.loc['min','ngenes'], sizes_describe.loc['50%','ngenes'], sizes_describe.loc['max','ngenes']]).astype(int)
 
     # Create a separate axis for the size legend
-    ax2 = fig.add_axes([0.88, 0.15, 0.2, 0.8])  # Position for size legend
+    ax2 = fig.add_axes([0.925, 0.25, 0.2, 0.8])  # Position for size legend
     ax2.set_xlim(0, 1)
-    ax2.set_ylim(-1, 2 * len(sizes))  # More vertical space
+    ax2.set_ylim(-1, 3 * len(sizes))  # More vertical space
 
     for i, (size, label) in enumerate(zip(sizes, size_labels)):
         y = i * 2  # Spread out vertically
         ax2.scatter(0.5, y, s=size, color='grey', alpha=0.7, edgecolors='black')
         ax2.text(0.7, y, f'{label} genes', va='center', fontsize=8)
 
-    ax2.set_title('Num. genes', fontsize=9, pad=1, x=0.7, y=0.9)
+    ax2.set_title('Num. genes', fontsize=9, pad=1, x=0.8, y=0.75)
     ax2.axis('off')
 
     # Ensure x-axis is in alphabetical order
@@ -253,12 +258,17 @@ def plot_enrichment_significance(enrs_mdd_dn_hits_df, title='', figsize=(6, 2)):
 
 # Call the function
 enrs_mdd_dn_hits_lr_df = get_enrs_mdd_dn_hits_df(enrs_dict, filtered_type='All LR')
-enrs_mdd_dn_hits_lr_fig, enrs_mdd_dn_hits_lr_ax = plot_enrichment_significance(enrs_mdd_dn_hits_lr_df)
+enrs_mdd_dn_hits_lr_fig, enrs_mdd_dn_hits_lr_ax = plot_enrichment_significance(enrs_mdd_dn_hits_lr_df, figsize=(4.5, 2))
 
 enrs_mdd_dn_hits_deg_df = get_enrs_mdd_dn_hits_df(enrs_dict, filtered_type='DEG (matched length)')
 #enrs_mdd_dn_hits_deg_fig, enrs_mdd_dn_hits_deg_ax = plot_enrichment_significance(enrs_mdd_dn_hits_deg_df)
 
+# Save as PNG (raster)
 #enrs_mdd_dn_hits_lr_fig.savefig(os.path.join(output_dir, 'enrs_mdd_dn_hits_lr_fig.png'),  dpi=300, bbox_inches='tight')
+
+# Save as SVG (vector graphics, editable in Inkscape)
+#enrs_mdd_dn_hits_lr_fig.savefig(os.path.join(output_dir, 'enrs_mdd_dn_hits_lr_fig.svg'), format='svg', dpi=300, bbox_inches='tight')
+
 
 #%% Differential expression of MDD-DN pathway genes
 
@@ -297,10 +307,10 @@ def get_ttest_df(ttest_comp_df_dict, pathway_name='ASTON_MAJOR_DEPRESSIVE_DISORD
 
     return ttest_comp_results_df
 
-def plot_ttest(ttest_mdd_dn_df, ax=None):
+def plot_ttest(ttest_mdd_dn_df, ax=None, figsize=(6, 2)):
 
     if ax is None:
-        fig, ax = plt.subplots(figsize=(6, 2))
+        fig, ax = plt.subplots(figsize=figsize)
 
     # Define thresholds
     sig_threshold = -np.log10(0.05)
@@ -337,21 +347,25 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
     # Plot significant but not Bonferroni as circles
     if len(sig_not_bonferroni_data) > 0:
         ax.scatter(sig_not_bonferroni_data['celltype'], sig_not_bonferroni_data['sex'], 
-                   s=sig_not_bonferroni_data['size_mlog10_pvalue'], c=sig_not_bonferroni_data['tstat'], 
-                   cmap=cmap, norm=norm, alpha=0.6, marker='s', hatch=3*'//', edgecolors='white', label='Significant (p<0.05)')
+                   s=300, #sig_not_bonferroni_data['size_mlog10_pvalue'],
+                   c=sig_not_bonferroni_data['tstat'], 
+                   cmap=cmap, norm=norm, alpha=0.6, marker='o', hatch=3*'//', edgecolors='white', label='Significant (p<0.05)')
 
     # Plot Bonferroni significant as stars
     if len(bonferroni_sig_data) > 0:
         ax.scatter(bonferroni_sig_data['celltype'], bonferroni_sig_data['sex'], 
-                   s=bonferroni_sig_data['size_mlog10_pvalue'], c=bonferroni_sig_data['tstat'], 
-                   cmap=cmap, norm=norm, alpha=0.8, marker='s', edgecolors='black',
+                   s=300, #bonferroni_sig_data['size_mlog10_pvalue'], 
+                   c=bonferroni_sig_data['tstat'], 
+                   cmap=cmap, norm=norm, alpha=0.8, marker='o', edgecolors='black',
                    label=f'Bonferroni significant (p<{bonferroni_threshold:.3f})')
 
     ax.set_ylim(-0.5, 1.5)
 
-    # Add colorbar for tstat
+    # Add colorbar for tstat with set width
     scatter = ax.scatter(sig_data['celltype'], sig_data['sex'], c=sig_data['tstat'], cmap=cmap, norm=norm, alpha=0.6, s=0)
-    cbar = plt.colorbar(scatter, ax=ax)
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="3%", pad=0.05)
+    cbar = plt.colorbar(scatter, cax=cax)
     cbar.set_ticks([])  # Remove legend tick labels
 
     # Add "downregulated" and "upregulated" labels to colorbar
@@ -361,6 +375,7 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
     cbar.ax.text(2, mid_bottom, 'down \n reg.', va='bottom', ha='left', fontsize=8, rotation=0, transform=cbar.ax.transData)
     cbar.ax.text(2, mid_top, 'up \n reg.', va='top', ha='left', fontsize=8, rotation=0, transform=cbar.ax.transData)
 
+    '''
     # Add size legend for mlog10_pvalue
     sizes_describe = ttest_mdd_dn_df[['size_mlog10_pvalue','mlog10_pvalue']].loc[ttest_mdd_dn_df['mlog10_pvalue']>0].describe()
     sizes = [sizes_describe.loc['min','size_mlog10_pvalue'], sizes_describe.loc['50%','size_mlog10_pvalue'], sizes_describe.loc['max','size_mlog10_pvalue']]
@@ -373,11 +388,12 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
 
     for i, (size, label) in enumerate(zip(sizes, size_labels)):
         y = i * 2  # Spread out vertically
-        ax2.scatter(0.5, y, s=size, marker='s', color='grey', alpha=0.7, edgecolors='black')
+        ax2.scatter(0.5, y, s=size, marker='o', color='grey', alpha=0.7, edgecolors='black')
         ax2.text(0.625, y, f'{label}', va='center', fontsize=8)
 
     ax2.set_title('$-log_{10}(p)$', fontsize=9, pad=0, loc='left', x=0.4, y=0.96)
     ax2.axis('off')
+    '''
 
     # Ensure x-axis is in alphabetical order
     celltype_order = sorted(ttest_mdd_dn_df['celltype'].unique())
@@ -387,7 +403,7 @@ def plot_ttest(ttest_mdd_dn_df, ax=None):
     return ax
 
 ttest_mdd_dn_df = get_ttest_df(ttest_comp_df_dict, pathway_name='ASTON_MAJOR_DEPRESSIVE_DISORDER_DN')
-ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df)
+ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df, figsize=(4.5, 2))
 
 
 
@@ -414,7 +430,7 @@ pathways_of_interest = [
 # Call the function
 n = len(pathways_of_interest)
 #fig, axes = plt.subplots(n, 1, figsize=(8, 2.25*n), sharex=True)
-fig, axes = plt.subplots(n, 1, figsize=(6.5, 1.75*n), sharex=True)
+fig, axes = plt.subplots(n, 1, figsize=(5, 1.75*n), sharex=True)
 if n == 1:
     axes = [axes]
 
@@ -428,6 +444,69 @@ fig.tight_layout()
 plt.show()
 
 #fig.savefig(os.path.join(output_dir, 'ttest_mdd_dn_fig.png'),  dpi=300, bbox_inches='tight')
+#fig.savefig(os.path.join(output_dir, 'ttest_mdd_dn_fig.svg'), format='svg', bbox_inches='tight')
+
+#%% Get sc-compReg slopes and their standard errors
+
+slopes_df_list = []
+std_errs_df_list = []
+
+for sex in unique_sexes:
+    for celltype in unique_celltypes:
+        for condition in ['Case', 'Control']:
+            df_slopes = pd.DataFrame.from_dict(slopes_dict[sex][celltype][condition], orient='index')
+            multi_index_col = [(sex, celltype, condition)]
+            df_slopes.columns = pd.MultiIndex.from_tuples(multi_index_col)
+            slopes_df_list.append(df_slopes)
+            
+            df_std_errs = pd.DataFrame.from_dict(std_errs_dict[sex][celltype][condition], orient='index')
+            multi_index_col = [(sex, celltype, condition)]
+            df_std_errs.columns = pd.MultiIndex.from_tuples(multi_index_col)
+            std_errs_df_list.append(df_std_errs)
+            
+slopes_df = pd.concat(slopes_df_list, axis=1)
+std_errs_df = pd.concat(std_errs_df_list, axis=1)
+
+slopes_diff_df = (slopes_df.T.loc[:,:,'Case'] - slopes_df.T.loc[:,:,'Control']).T
+slopes_diff_signs_df = np.sign(slopes_diff_df)
+
+
+## pooled slopes and their standard errors, with correction for heterogeneity
+pooled_slopes_df_list = []
+pooled_slopes_tau_df_list = []
+
+for condition in ['Case', 'Control']:
+
+    slopes_condition_df = slopes_df.loc[:,slopes_df.columns.get_level_values(2) == condition]
+    std_errs_condition_df = std_errs_df.loc[:,std_errs_df.columns.get_level_values(2) == condition]
+
+    weights_df = 1 / std_errs_condition_df.pow(2)
+    pooled_slopes_df = (slopes_condition_df * weights_df).sum(1) / weights_df.sum(1)
+    Q = np.sum(weights_df * (slopes_condition_df.values - pooled_slopes_df.values[:,None])**2, axis=1)
+    k = slopes_condition_df.columns.nunique()
+
+    tau_squared_arg = (Q - (k - 1)) / (weights_df.sum(1) - (weights_df.pow(2).sum(1) / weights_df.sum(1)))
+    tau_squared = tau_squared_arg.clip(lower=0) # max(0, tau_squared_arg)
+    weights_tau_df = 1 / (std_errs_condition_df.pow(2).values + tau_squared.values[:,None])
+    pooled_slopes_tau_df = (slopes_condition_df * weights_tau_df).sum(1) / weights_tau_df.sum(1)
+
+    pooled_slopes_df.name = condition
+    pooled_slopes_tau_df.name = condition
+
+    pooled_slopes_df_list.append(pooled_slopes_df)
+    pooled_slopes_tau_df_list.append(pooled_slopes_tau_df)
+
+pooled_slopes_df = pd.concat(pooled_slopes_df_list, axis=1)
+pooled_slopes_tau_df = pd.concat(pooled_slopes_tau_df_list, axis=1)
+
+## compute sign of slope differences between conditions
+pooled_slopes_diff_df = pooled_slopes_df['Case'] - pooled_slopes_df['Control']
+pooled_slopes_tau_diff_df = pooled_slopes_tau_df['Case'] - pooled_slopes_tau_df['Control']
+
+pooled_slopes_signs_df = np.sign(pooled_slopes_diff_df)
+pooled_slopes_tau_signs_df = np.sign(pooled_slopes_tau_diff_df)
+
+
 
 #%% GRN plot of ABHD17B
 
@@ -438,6 +517,9 @@ assert hit1 in TFs_of_EGR1
 
 #NR4A2_targets_ExN_male = mean_grn_df_filtered_dict['male']['ExN'].loc[mean_grn_df_filtered_dict['male']['ExN']['TF'] == 'NR4A2']
 grn_female_exn = mean_grn_df_filtered_pruned_dict['female']['ExN']
+grn_female_exn = grn_female_exn.merge(slopes_diff_signs_df['female'][['ExN']].rename(columns={'ExN': 'slopes_diff_signs'}), left_on='TG', right_index=True, how='left')
+grn_female_exn['slopes_diff_signs'] = grn_female_exn['slopes_diff_signs'].map({1: 'upregulation', -1: 'downregulation'})
+
 NR4A2_targets_ExN_female = grn_female_exn[grn_female_exn['TF']==hit1]
 EGR1_targets_ExN_female = grn_female_exn[grn_female_exn['TF']=='EGR1']
 SOX2_targets_ExN_female = grn_female_exn[grn_female_exn['TF']=='SOX2']
@@ -463,32 +545,40 @@ import networkx as nx
 
 G = nx.DiGraph()
 
-edge_color_map = {
-    'a priori (brainSCOPE)': 'gray',
-    'female ExN': 'blue',
-    'all': 'green'
+edge_style_map = {
+    'a priori (brainSCOPE)': 'dotted',
+    'female ExN': 'dashdot',
+    'all': 'solid'
 }
 
-G.add_edge('NR4A2', 'EGR1', interaction='a priori (brainSCOPE)', color=edge_color_map['a priori (brainSCOPE)'])
-G.add_edge('NR4A2', NR4A2_hit2, interaction='female ExN', color=edge_color_map['female ExN'])
-G.add_edge('EGR1', EGR1_hit2, interaction='female ExN', color=edge_color_map['female ExN'])
-G.add_edge(NR4A2_hit2, 'ABHD17B', interaction='female ExN', color=edge_color_map['female ExN'])
-G.add_edge(EGR1_hit2, 'ABHD17B', interaction='female ExN', color=edge_color_map['female ExN'])
-G.add_edge('SOX2', 'ABHD17B', interaction='female ExN', color=edge_color_map['female ExN'])
-#G.add_edge('NR4A2', 'ABHD17B', interaction='female ExN', color=edge_color_map['female ExN'])
-#G.add_edge('EGR1', 'ABHD17B', interaction='female ExN', color=edge_color_map['female ExN'])
+edge_color_map = {
+    'upregulation': 'green',
+    'downregulation': 'red',
+}
+
+G.add_edge('NR4A2', 'EGR1', interaction='a priori (brainSCOPE)', style=edge_style_map['a priori (brainSCOPE)'], color=edge_color_map[NR4A2_targets_ExN_female[(NR4A2_targets_ExN_female['TF']=='NR4A2') & (NR4A2_targets_ExN_female['TG']=='ABHD17B')]['slopes_diff_signs'].item()])
+G.add_edge('NR4A2', NR4A2_hit2, interaction='female ExN', style=edge_style_map['female ExN'], color=edge_color_map[NR4A2_targets_ExN_female[(NR4A2_targets_ExN_female['TF']=='NR4A2') & (NR4A2_targets_ExN_female['TG']==hit2)]['slopes_diff_signs'].item()])
+G.add_edge('EGR1', EGR1_hit2, interaction='female ExN', style=edge_style_map['female ExN'], color=edge_color_map[EGR1_targets_ExN_female[(EGR1_targets_ExN_female['TF']=='EGR1') & (EGR1_targets_ExN_female['TG']==hit2)]['slopes_diff_signs'].item()])
+G.add_edge(NR4A2_hit2, 'ABHD17B', interaction='female ExN', style=edge_style_map['female ExN'], color=edge_color_map[NR4A2_targets_ExN_female[(NR4A2_targets_ExN_female['TF']=='NR4A2') & (NR4A2_targets_ExN_female['TG']==hit2)]['slopes_diff_signs'].item()])
+G.add_edge(EGR1_hit2, 'ABHD17B', interaction='female ExN', style=edge_style_map['female ExN'], color=edge_color_map[EGR1_targets_ExN_female[(EGR1_targets_ExN_female['TF']=='EGR1') & (EGR1_targets_ExN_female['TG']==hit2)]['slopes_diff_signs'].item()])
+G.add_edge('SOX2', 'ABHD17B', interaction='female ExN', style=edge_style_map['female ExN'], color=edge_color_map[SOX2_targets_ExN_female[(SOX2_targets_ExN_female['TF']=='SOX2') & (SOX2_targets_ExN_female['TG']==hit2)]['slopes_diff_signs'].unique().item()])
+#G.add_edge('NR4A2', 'ABHD17B', interaction='female ExN', style=edge_style_map['female ExN'])
+#G.add_edge('EGR1', 'ABHD17B', interaction='female ExN', style=edge_style_map['female ExN'])
 
 all_targets = []
 for tf in female_exn_enriched_TFs_of_ABHD17B:
     tf_targets = enriched_TF_TG_pairs_dict[tf]
 
     tf_targets_df = mean_grn_df[(mean_grn_df['TF']==tf) & mean_grn_df['TG'].isin(tf_targets)]
+    tf_targets_df = tf_targets_df.merge(pooled_slopes_tau_signs_df.to_frame().rename(columns={0: 'slopes_diff_signs'}), left_on='TG', right_index=True, how='left')
+    tf_targets_df['slopes_diff_signs'] = tf_targets_df['slopes_diff_signs'].map({1: 'upregulation', -1: 'downregulation'})
+
     if_enhancer_more_than_one_tg = tf_targets_df.groupby('enhancer')['TG'].nunique() > 1
     if if_enhancer_more_than_one_tg.any():
         None # currently, no "all TF"-enhancer has more than one TG target
 
     for tf_target in tf_targets:
-        G.add_edge(tf, tf_target, interaction='all', color=edge_color_map['all'])
+        G.add_edge(tf, tf_target, interaction='all', style=edge_style_map['all'], color=edge_color_map[tf_targets_df[(tf_targets_df['TF']==tf) & (tf_targets_df['TG']==tf_target)]['slopes_diff_signs'].unique().item()])
         all_targets.append(tf_target)
 
 # Assign layer information to each node
@@ -509,9 +599,7 @@ pos = nx.multipartite_layout(G, subset_key='layer', scale=2)
 for egr1_target in enriched_TF_TG_pairs_dict['EGR1']:
     pos[egr1_target] += np.array([0, 0.4])
 
-colors = nx.get_edge_attributes(G, 'color').values()
-
-fig, ax = plt.subplots(figsize=(4, 4))
+fig, ax = plt.subplots(figsize=(6, 6))
 
 # Draw nodes in groups with different styles
 # 1. Draw regular nodes (excluding the special ones)
@@ -519,7 +607,7 @@ regular_nodes = [n for n in G.nodes() if n not in [NR4A2_hit2, EGR1_hit2]]
 nx.draw_networkx_nodes(G, pos,
     nodelist=regular_nodes,
     node_size=1200,
-    node_color='lightgrey',
+    node_color='none',  # No fill color
     edgecolors='k',
     ax=ax
 )
@@ -529,22 +617,30 @@ nx.draw_networkx_nodes(G, pos,
 nx.draw_networkx_nodes(G, pos,
     nodelist=[NR4A2_hit2],
     node_size=100,  # smaller size
-    node_color='lightgrey',
+    node_color='none',  # No fill color
     edgecolors='k',
     node_shape='s',  # square shape
     ax=ax
 )
 
-# Draw edges
-nx.draw_networkx_edges(G, pos,
-    arrowstyle='-|>',
-    arrowsize=15,
-    width=2,
-    edge_color=list(nx.get_edge_attributes(G, 'color').values()),
-    min_source_margin=0.5,
-    min_target_margin=0.5,
-    ax=ax
-)
+# Draw edges with different line styles AND colors
+for style_name, style_value in edge_style_map.items():
+    edges_to_draw = [(u, v) for u, v, d in G.edges(data=True) if d.get('style') == style_value]
+    if edges_to_draw:
+        # Extract colors for these edges, defaulting to black if not specified
+        edge_colors = [G[u][v].get('color', 'black') for u, v in edges_to_draw]
+        
+        nx.draw_networkx_edges(G, pos,
+            edgelist=edges_to_draw,
+            arrowstyle='-|>',
+            arrowsize=15,
+            width=2,
+            edge_color=edge_colors,  # Use the extracted colors
+            style=style_value,
+            min_source_margin=0.5,
+            min_target_margin=0.5,
+            ax=ax
+        )
 
 # Draw labels for regular nodes only (excluding the special ones and ABHD17B)
 labels = {n: n for n in G.nodes() if n not in ['ABHD17B', NR4A2_hit2, EGR1_hit2]}
@@ -577,18 +673,45 @@ H.add_edge('TF','TG')
 pos2 = {'TF': (0.4, 0.5),
         'TG': (0.6, 0.5)}
 
-nx.draw_networkx_nodes(H, pos2, node_size=800, node_color='lightgrey', edgecolors='k', ax=axins)
+nx.draw_networkx_nodes(H, pos2, node_size=800, node_color='none', edgecolors='k', ax=axins)
 nx.draw_networkx_edges(H, pos2, arrowstyle='-|>', arrowsize=20, edge_color='k',min_source_margin=0.2, min_target_margin=0.2, ax=axins)
 nx.draw_networkx_labels(H, pos2, font_size=10, ax=axins)
 
-# Add legend
-legend_handles = [
-    mpatches.Patch(color=edge_color_map['a priori (brainSCOPE)'], label='a priori (brainSCOPE)'),
-    mpatches.Patch(color=edge_color_map['female ExN'], label='female ExN'),
-    mpatches.Patch(color=edge_color_map['all'], label='all'),
+# Add legend with two columns: edge style (group) and color (up/down-regulation)
+import matplotlib.lines as mlines
+from matplotlib.legend import Legend
+
+# Edge style legend (group)
+edge_legend_handles = [
+    mlines.Line2D([], [], color='black', linestyle=edge_style_map['a priori (brainSCOPE)'], label='a priori (brainSCOPE)'),
+    mlines.Line2D([], [], color='black', linestyle=edge_style_map['female ExN'], label='female ExN'),
+    mlines.Line2D([], [], color='black', linestyle=edge_style_map['all'], label='all combinations'),
 ]
-legend_labels = edge_color_map.keys()
-ax.legend(handles=legend_handles, title='relevant group', loc='upper left')
+
+# Color legend (up/down-regulation)
+color_legend_handles = [
+    mlines.Line2D([], [], color='green', linestyle='-', label='upregulated'),
+    mlines.Line2D([], [], color='red', linestyle='-', label='downregulated'),
+]
+
+# Create a custom legend with two columns
+from matplotlib.patches import Patch
+
+# Combine handles and labels for a two-column legend
+combined_handles = edge_legend_handles + color_legend_handles
+combined_labels = [h.get_label() for h in combined_handles]
+
+# Create a legend with two columns: first for edge style, second for color
+ax.legend(
+    handles=combined_handles,
+    labels=combined_labels,
+    title='Edge type / Regulation',
+    loc='upper left',
+    ncol=2,
+    columnspacing=1.5,
+    handletextpad=1.2,
+    borderaxespad=0.5
+)
 
 axins.set_xlim(0.3, 0.7)
 axins.set_ylim(0.3, 0.7)
@@ -602,20 +725,33 @@ plt.show()
 
 ## Create a new, empty figure just for the legend
 fig_legend = plt.figure(figsize=(3, 1))  # adjust size as needed
-fig_legend.legend(legend_handles, legend_labels,
-                  loc='center',        # put legend in the center
-                  title='edge type',
-                  frameon=False)
 
-## Remove axes, and save tight around the legend
+# Add a dummy axis to host the legend
+ax_legend = fig_legend.add_subplot(111)
+ax_legend.axis('off')
+
+# Create the legend with two columns and the correct title
+legend = ax_legend.legend(
+    handles=combined_handles,
+    labels=combined_labels,
+    loc='center',
+    ncol=2,
+    title='Edge type / Regulation',
+    frameon=False,
+    columnspacing=1.5,
+    handletextpad=1.2,
+    borderaxespad=0.5
+)
+
+# Remove axes, and save tight around the legend
 fig_legend.subplots_adjust(left=0, right=1, top=1, bottom=0)
 fig_legend.savefig(os.path.join(output_dir, 'grn_legend_only.png'), 
                    bbox_inches='tight', 
                    pad_inches=0.1,
                    dpi=300)
 
-#nx.write_graphml(G, os.path.join(output_dir, "ABHD17B_GRN.graphml"))
-nx.write_gexf(G, os.path.join(output_dir, "ABHD17B_GRN.gexf"))
+#DEFUNCT nx.write_graphml(G, os.path.join(output_dir, "ABHD17B_GRN.graphml"))
+#nx.write_gexf(G, os.path.join(output_dir, "ABHD17B_GRN.gexf")) #<--- the good one
 
 
 
@@ -724,9 +860,9 @@ with open(os.path.join(output_dir, 'broad_gene_series_dict.pkl'), 'rb') as f:
     pydeseq2_match_length_genes_series = gene_series_dict['pydeseq2_match_length_genes_series']
 
 ## enrichment of pooled gene sets, without filtering for p-value
-enrs_mdd_dn_genes_enrichr_all = do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
-all_sccompreg_genes_enrichr_all = do_enrichr(all_sccompreg_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
-pydeseq2_match_length_genes_enrichr_all = do_enrichr(pydeseq2_match_length_genes_series, brain_gmt_cortical, filter_var=None, outdir=None)
+enrs_mdd_dn_genes_enrichr_all = do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, filter_var=None, outdir=output_dir, file_ext='svg', remove_from_dotplot=['ASTON_MAJOR_DEPRESSIVE_DISORDER_DN'])
+all_sccompreg_genes_enrichr_all = do_enrichr(all_sccompreg_genes_series, brain_gmt_cortical, filter_var=None, outdir=None, file_ext='png')
+pydeseq2_match_length_genes_enrichr_all = do_enrichr(pydeseq2_match_length_genes_series, brain_gmt_cortical, filter_var=None, outdir=None, file_ext='png')
 
 results_to_index_mapper = {
     #'mdd_dn_genes': enrs_mdd_dn_genes_enrichr_all,

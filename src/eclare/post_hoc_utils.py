@@ -2579,7 +2579,7 @@ def plot_pathway_ranks(pathway_ranks, stem=True, save_path=None):
         plt.savefig(save_path, bbox_inches='tight', dpi=150)
     plt.close()
 
-def do_enrichr(lr_filtered_type, pathways, filter_var='Adjusted P-value', remove_from_dotplot=[], outdir=None, figsize=(3,6)):
+def do_enrichr(lr_filtered_type, pathways, filter_var='Adjusted P-value', remove_from_dotplot=[], outdir=None, file_ext='png', figsize=(3,6), top_term=10):
 
     enr = gp.enrichr(lr_filtered_type.index.to_list(), gene_sets=pathways, outdir=None)
     enr.res2d['-log10(fdr)'] = -np.log10(enr.res2d['Adjusted P-value'])
@@ -2588,7 +2588,7 @@ def do_enrichr(lr_filtered_type, pathways, filter_var='Adjusted P-value', remove
 
     if len(enr.res2d) > 0:
         # dotplot
-        ofname = None if outdir is None else os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs["type"]}.png')
+        ofname = None if outdir is None else os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs["type"]}.{file_ext}')
 
         max_pval = enr.res2d['Adjusted P-value'].max()
 
@@ -2604,11 +2604,11 @@ def do_enrichr(lr_filtered_type, pathways, filter_var='Adjusted P-value', remove
         fig = gp.dotplot(enr_res2d_plot,
                 column='Combined Score',
                 x='-log10(fdr)',
-                title=f'{lr_filtered_type.attrs["sex"]} - {lr_filtered_type.attrs["celltype"]} ({lr_filtered_type.attrs["type"]})',
+                title=lr_filtered_type.attrs["type"],#f'{lr_filtered_type.attrs["sex"]} - {lr_filtered_type.attrs["celltype"]} ({lr_filtered_type.attrs["type"]})',
                 cmap=plt.cm.winter,
                 size=12, # adjust dot size
                 cutoff=max_pval,
-                top_term=10,
+                top_term=top_term,
                 show_ring=False,
                 ax=ax,
                 ofname=ofname)
