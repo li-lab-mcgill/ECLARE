@@ -147,15 +147,19 @@ if __name__ == "__main__":
 
     ##Get student loaders
     args_tmp = deepcopy(args)
-    args_tmp.source_dataset = args.target_dataset
 
-    datasets_with_unaligned = ['DLPFC_Anderson', 'DLPFC_Ma', 'PFC_Zhu', 'PFC_V1_Wang', 'Cortex_Velmeshev']
-    if target_dataset_og in datasets_with_unaligned:
+    datasets_with_unaligned = ['DLPFC_Anderson', 'DLPFC_Ma', 'PFC_Zhu', 'PFC_V1_Wang', 'Cortex_Velmeshev', 'MDD']
+    if (target_dataset_og in datasets_with_unaligned) and (len(model_uri_paths) > 1):
+        args_tmp.source_dataset = args.target_dataset
         args_tmp.target_dataset = None  # could be any dataset, specified to skip processing (or do further zero-shot tasks)
+    elif (target_dataset_og in datasets_with_unaligned) and (len(model_uri_paths) == 1):
+        print("Use aligned dataset for target")
     else:
+        args_tmp.source_dataset = args.target_dataset
         args_tmp.target_dataset = 'MDD'
 
     student_setup_func = return_setup_func_from_dataset(args.target_dataset)
+    
     if args.ordinal_job_id is None:
         student_rna_train_loader, student_atac_train_loader, student_atac_train_num_batches, student_atac_train_n_batches_str_length, student_atac_train_total_epochs_str_length, student_rna_valid_loader, student_atac_valid_loader, student_atac_valid_num_batches, student_atac_valid_n_batches_str_length, student_atac_valid_total_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask =\
                 student_setup_func(args_tmp, return_type='loaders')
@@ -168,13 +172,13 @@ if __name__ == "__main__":
         teachers_setup(model_uri_paths, args, device)
     
     ## Extract validation cell IDs
-    valid_cell_ids_rna = student_rna_valid_loader.dataset.obs['Cell_ID'].tolist()
-    valid_cell_ids_atac = student_atac_valid_loader.dataset.obs['Cell_ID'].tolist()
+    valid_cell_ids_rna = student_rna_valid_loader.dataset.obs_names.tolist()
+    valid_cell_ids_atac = student_atac_valid_loader.dataset.obs_names.tolist()
 
     ## Confirm that validation cell IDs are the same for all teachers and student
     for dataset in datasets:
-        valid_cell_ids_rna_ = teacher_rna_valid_loaders[dataset].dataset.obs['Cell_ID'].tolist()
-        valid_cell_ids_atac_ = teacher_atac_valid_loaders[dataset].dataset.obs['Cell_ID'].tolist()
+        valid_cell_ids_rna_ = teacher_rna_valid_loaders[dataset].dataset.obs_names.tolist()
+        valid_cell_ids_atac_ = teacher_atac_valid_loaders[dataset].dataset.obs_names.tolist()
         assert set(valid_cell_ids_rna) == set(valid_cell_ids_rna_), f'Validation RNA cell IDs do not match in {dataset}'
         assert set(valid_cell_ids_atac) == set(valid_cell_ids_atac_), f'Validation ATAC cell IDs do not match in {dataset}'
 
@@ -253,6 +257,7 @@ if __name__ == "__main__":
             mlflow.set_tag("ignore_sources", args.ignore_sources)
             mlflow.set_tag("outdir", args.outdir)
             mlflow.set_tag("hostname", socket.gethostname())
+            mlflow.set_tag("PID", os.getpid())
 
             ## Log validation cell IDs
             # Save both lists in a single pickle file
@@ -283,13 +288,14 @@ if __name__ == "__main__":
 
                 model_str = "trained_model"
 
-            else:
+            elif args.tune_hyperparameters:
+
                 optuna.logging.set_verbosity(optuna.logging.ERROR)
                 best_params = tune_ECLARE(args, experiment_id, run_args, device)
 
                 ## run best model
                 run_args['trial'] = None
-                run_args['args'].total_epochs = 100
+                run_args['args'].total_epochs = 10
                 student_model, _ = run_ECLARE(**run_args, student_model=eclare_student_model, ordinal_model=ordinal_model, params=best_params, device=device)
                 model_str = "best_model"
 

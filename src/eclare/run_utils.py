@@ -393,7 +393,7 @@ def eclare_pass(
 
         ## get matching indices for datasets and ordinal classes
         classes_lookup = {val: idx for idx, val in enumerate(ordinal_model.ordinal_classes)}
-        #matching_indices = [classes_lookup[d] for d in datasets]
+        matching_indices = [classes_lookup[d.split('_')[0]] for d in datasets] # remove dataset suffix
 
 
     # Determine the global minimum number of batches
@@ -437,50 +437,6 @@ def eclare_pass(
         ## Project student ATAC data (teacher)
         student_atac_cells = student_atac_dat.X.float().to(device)
         student_atac_latents, _ = student_model(student_atac_cells, modality=1)
-
-        if ordinal_model is not None:
-                
-            ## project cells/nuclei
-            _, ordinal_rna_probas, ordinal_rna_latents = ordinal_model(student_rna_cells, modality=0, normalize=0)
-            _, ordinal_atac_probas, ordinal_atac_latents = ordinal_model(student_atac_cells, modality=1, normalize=0)
-
-            rna_coral_prebias = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents)
-            atac_coral_prebias = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_atac_latents)
-            coral_diffs = (atac_coral_prebias - rna_coral_prebias.T).pow(2)
-            coral_sims = torch.exp(-coral_diffs / coral_diffs.mean())
-            coral_sims = (coral_sims / coral_sims.max()).detach()
-
-            ''' use below when teachers are individual developmental stages rather than different datasets
-            ## get teacher weights from probas as per https://chatgpt.com/share/68a3d08c-9b4c-8009-9132-f777e3324e52
-            teacher_weights = coral_probs(student_rna_probas)
-            teacher_T_weights = coral_probs(student_atac_probas)
-
-            ## re-order teacher weights to match datasets
-            teacher_weights = teacher_weights[:, matching_indices]
-            teacher_T_weights = teacher_T_weights[:, matching_indices]
-
-            if len(datasets) > 1:
-
-                ## check that shapes match - no broadcasting allowed
-                assert (teacher_weights.shape == distil_losses.T.shape)
-                assert (teacher_T_weights.shape == distil_losses.T.shape)
-                assert (teacher_weights.shape == align_losses.T.shape)
-                assert (teacher_T_weights.shape == align_losses.T.shape)
-
-                ## get weighted losses
-                mean_distil_loss = (teacher_weights * distil_losses.T).mean() + (teacher_T_weights * distil_losses_T.T).mean()
-                #align_loss_scaled = (teacher_weights * align_losses.T).mean() + (teacher_T_weights * align_losses_T.T).mean()
-
-                ## Get student align loss
-                _, _, align_loss_scaled, _, _, _ = \
-                    knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'student', ot_clip_loss_weights=teacher_weights.T)
-
-
-            else:
-                mean_distil_loss = distil_losses.mean() + distil_losses_T.mean()
-                align_loss_scaled = align_losses.mean() + align_losses_T.mean()
-            '''
-
 
         ## Initialize list of dataset distil losses
         distil_losses, distil_losses_T = [], []
@@ -540,7 +496,7 @@ def eclare_pass(
             distil_loss = 0.5 * (distil_loss + distil_loss_T)
             align_loss_scaled = 0.5 * (align_loss_scaled + align_loss_T_scaled)
 
-            ## get total loss
+            ## get teacher's total loss
             total_loss = (lambd * distil_loss) + ((1-lambd) * align_loss_scaled)
 
             # Accumulate scalar loss values for logging
@@ -557,13 +513,53 @@ def eclare_pass(
         offsets = torch.stack(offsets)
         offsets_T = torch.stack(offsets_T)
 
-        ## Compute distillation loss weighted by alignment loss, if more than one teacher
-        mean_distil_loss, teacher_weights, teacher_T_weights = \
-            knowledge_distillation_fn.distil_loss_weighting( distil_losses, distil_losses_T, (offsets - align_losses), (offsets_T - align_losses_T))
+        if ordinal_model is not None:
+                
+            ## project cells/nuclei
+            _, ordinal_rna_probas, ordinal_rna_latents = ordinal_model(teacher_rna_cells, modality=0, normalize=0)
+            _, ordinal_atac_probas, ordinal_atac_latents = ordinal_model(teacher_atac_cells, modality=1, normalize=0)
+            #rna_coral_prebias = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents)
+            #atac_coral_prebias = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_atac_latents)
 
-        ## Get student align loss
-        _, _, align_loss_scaled, _, _, _ = \
-            knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'student', student_logits_scaling=None, teacher_logits_scaling=None)
+            # use below when teachers are individual developmental stages rather than different datasets
+            ## get teacher weights from probas as per https://chatgpt.com/share/68a3d08c-9b4c-8009-9132-f777e3324e52
+            teacher_weights = coral_probs(ordinal_rna_probas)
+            teacher_T_weights = coral_probs(ordinal_atac_probas)
+
+            ## re-order teacher weights to match datasets
+            teacher_weights = teacher_weights[:, matching_indices]
+            teacher_T_weights = teacher_T_weights[:, matching_indices]
+
+            if len(datasets) > 1:
+
+                ## check that shapes match - no broadcasting allowed
+                assert (teacher_weights.shape == distil_losses.T.shape)
+                assert (teacher_T_weights.shape == distil_losses.T.shape)
+                assert (teacher_weights.shape == align_losses.T.shape)
+                assert (teacher_T_weights.shape == align_losses.T.shape)
+
+                ## get weighted distillation loss - cannot weigh align loss in the same way since had collected teacher losses
+                mean_distil_loss = (teacher_weights * distil_losses.T).mean() + (teacher_T_weights * distil_losses_T.T).mean()
+
+                ## get weighted align loss
+                _, _, align_loss_scaled, _, _, _ = \
+                    knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'student', ot_clip_loss_weights=0.5*(teacher_T_weights + teacher_T_weights).T)
+
+
+            else:
+                mean_distil_loss = distil_losses.mean() + distil_losses_T.mean()
+                align_loss_scaled = align_losses.mean() + align_losses_T.mean()
+
+        elif ordinal_model is None:
+
+            ## Compute distillation loss weighted by alignment loss, if more than one teacher
+            mean_distil_loss, teacher_weights, teacher_T_weights = \
+                knowledge_distillation_fn.distil_loss_weighting( distil_losses, distil_losses_T, (offsets - align_losses), (offsets_T - align_losses_T))
+
+            ## Get student align loss
+            _, _, align_loss_scaled, _, _, _ = \
+                knowledge_distillation_fn(student_rna_latents, student_atac_latents, teacher_rna_latents, teacher_atac_latents, 'student', student_logits_scaling=None, teacher_logits_scaling=None)
+
 
         ## Compute total loss as convex combination of CLIP loss and average distillation loss
         total_loss = (lambd * mean_distil_loss) + ((1-lambd) * align_loss_scaled)
@@ -599,7 +595,9 @@ def eclare_pass(
             metrics_dict[f'total_loss_{dataset}']   = epoch_total_losses[dataset] / num_batches
             
     # Add weights_temperature to metrics
-    metrics_dict['weights_temperature'] = knowledge_distillation_fn.weights_temperature.item()
+    metrics_dict['weights_temperature'] = knowledge_distillation_fn.get_temperature_scaling(
+        knowledge_distillation_fn.weights_temperature
+    ).item()
 
     # Clear accumulated lists at the end of each outer iteration
     del teacher_weights, teacher_T_weights, distil_losses, align_losses, distil_losses_T, align_losses_T, offsets, offsets_T, distil_loss, align_loss_scaled, total_loss, mean_distil_loss
@@ -688,15 +686,9 @@ def run_ECLARE(
         align_loss_scale = (target_distil_loss / target_align_loss)
         knowledge_distillation_fn.align_loss_scale = align_loss_scale
 
-        ## Retroactively scale teacher & student CLIP losses
-        #datasets = list(teacher_rna_valid_loaders.keys())
-        #for dataset in datasets+[args.target_dataset]:
-        #    valid_losses['align_loss_'+dataset] = valid_losses['align_loss_'+dataset] * align_loss_scale
-        #    valid_losses['total_loss_'+dataset] = (params.get('distil_lambda', 0.1) * valid_losses['distil_loss_'+dataset]) + ((1-params.get('distil_lambda', 0.1)) * valid_losses['align_loss_'+dataset])
-
         ## get metrics
         metrics = get_metrics(student_model, student_rna_valid_loader, student_atac_valid_loader, device, paired=paired)
-        metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)})
+        #metrics.update({f'valid_{k}': v for k, v in valid_losses.items() if ~np.isnan(v)}) # remove valid losses at first epoch due to distortion caused by alignment loss scale
 
         # Log all metrics at once with MLflow
         mlflow.log_metrics(metrics, step=0)
@@ -788,7 +780,7 @@ def run_ORDINAL(
     mlflow.log_param("paired", paired_target)
     mlflow.log_param("n_genes", n_genes)
     mlflow.log_param("n_peaks", n_peaks)
-
+    mlflow.log_param("target_dataset", args.target_dataset); mlflow.log_param(f"source_dataset", args.source_dataset); mlflow.log_param(f"source_or_target", args.source_or_target);
     ## initialize metrics dict
     metrics = {}
 

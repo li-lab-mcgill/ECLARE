@@ -35,16 +35,17 @@ if __name__ == '__main__':
 
     for dev_stage in dev_stages:
 
-        ## target of new dataset is source dataset
-        RNA_file = f"{dev_stage}_rna_{args.genes_by_peaks_str}_aligned_target_{args.source_dataset}.h5ad"
-        ATAC_file = f"{dev_stage}_atac_{args.genes_by_peaks_str}_aligned_target_{args.source_dataset}.h5ad"
+        ## if no target dataset, then target is source dataset
+        aligned_data = args.target_dataset if args.target_dataset is not None else args.source_dataset
+        RNA_file = f"{dev_stage}_rna_{args.genes_by_peaks_str}_aligned_target_{aligned_data}.h5ad"
+        ATAC_file = f"{dev_stage}_atac_{args.genes_by_peaks_str}_aligned_target_{aligned_data}.h5ad"
 
         rna_dat = rna[rna.obs['dev_stage'].str.contains(dev_stage)]
-        rna_dat.obs['original_target'] = str(args.target_dataset)
+        rna_dat.obs['original_target'] = str(args.target_dataset) # useful if no target dataset specified, original target still logged
         rna_dat.write_h5ad(os.path.join(rna_datapath, RNA_file))
 
         atac_dat = atac[atac.obs['dev_stage'].str.contains(dev_stage)]
-        atac_dat.obs['original_target'] = str(args.target_dataset)
+        atac_dat.obs['original_target'] = str(args.target_dataset) # useful if no target dataset specified, original target still logged
         atac_dat.write_h5ad(os.path.join(atac_datapath, ATAC_file))
 
         print(f'Number of cells in {dev_stage}:', len(rna_dat))

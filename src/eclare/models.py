@@ -24,7 +24,6 @@ class CLIP(nn.Module):
         'num_units': {
             'suggest_distribution': CategoricalDistribution(choices=[128, 256, 512]),
             'default': 256
-            #'default': 512
         },
         '_teacher_num_layers': {
             'suggest_distribution': CategoricalDistribution(choices=[1, 2]),
@@ -33,32 +32,26 @@ class CLIP(nn.Module):
         '_student_num_layers': {
             'suggest_distribution': CategoricalDistribution(choices=[1, 2]),
             'default': 2
-            #'default': 1
         },
         'dropout_p': {
             'suggest_distribution': FloatDistribution(low=0.1, high=0.9),
             'default': 0.3
-            #'default': 0.7955721915144282
         },
         'teacher_temperature': {
             'suggest_distribution': FloatDistribution(low=inv_softplus(0.01), high=inv_softplus(5)),
             'default': inv_softplus(1.)
-            #'default': 3.511782536797618
         },
         'student_temperature': {
             'suggest_distribution': FloatDistribution(low=inv_softplus(0.01), high=inv_softplus(5)),
             'default': inv_softplus(1.)
-            #'default': 1.8343202100308347
         },
         'weights_temperature': {
             'suggest_distribution': FloatDistribution(low=inv_softplus(0.01), high=inv_softplus(5)),
-            'default': inv_softplus(1.)
-            #'default': 1.4693788763949769
+            'default': inv_softplus(0.005)
         },
         'distil_lambda': {
-            'suggest_distribution': FloatDistribution(low=0.01, high=0.99),
-            'default': 0.1
-            #'default': 0.6138311212064465
+            'suggest_distribution': FloatDistribution(low=0.0, high=1.0),
+            'default': 0.006
         },
         'decoder_loss': {
             'suggest_distribution': CategoricalDistribution(

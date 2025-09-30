@@ -12,20 +12,21 @@ TMPDIR=${OUTPATH}/kd_clip_${JOB_ID}
 cp ./scripts/eclare_scripts/eclare_run.py ./scripts/kd_clip_scripts/kd_clip_dev_stages.sh $TMPDIR
 
 ## Define target datasets
-target_dataset=("PFC_Zhu")
-source_datasets=("EaFet" "LaFet" "Inf" "Child" "Adol" "Adult")
-genes_by_peaks_str=("9832_by_70751")
-clip_job_id='18175628'
-ordinal_job_id='21125926'
+#target_dataset=("PFC_Zhu")
+#source_datasets=("EaFet" "LaFet" "Inf" "Child" "Adol" "Adult")
+#genes_by_peaks_str=("9832_by_70751")
+#clip_job_id='18175628'
+#ordinal_job_id='21125926'
 
-#target_dataset=("PFC_V1_Wang")
-#source_datasets=("FirstTrim" "SecTrim" "ThirdTrim" "Inf" "Adol")
-#genes_by_peaks_str=("9914_by_63404")
-#clip_job_id='20194800'
-#ordinal_job_id='21141050'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
+target_dataset=("Cortex_Velmeshev")
+target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
+genes_by_peaks_str=("9584_by_66620")
+source_datasets=("FirstTrim_PFC_V1_Wang" "SecTrim_PFC_V1_Wang" "ThirdTrim_PFC_V1_Wang" "Inf_PFC_V1_Wang" "Adol_PFC_V1_Wang")
+clip_job_id='16155618'
+ordinal_job_id=None  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
 
 ## Define JOB IDs and total number of epochs
-total_epochs=100
+total_epochs=10
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6
@@ -92,7 +93,6 @@ run_eclare_task_on_gpu() {
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
     --replicate_idx=$task_idx \
     --clip_job_id=$clip_job_id \
-    --ordinal_job_id=$ordinal_job_id \
     --experiment_job_id=$experiment_job_id \
     --source_dataset=$source_dataset \
     --target_dataset=$target_dataset \
@@ -110,7 +110,7 @@ run_eclare_task_on_gpu() {
 ## Create experiment ID (or detect if it already exists)
 python -c "
 from src.eclare.run_utils import get_or_create_experiment; 
-experiment = get_or_create_experiment('clip_${clip_job_id}')
+experiment = get_or_create_experiment('clip_${target_dataset_lowercase}_${clip_job_id}')
 experiment_id = experiment.experiment_id
 print(experiment_id)
 

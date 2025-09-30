@@ -2,14 +2,6 @@
  
 conda activate eclare_env
 cd $ECLARE_ROOT
- 
-## Make new sub-directory for current job ID and assign to "TMPDIR" variable
-JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
-mkdir -p ${OUTPATH}/eclare_${JOB_ID}
-TMPDIR=${OUTPATH}/eclare_${JOB_ID}
- 
-## Copy scripts to sub-directory for reproducibility
-cp ./scripts/eclare_scripts/eclare_run.py ./scripts/eclare_scripts/eclare_dev_stages.sh $TMPDIR
 
 ## Define target datasets
 #target_dataset=("PFC_Zhu")
@@ -17,12 +9,27 @@ cp ./scripts/eclare_scripts/eclare_run.py ./scripts/eclare_scripts/eclare_dev_st
 #clip_job_id='18175628'
 #ordinal_job_id='21125926'
 
-target_dataset=("PFC_V1_Wang")
-genes_by_peaks_str=("9914_by_63404")
-clip_job_id='20194800'
-ordinal_job_id='21141050'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
+target_dataset=("Cortex_Velmeshev")
+genes_by_peaks_str=("9584_by_66620")
+clip_job_id='16155618'
+ordinal_job_id='01134633'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
+target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
 
-total_epochs=100
+#target_dataset=("MDD")
+#genes_by_peaks_str=("17563_by_100000")
+#clip_job_id='18093416'
+#ordinal_job_id='17144224'  # not really needed for KD_CLIP, since no teacher weights, although weights still logged
+#target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
+
+total_epochs=10
+
+## Make new sub-directory for current job ID and assign to "TMPDIR" variable
+JOB_ID=$(date +%d%H%M%S)  # very small chance of collision
+mkdir -p ${OUTPATH}/eclare_${target_dataset_lowercase}_${JOB_ID}
+TMPDIR=${OUTPATH}/eclare_${target_dataset_lowercase}_${JOB_ID}
+ 
+## Copy scripts to sub-directory for reproducibility
+cp ./scripts/eclare_scripts/eclare_run.py ./scripts/eclare_scripts/eclare_dev_stages.sh $TMPDIR
 
 ## Define number of parallel tasks to run (replace with desired number of cores)
 #N_CORES=6
@@ -88,12 +95,11 @@ run_eclare_task_on_gpu() {
     --outdir $TMPDIR/$target_dataset/$source_dataset/$task_idx \
     --replicate_idx=$task_idx \
     --clip_job_id=$clip_job_id \
-    --ordinal_job_id=$ordinal_job_id \
     --experiment_job_id=$experiment_job_id \
     --target_dataset=$target_dataset \
     --genes_by_peaks_str=$genes_by_peaks_str \
     --total_epochs=$total_epochs \
-    --batch_size=200 \
+    --batch_size=800 \
     --feature="'$feature'"
     #--tune_hyperparameters \
     #--total_epochs=10 \
@@ -104,7 +110,7 @@ run_eclare_task_on_gpu() {
 ## Create experiment ID (or detect if it already exists)
 python -c "
 from src.eclare.run_utils import get_or_create_experiment; 
-experiment = get_or_create_experiment('clip_${clip_job_id}')
+experiment = get_or_create_experiment('clip_${target_dataset_lowercase}_${clip_job_id}')
 experiment_id = experiment.experiment_id
 print(experiment_id)
 
