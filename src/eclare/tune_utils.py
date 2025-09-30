@@ -24,7 +24,7 @@ def study_summary(study):
         print("    {}: {}".format(key, value))
 
 
-def Optuna_propose_hyperparameters(trial, suggested_hyperparameters, override_with_default=['teacher_temperature']):
+def Optuna_propose_hyperparameters(trial, suggested_hyperparameters, override_with_default=None):
     """
     Objective function for Optuna hyperparameter tuning.
     """
@@ -33,7 +33,7 @@ def Optuna_propose_hyperparameters(trial, suggested_hyperparameters, override_wi
         param_name: trial._suggest(param_name, param_info['suggest_distribution'])
         for param_name, param_info in suggested_hyperparameters.items()
     }
-
+    print('Overriding with default hyperparameters: ', override_with_default)
     for param_name in override_with_default:
         tuned_hyperparameters[param_name] = suggested_hyperparameters[param_name]['default']
 
@@ -76,7 +76,11 @@ def tune_CLIP(args, experiment_id, run_args):
     def run_CLIP_wrapper(trial, run_args):
         with mlflow.start_run(experiment_id=experiment_id, run_name=f'Trial {trial.number}', nested=True):
 
-            params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
+            params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters,
+                override_with_default=[
+                    'dropout_p', 'teacher_temperature', 'student_temperature', 'weights_temperature', 'decoder_loss'
+                    ])
+            
             run_args['trial'] = trial
 
             mlflow.log_params(params)
@@ -118,7 +122,10 @@ def tune_ECLARE(args, experiment_id, run_args, device):
     def run_CLIP_wrapper(trial, run_args):
         with mlflow.start_run(experiment_id=experiment_id, run_name=f'Trial {trial.number}', nested=True):
 
-            params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters)
+            params = Optuna_propose_hyperparameters(trial, suggested_hyperparameters=suggested_hyperparameters,
+                override_with_default=[
+                    'dropout_p', 'teacher_temperature', 'student_temperature', 'weights_temperature', 'decoder_loss', 'num_layers'
+                    ])
             run_args['trial'] = trial
 
             mlflow.log_params(params)

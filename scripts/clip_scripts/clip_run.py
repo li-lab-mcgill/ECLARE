@@ -84,12 +84,13 @@ if __name__ == "__main__":
             source_setup_func(args, return_type='loaders', keep_group=[args.keep_group])
 
         args_tmp = deepcopy(args)
-        args_tmp.target_dataset = None
+        #args_tmp.target_dataset = None
 
         _, _, _, _, _, target_rna_valid_loader, target_atac_valid_loader, target_atac_valid_num_batches, target_atac_valid_n_batches_str_length, target_atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, _ =\
             target_setup_func(args_tmp, return_type='loaders', keep_group=['']) # keep_group=[''] to keep all subjects
 
     else:
+
         ## get data loaders
         rna_train_loader, atac_train_loader, atac_train_num_batches, atac_train_n_batches_str_length, atac_train_n_epochs_str_length, rna_valid_loader, atac_valid_loader, atac_valid_num_batches, atac_valid_n_batches_str_length, atac_valid_n_epochs_str_length, n_peaks, n_genes, atac_valid_idx, rna_valid_idx, genes_to_peaks_binary_mask = \
             source_setup_func(args, return_type='loaders')
@@ -238,6 +239,29 @@ if __name__ == "__main__":
             umap_figure.savefig(os.path.join(args.outdir, 'source_umap_embeddings.png'))
             mlflow.log_figure(umap_figure, 'source_umap_embeddings.png')
 
+
+            ## create umap embeddings for target dataset
+            target_rna_cells, target_rna_labels, target_rna_batches = fetch_data_from_loader_light(target_rna_valid_loader, subsample=args.valid_subsample, shuffle=False)
+            target_atac_cells, target_atac_labels, target_atac_batches = fetch_data_from_loader_light(target_atac_valid_loader, subsample=args.valid_subsample, shuffle=False)
+            
+            rna_latents, _ = model(target_rna_cells.to(device), modality=0)
+            atac_latents, _ = model(target_atac_cells.to(device), modality=1)
+            
+            rna_latents = rna_latents.detach().cpu().numpy()
+            atac_latents = atac_latents.detach().cpu().numpy()
+            
+            color_map_ct = create_celltype_palette(target_rna_labels, target_atac_labels, plot_color_palette=False)
+            
+            rna_condition = ['nan'] * len(target_rna_labels)
+            atac_condition = ['nan'] * len(target_atac_labels)
+            
+            umap_embedding, umap_figure, _ = plot_umap_embeddings(
+                rna_latents, atac_latents, target_rna_labels, target_atac_labels, rna_condition, atac_condition, color_map_ct, umap_embedding=None
+            )
+            umap_figure.suptitle(f'UMAP embeddings of CLIP model (target: {args.target_dataset}) based on {args.valid_subsample} cells')
+            umap_figure.savefig(os.path.join(args.outdir, 'target_umap_embeddings.png'))
+            mlflow.log_figure(umap_figure, 'target_umap_embeddings.png')
+            
             ## print output directory
             print('\n', args.outdir)
 

@@ -9,10 +9,10 @@ csv_file=${DATAPATH}/genes_by_peaks_str.csv
 ## Read the first column of the CSV to get dataset names (excludes MDD)
 datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
-source_datasets=("PFC_V1_Wang" "PFC_Zhu")
+source_datasets=("PFC_Zhu" "PFC_V1_Wang")
 
 ## Preset target dataset
-target_dataset="Cortex_Velmeshev"
+target_dataset="MDD"
 target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
 
 ## Make new sub-directory for current job ID and assign to "TMPDIR" variable
@@ -39,7 +39,7 @@ for i in $(seq 0 $((N_REPLICATES - 1))); do
 done
  
 ## Define total number of epochs
-total_epochs=10
+total_epochs=100
 
 ## Create a temporary file to store all the commands we want to run
 commands_file=$(mktemp)

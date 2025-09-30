@@ -37,7 +37,7 @@ unique_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 os.environ['outdir'] = os.path.join(os.environ['OUTPATH'], 'scJoint_data_tmp', unique_id, '')
 os.makedirs(os.path.join(os.environ['outdir']), exist_ok=True)
 
-# Remove ECLARE root after setting up environment variables
+# Remove ECLARE root after setting up environment variables, ensures that scJoint 'config' is prioritized over ECLARE 'config'
 while ECLARE_root in sys.path:
     sys.path.remove(ECLARE_root)
 
@@ -52,8 +52,11 @@ import process_db
 from torch import from_numpy
 from torch.cuda import is_available as cuda_available
 import scanpy as sc
+from glob import glob
+import pickle
 
 scjoint_datapath = os.path.join(os.environ['OUTPATH'], 'scJoint_data_tmp')
+
 def write_10X_h5(adata, file, cell_group, path=scjoint_datapath):
     """ https://github.com/scverse/anndata/issues/595
     
@@ -120,6 +123,8 @@ parser.add_argument('--genes_by_peaks_str', type=str, default='9584_by_66620',
                     help='genes by peaks string')
 parser.add_argument('--replicate_idx', type=int, default=0,
                     help='replicate index')
+parser.add_argument('--eclare_job_id', type=str, default=None,
+                    help='eclare job id')
 args = parser.parse_args()
 #args = parser.parse_known_args()[0]
 
@@ -132,13 +137,12 @@ if __name__ == '__main__':
     ## Convert to csc_matrix for proper indptr
     rna.X = csc_matrix(rna.layers['counts'])
     atac.X = csc_matrix(atac.layers['counts'])
-    #atac, rna = gene_activity_score_adata(atac, rna)
+
+    ## Get gene activity scores
     atac.var.rename(columns={'peak_og': 'interval'}, inplace=True)
     atac, rna = gene_activity_score_glue(atac, rna)
 
-    # Subsample RNA using stratified sampling based on Age_Range parameter
-    from sklearn.model_selection import StratifiedShuffleSplit
-
+    ## Script requires equal number of cells - Subsample RNA using stratified sampling based on Age_Range parameter
     rna_dev_groups = rna.obs['Age_Range'].to_list()
     n_cells = len(atac)
 
@@ -179,6 +183,37 @@ if __name__ == '__main__':
 
     config.batch_size = 10000
 
+    if args.eclare_job_id is not None:
+
+        ## get eclare valid cell ids, if eclare_job_id is provided
+        eclare_student_model_ids_path_str = f'eclare_*{args.eclare_job_id}/{args.source_dataset}/{args.replicate_idx}/valid_cell_ids.pkl'
+        eclare_student_model_ids_paths = glob(os.path.join(os.environ['OUTPATH'], eclare_student_model_ids_path_str))
+        assert len(eclare_student_model_ids_paths) > 0, f'Model IDs path not found @ {eclare_student_model_ids_path_str}'
+        with open(eclare_student_model_ids_paths[0], 'rb') as f:
+            valid_cell_ids = pickle.load(f)
+
+        valid_ids_rna = valid_cell_ids['valid_cell_ids_rna']
+        valid_ids_atac = valid_cell_ids['valid_cell_ids_atac']
+
+        ## find indices of valid cell ids in rna and atac
+        rna_bool_valid = rna.obs_names.isin(valid_ids_rna)
+        atac_bool_valid = atac.obs_names.isin(valid_ids_atac)
+
+        ## return indices of valid and train cell ids in rna and atac
+        rna_valid_idx = np.where(rna_bool_valid)[0]
+        atac_valid_idx = np.where(atac_bool_valid)[0]
+
+        rna_train_idx = np.where(~rna_bool_valid)[0]
+        atac_train_idx = np.where(~atac_bool_valid)[0]
+
+        ## set valid cell ids to config
+        config.rna_valid_idx = [rna_valid_idx]
+        config.atac_valid_idx = [atac_valid_idx]
+
+        config.rna_train_idx = [rna_train_idx]
+        config.atac_train_idx = [atac_train_idx]
+
+    ## train model
     model, index_dict = main.main(config)
 
     ## get indices, originally defined in Stage 1
@@ -197,7 +232,7 @@ if __name__ == '__main__':
     X = np.concatenate([rna_latents_valid, atac_latents_valid], axis=0)
     obs = pd.concat([rna.obs.iloc[rna_valid_idx], atac.obs.iloc[atac_valid_idx]], axis=0)
     adata_valid = sc.AnnData(X, obs=obs)
-    adata_valid.obs['modality'] = ['rna'] * len(rna.obs.iloc[rna_valid_idx]) + ['atac'] * len(atac.obs.iloc[atac_valid_idx])
+    adata_valid.obs['modality'] = ['RNA'] * len(rna.obs.iloc[rna_valid_idx]) + ['ATAC'] * len(atac.obs.iloc[atac_valid_idx])
     adata_valid.obs['Age_Range'] = pd.Categorical(adata_valid.obs['Age_Range'], categories=rna.obs['Age_Range'].cat.categories, ordered=True)
 
     ## umap
@@ -214,4 +249,5 @@ if __name__ == '__main__':
         if adata_valid.obs[col].dtype == 'object':
             adata_valid.obs[col] = adata_valid.obs[col].astype(str)
 
+    adata_valid.attrs = {'eclare_job_id': args.eclare_job_id}
     adata_valid.write_h5ad(os.path.join(os.environ['outdir'], 'scJoint_latents.h5ad'))

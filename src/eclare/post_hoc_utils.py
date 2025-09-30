@@ -1604,7 +1604,7 @@ def project_mdd_nuclei_into_latent_space(mdd_rna, mdd_atac, rna_sex_key, atac_se
     _, fig, rna_atac_df_umap = plot_umap_embeddings(eclare_rna_latents, eclare_atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=color_map_ct, umap_embedding=None)
     #plot_umap_embeddings(kd_clip_rna_latents, kd_clip_atac_latents, mdd_rna_celltypes, mdd_atac_celltypes, mdd_rna_condition, mdd_atac_condition, color_map_ct=color_map_ct, umap_embedding=None)
 
-def load_model_and_metadata(student_job_id, best_model_idx, device, target_dataset='MDD'):
+def load_model_and_metadata(student_job_id, best_model_idx, device, target_dataset='MDD', set_train=True):
 
     ## replace 'multiome' by '10x'
     best_model_idx = best_model_idx.replace('multiome', '10x')
@@ -1630,6 +1630,9 @@ def load_model_and_metadata(student_job_id, best_model_idx, device, target_datas
     model_uri = f"file://{model_dir}"
     student_model = mlflow.pytorch.load_model(model_uri, map_location=device)
     student_model_metadata = Model.load(model_dir)
+
+    if set_train:
+        student_model.train()
 
     #student_model = mlflow.pytorch.load_model(model_uri)
     #student_model_metadata = Model.load(model_uri)

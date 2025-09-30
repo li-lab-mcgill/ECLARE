@@ -164,12 +164,17 @@ class PrepareDataloader():
         train_rna_loaders = []
         test_rna_loaders = []
 
-        for rna_path, label_path in zip(config.rna_paths, config.rna_labels):  
+        for d, (rna_path, label_path) in enumerate(zip(config.rna_paths, config.rna_labels)):  
             data_reader, labels, _ = read_from_file(rna_path, label_path)
 
-            train_len = data_reader.shape[0] - config.valid_subsample
-            valid_len =  config.valid_subsample
-            rna_train_idx, rna_valid_idx = next(StratifiedShuffleSplit(n_splits=1, train_size=train_len, test_size=valid_len, random_state=42).split(X=np.empty(data_reader.shape[0]), y=labels))
+            if config.rna_valid_idx is not None:
+                rna_valid_idx = config.rna_valid_idx[d]
+                rna_train_idx = config.rna_train_idx[d]
+
+            else:
+                train_len = data_reader.shape[0] - config.valid_subsample
+                valid_len =  config.valid_subsample
+                rna_train_idx, rna_valid_idx = next(StratifiedShuffleSplit(n_splits=1, train_size=train_len, test_size=valid_len, random_state=42).split(X=np.empty(data_reader.shape[0]), y=labels))
 
             # train loader 
             #trainset = Dataloader(True, data_reader, labels)
@@ -196,10 +201,15 @@ class PrepareDataloader():
             #trainset = DataloaderWithoutLabel(True, data_reader)
             self.num_of_atac += data_reader.shape[0]
 
-            train_len = data_reader.shape[0] - config.valid_subsample
-            valid_len = config.valid_subsample
-            atac_train_idx, atac_valid_idx = next(StratifiedShuffleSplit(n_splits=1, train_size=train_len, test_size=valid_len, random_state=42).split(X=np.empty(data_reader.shape[0]), y=atac_labels))
-            
+            if config.atac_valid_idx is not None:
+                atac_valid_idx = config.atac_valid_idx[d]
+                atac_train_idx = config.atac_train_idx[d]
+
+            else:
+                train_len = data_reader.shape[0] - config.valid_subsample
+                valid_len = config.valid_subsample
+                atac_train_idx, atac_valid_idx = next(StratifiedShuffleSplit(n_splits=1, train_size=train_len, test_size=valid_len, random_state=42).split(X=np.empty(data_reader.shape[0]), y=atac_labels))
+                
             #trainloader = torch.utils.data.DataLoader(trainset, batch_size=config.batch_size, shuffle=True, **kwargs)                        
             data_reader_ad_train = AnnData(data_reader[atac_train_idx])
             trainloader = AnnLoader(data_reader_ad_train, use_cuda=torch.cuda.is_available(), batch_size=config.batch_size, shuffle=True, collate_fn=collate_fn_binarize)
