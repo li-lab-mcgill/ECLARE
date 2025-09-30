@@ -30,20 +30,21 @@ n_cudas = torch.cuda.device_count()
 device = 'cpu'
 
 ## Define target and source datasets
-#target_dataset = 'Cortex_Velmeshev'
-#genes_by_peaks_str = '9584_by_66620'
-#source_datasets = ['FirstTrim', 'SecTrim', 'ThirdTrim', 'Inf', 'Adol']
-target_dataset = 'MDD'
-genes_by_peaks_str = '6816_by_55284'
-source_datasets = ['PFC_Zhu']
-subsample = 25000
+target_dataset = 'Cortex_Velmeshev'
+genes_by_peaks_str = '9584_by_66620'
+source_datasets = ['PFC_V1_Wang', 'PFC_Zhu']
+
+#target_dataset = 'MDD'
+#genes_by_peaks_str = '6816_by_55284'
+#source_datasets = ['PFC_Zhu']
+#subsample = 25000
 
 ## Create dict for methods and job_ids
 methods_id_dict = {
-    'clip': '21164436',
-    'kd_clip': '24112954',
-    'eclare': ['22105844'],
-    'ordinal': '22130216',
+    'clip': '25165730',
+    'kd_clip': '25173640',
+    'eclare': ['09123817'],
+    'ordinal': '25195201',
 }
 
 ## define search strings
@@ -134,8 +135,8 @@ for source_dataset in source_datasets:
 student_setup_func = return_setup_func_from_dataset(target_dataset)
 
 args = SimpleNamespace(
-    source_dataset=source_datasets[0], # target_dataset,
-    target_dataset=target_dataset,#None,
+    source_dataset=target_dataset, #source_datasets[0]
+    target_dataset=None, #target_dataset
     genes_by_peaks_str=genes_by_peaks_str,
     ignore_sources=[None],
     source_dataset_embedder=None,
@@ -423,11 +424,16 @@ if ordinal_source_dataset == target_dataset:
     ordinal_rna_prebias_sub = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents_sub)
     ordinal_atac_prebias_sub = ordinal_model.ordinal_layer_atac.coral_weights(ordinal_atac_latents_sub)
 
-    ordinal_rna_pt_sub = torch.from_numpy(match_histograms(ordinal_rna_prebias_sub.detach().cpu().numpy().flatten(), student_rna_sub.obs[dev_group_key].values))
-    ordinal_atac_pt_sub = torch.from_numpy(match_histograms(ordinal_atac_prebias_sub.detach().cpu().numpy().flatten(), student_atac_sub.obs[dev_group_key].values))
+    if target_dataset == 'MDD':
+        ordinal_rna_pt_sub = torch.from_numpy(match_histograms(ordinal_rna_prebias_sub.detach().cpu().numpy().flatten(), student_rna_sub.obs[dev_group_key].values))
+        ordinal_atac_pt_sub = torch.from_numpy(match_histograms(ordinal_atac_prebias_sub.detach().cpu().numpy().flatten(), student_atac_sub.obs[dev_group_key].values))
 
-    #ordinal_rna_pt_sub = torch.sigmoid(ordinal_rna_prebias_sub / ordinal_rna_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
-    #ordinal_atac_pt_sub = torch.sigmoid(ordinal_atac_prebias_sub / ordinal_atac_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+    elif target_dataset == 'Cortex_Velmeshev':
+        ordinal_rna_pt_sub = torch.sigmoid(ordinal_rna_prebias_sub / ordinal_rna_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+        ordinal_atac_pt_sub = torch.sigmoid(ordinal_atac_prebias_sub / ordinal_atac_logits_sub.var().pow(0.5)).flatten().detach().cpu().numpy()
+
+    else:
+        raise ValueError(f'Target dataset {target_dataset} not supported')
 
     #ordinal_rna_pt_sub = torch.from_numpy(quantile_transform(ordinal_rna_prebias_sub.detach().cpu().numpy(), output_distribution='uniform'))
     #ordinal_atac_pt_sub = torch.from_numpy(quantile_transform(ordinal_atac_prebias_sub.detach().cpu().numpy(), output_distribution='uniform'))
@@ -491,9 +497,9 @@ from scipy.stats import pearsonr, spearmanr, kendalltau
 def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage'):
 
     ## graph construction
-    sc.pp.pca(adata, n_comps=50)
-    sc.pp.neighbors(adata, n_neighbors=50, n_pcs=30, use_rep='X_pca', random_state=0)
-    sc.tl.leiden(adata, resolution=1)
+    sc.pp.pca(adata)
+    sc.pp.neighbors(adata)
+    sc.tl.leiden(adata)
 
     ## check for imbalanced clusters
     imb = adata.obs.groupby('leiden')['modality'].agg(
@@ -517,11 +523,14 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage'):
 
     if ('sub_cell_type' in adata.obs.columns) and ('velmeshev_pseudotime' in adata.obs.columns):
         color += ['sub_cell_type', 'velmeshev_pseudotime']
-    if ('Age' in adata.obs.columns) and (dev_group_key != 'Age'):
-        color += ['Age']
-        adata.obs['Age'] = adata.obs['Age'].astype(float)
-    elif dev_group_key != 'Age':
-        adata.obs['Age'] = adata.obs['Age'].astype(float)
+    #if ('Age' in adata.obs.columns) and (dev_group_key != 'Age'):
+    #    color += ['Age']
+    #    adata.obs['Age'] = adata.obs['Age'].astype(float)
+    #elif dev_group_key != 'Age':
+    #    adata.obs['Age'] = adata.obs['Age'].astype(float)
+
+    colors_uns_keys = [key for key in list(adata.uns.keys()) if '_colors' in key]
+    for key in colors_uns_keys: del adata.uns[key]
 
     sc.pl.umap(adata, color=color, ncols=3, wspace=0.5)
 
@@ -893,8 +902,8 @@ def hac_weighted_mean_test(df, path, direction='case_more_control'):
 
 #%% run PAGA
 print('ECLARE'); subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata, dev_group_key='Sex', cell_group_key=cell_group)
-#print('scJoint'); scJoint_adata = paga_analysis(scJoint_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
-#print('scGLUE'); glue_adata = paga_analysis(glue_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
+print('scJoint'); scJoint_adata = paga_analysis(scJoint_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
+print('scGLUE'); glue_adata = paga_analysis(glue_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
 
 for source_dataset in source_datasets:
     print(f'KD-CLIP {source_dataset}'); subsampled_kd_clip_adatas[source_dataset] = paga_analysis(subsampled_kd_clip_adatas[source_dataset], dev_group_key='Sex', cell_group_key=cell_group)
@@ -1201,10 +1210,8 @@ sns.barplot(data=most_common_cluster_proportions.reset_index(), x='most_common_c
 plt.xticks(rotation=30)
 
 
-#%%
+#%% Perform t-test between Condition for each ClustersMapped
 import scipy.stats as stats
-
-# Perform t-test between Condition for each ClustersMapped
 # Assumes 'subsampled_eclare_adata' is the AnnData object of interest
 
 clusters = subsampled_eclare_adata.obs['ClustersMapped'].unique()
@@ -1598,6 +1605,16 @@ for source_dataset in source_datasets:
 
     cast_object_columns_to_str(subsampled_clip_adatas[source_dataset])
     subsampled_clip_adatas[source_dataset].write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_clip_adatas_{source_dataset}.h5ad'))
+
+#%% load adatas
+
+subsampled_eclare_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata.h5ad'))
+scJoint_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'scJoint_adata.h5ad'))
+glue_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'glue_adata.h5ad'))
+
+for source_dataset in source_datasets:
+    subsampled_kd_clip_adatas[source_dataset] = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_kd_clip_adatas_{source_dataset}.h5ad'))
+    subsampled_clip_adatas[source_dataset] = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_clip_adatas_{source_dataset}.h5ad'))
 
 #%% create PHATE embeddings
 import phate
