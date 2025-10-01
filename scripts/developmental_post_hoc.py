@@ -487,11 +487,12 @@ valid_ids = set(subsampled_eclare_adata.obs_names) & set(glue_adata.obs_names) &
 ## keep only overlapping cells
 subsampled_eclare_adata = subsampled_eclare_adata[subsampled_eclare_adata.obs_names.isin(valid_ids)]
 
+scJoint_adata = scJoint_adata[scJoint_adata.obs_names.isin(valid_ids)]
+glue_adata = glue_adata[glue_adata.obs_names.isin(valid_ids)]
+
 for source_dataset in source_datasets:
     subsampled_kd_clip_adatas[source_dataset] = subsampled_kd_clip_adatas[source_dataset][subsampled_kd_clip_adatas[source_dataset].obs_names.isin(valid_ids)]
 
-scJoint_adata = scJoint_adata[scJoint_adata.obs_names.isin(valid_ids)]
-glue_adata = glue_adata[glue_adata.obs_names.isin(valid_ids)]
 
 #%% PAGA
 ## install scib from github, see scib documentation for details
@@ -622,16 +623,20 @@ def trajectory_metrics(adata, modality=None):
     ], axis=1)
     metrics_adata.columns = ['pearson', 'spearman', 'kendall']
 
+    ## perform Leiden again, weith lower resolution
+    res = 0.25
+    sc.tl.leiden(adata, resolution=res, key_added=f'leiden_res{res}')
+
     ## integration metrics
     lineage_clisi = clisi_graph(adata, label_key='Lineage', type_='knn', scale=True, n_cores=1)
     modality_ilisi = ilisi_graph(adata, batch_key='modality', type_='knn', scale=True, n_cores=1)
-    lineage_nmi = nmi(adata[adata.obs['modality'] == 'RNA'], cluster_key='leiden', label_key='sub_cell_type')
-    lineage_ari = ari(adata[adata.obs['modality'] == 'RNA'], cluster_key='leiden', label_key='sub_cell_type')
-    age_range_nmi = nmi(adata, cluster_key='leiden', label_key='Age_Range')
-    age_range_ari = ari(adata, cluster_key='leiden', label_key='Age_Range')
+    lineage_nmi = nmi(adata, cluster_key=f'leiden_res{res}', label_key='sub_cell_type')
+    lineage_ari = ari(adata, cluster_key=f'leiden_res{res}', label_key='sub_cell_type')
+    age_range_nmi = nmi(adata, cluster_key=f'leiden_res{res}', label_key='Age_Range')
+    age_range_ari = ari(adata, cluster_key=f'leiden_res{res}', label_key='Age_Range')
     integration_adata = pd.DataFrame(
         np.stack([lineage_clisi, modality_ilisi, lineage_nmi, lineage_ari, age_range_nmi, age_range_ari])[None],
-        columns=['lineage_clisi', 'modality_ilisi', 'ct_rna_nmi', 'ct_rna_ari', 'age_range_nmi', 'age_range_ari'])
+        columns=['lineage_clisi', 'modality_ilisi', 'ct_nmi', 'ct_ari', 'age_range_nmi', 'age_range_ari'])
 
     return metrics_adata, integration_adata
 
@@ -687,7 +692,7 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
         plt.ylabel(f'{corr_type} corr.')
 
         # Move legend to the right of the figure
-        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), title='Method')
+        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), title='Method', frameon=True, edgecolor='black')
         plt.tight_layout(rect=[0, 0, 0.8, 1])  # leave space for legend
 
     if suptitle:
@@ -697,7 +702,7 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
 
     return metrics_df, fig
 
-def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_columns=['lineage_clisi']):
+def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_columns=None):
 
     integration_df = pd.concat(integration_dfs, axis=0)
     integration_df.index = methods_list
@@ -708,16 +713,60 @@ def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_c
     integration_df_melted = integration_df.reset_index().melt(id_vars=['index'], var_name='method', value_name='score')
     integration_df_melted.rename(columns={'index': 'method', 'method': 'metric'}, inplace=True)
 
-    plt.figure(figsize=(9, 5))
-    ax = sns.barplot(data=integration_df_melted, x='metric', y='score', hue='method')
-    for label in ax.get_xticklabels():
-        label.set_rotation(30)
-    plt.suptitle(suptitle)
-    plt.tight_layout(rect=[0, 0, 0.8, 1])  # leave space for legend
-    # Place legend outside the main figure
-    ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), title='Method')
+    integration_df_melted.replace({
+        'lineage_clisi': 'cLISI - lineage',
+        'modality_ilisi': 'iLISI - modality',
+        'ct_nmi': 'NMI - cell type',
+        'ct_ari': 'ARI - cell type',
+        'age_range_nmi': 'NMI - age range',
+        'age_range_ari': 'ARI - age range',
+        }, inplace=True)
 
-    return integration_df
+    # Create catplot which returns a FacetGrid
+    g = sns.catplot(
+        data=integration_df_melted,
+        palette='Set2',
+        aspect=0.6,
+        edgecolor='.5',
+        y='score',
+        hue='method',
+        col='metric',
+        kind='bar',
+        sharex=False,
+        sharey=False
+    )
+
+    # Set the same number of evenly spaced yticklabels for each subplot,
+    # and ensure the last yticklabel is a multiple of 0.10 for each subplot
+    n_yticks = 5  # or choose another number as appropriate
+    for ax in g.axes.flat:
+        if ax is not None:
+            y_min, y_max = ax.get_ylim()
+            # Find the next highest multiple of 0.10 for the top ytick
+            y_max_mult010 = np.ceil(y_max * 10) / 10
+            if y_max_mult010 < y_max:
+                y_max_mult010 += 0.10
+            # Now generate evenly spaced ticks from y_min to y_max_mult010
+            yticks = np.linspace(y_min, y_max_mult010, n_yticks)
+            ax.set_yticks(yticks)
+            ax.set_yticklabels([f"{y:.2f}" for y in yticks])
+            # Get the metric name from the subplot title or column
+            metric_name = ax.get_title().split(' = ')[-1] if ' = ' in ax.get_title() else ax.get_title()
+            ax.set_xticklabels([metric_name])
+            ax.set_xlabel('')  # Remove the default x-label
+            ax.set_title('')
+
+    plt.suptitle(suptitle)
+    plt.tight_layout(rect=[0, 0, 0.85, 1])  # leave space for legend
+
+    # Add box around legend, like for corrs plots
+    legend = g._legend
+    if legend is not None:
+        legend.set_frame_on(True)
+        legend.get_frame().set_edgecolor('black')
+        legend.get_frame().set_linewidth(1.0)
+
+    return integration_df, g.fig
 
 from scipy import sparse
 
@@ -1469,7 +1518,7 @@ scJoint_metrics, scJoint_integration = trajectory_metrics(scJoint_adata)
 glue_metrics, glue_integration = trajectory_metrics(glue_adata)
 
 sub_eclare_metrics_fig, sub_eclare_metrics_fig = trajectory_metrics_all([sub_eclare_metrics, scJoint_metrics, glue_metrics], methods_list, suptitle=None)
-_ = integration_metrics_all([sub_eclare_integration, scJoint_integration, glue_integration], methods_list, suptitle='Multi-modal')
+_, integration_fig = integration_metrics_all([sub_eclare_integration, scJoint_integration, glue_integration], methods_list, suptitle=None, drop_columns=['ct_ari', 'age_range_ari'])
 
 ## multimodal - ECLARE vs KD-CLIP vs CLIP
 methods_list = ['ECLARE'] + [f'KD-CLIP_{source_dataset}' for source_dataset in source_datasets] + [f'CLIP_{source_dataset}' for source_dataset in source_datasets]  
@@ -1492,9 +1541,10 @@ for source_dataset in source_datasets:
 _ = trajectory_metrics_all([sub_eclare_metrics, *kd_clip_metrics.values(), *clip_metrics.values()], methods_list, suptitle=None)
 _ = integration_metrics_all([sub_eclare_integration, *kd_clip_integration.values(), *clip_integration.values()], methods_list, suptitle='Multi-modal')
 
-def dev_fig2(sub_eclare_metrics_fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig2.svg')):
+def dev_fig2(corrs_fig, scib_fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results')):
     print(f'Saving figure to {manuscript_figpath}')
-    sub_eclare_metrics_fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    corrs_fig.savefig(os.path.join(manuscript_figpath, 'dev_fig2_corrs.svg'), bbox_inches='tight', dpi=300)
+    scib_fig.savefig(os.path.join(manuscript_figpath, 'dev_fig2_scib.svg'), bbox_inches='tight', dpi=300)
 
 '''
 ## RNA
