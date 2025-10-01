@@ -33,6 +33,7 @@ device = 'cpu'
 target_dataset = 'Cortex_Velmeshev'
 genes_by_peaks_str = '9584_by_66620'
 source_datasets = ['PFC_V1_Wang', 'PFC_Zhu']
+subsample = 5000
 
 #target_dataset = 'MDD'
 #genes_by_peaks_str = '6816_by_55284'
@@ -498,12 +499,21 @@ from scib.metrics.lisi import clisi_graph, ilisi_graph
 from scib.metrics import nmi, ari
 from scipy.stats import pearsonr, spearmanr, kendalltau
 
-def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', correct_imbalance=False):
+def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', correct_imbalance=False, random_seed=0):
+    # Set random seed for reproducibility
+    import random
+    np.random.seed(random_seed)
+    random.seed(random_seed)
+    try:
+        import torch
+        torch.manual_seed(random_seed)
+    except ImportError:
+        pass
 
     ## graph construction
     sc.pp.pca(adata)
-    sc.pp.neighbors(adata, n_neighbors=15)
-    sc.tl.leiden(adata)
+    sc.pp.neighbors(adata, n_neighbors=15, random_state=random_seed)
+    sc.tl.leiden(adata, random_state=random_seed)
 
     if correct_imbalance:        
         ## check for imbalanced clusters
@@ -519,13 +529,13 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
         keep_leidens = imb[imb['entropy'] > 0.25].index.tolist()
         adata = adata[adata.obs['leiden'].isin(keep_leidens)]
 
-        #sc.pp.pca(adata)
-        #sc.pp.neighbors(adata, n_neighbors=15)
-        #sc.tl.leiden(adata)
+        sc.pp.pca(adata)
+        sc.pp.neighbors(adata, n_neighbors=15, random_state=random_seed)
+        sc.tl.leiden(adata, random_state=random_seed)
 
     ## UMAP
     if 'X_umap' not in adata.obsm:
-        sc.tl.umap(adata)
+        sc.tl.umap(adata, random_state=random_seed)
     #sc.pl.umap(adata, color='leiden')
 
     color = ['modality', cell_group_key, 'ordinal_pseudotime', dev_group_key]
@@ -548,7 +558,7 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
     sc.pl.paga(adata, color=["leiden", "modality", cell_group_key, "ordinal_pseudotime"])
 
     ## Graph based on PAGA
-    sc.tl.draw_graph(adata, init_pos='paga')
+    sc.tl.draw_graph(adata, init_pos='paga', random_state=random_seed)
 
     ## Pseudotime with DPT
 
@@ -625,7 +635,7 @@ def trajectory_metrics(adata, modality=None):
 
     return metrics_adata, integration_adata
 
-def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metrics=['pearson']):
+def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metrics=['pearson', 'kendall']):
 
     metrics_df = pd.concat([df.T.stack().to_frame() for df in metrics_dfs], axis=1)
     metrics_df.columns = methods_list
@@ -636,26 +646,56 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
     metrics_df_melted = metrics_df.reset_index().melt(id_vars=['level_0', 'level_1'], var_name='method', value_name='correlation')
     metrics_df_melted = metrics_df_melted.rename(columns={'level_0': 'metric', 'level_1': 'reference'})
 
-    g = sns.catplot(
-        data=metrics_df_melted,
-        x='reference',
-        y='correlation',
-        col='metric',
-        hue='method',
-        kind='bar',
-        height=5,
-        aspect=.75
-    )
-    for ax in g.axes.flat:
-        for label in ax.get_xticklabels():
-            label.set_rotation(30)
+    ## rename reference variables
+    metrics_df_melted['reference'] = metrics_df_melted['reference'].replace({
+        'ordinal_pseudotime': 'ordinal pseud.',
+        'Age_Range': 'age range',
+    })
+
+    if metrics_df_melted['metric'].nunique() > 1:
+
+        g = sns.catplot(
+            data=metrics_df_melted,
+            x='reference',
+            y='correlation',
+            col='metric',
+            hue='method',
+            kind='bar',
+            height=5,
+            aspect=.75
+        )
+        for ax in g.axes.flat:
+            for label in ax.get_xticklabels():
+                label.set_rotation(30)
+
+    elif metrics_df_melted['metric'].nunique() == 1:
+
+        corr_type = metrics_df_melted['metric'].unique().item()
+
+        fig, ax = plt.subplots(figsize=(3, 3))
+        ax = sns.barplot(
+            data=metrics_df_melted,
+            x='reference',
+            y='correlation',
+            hue='method',
+            palette='Set2',
+            linewidth=2, edgecolor='.5',
+            ax=ax
+        )
+        plt.xticks(rotation=20)
+        plt.xlabel('reference variable')
+        plt.ylabel(f'{corr_type} corr.')
+
+        # Move legend to the right of the figure
+        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), title='Method')
+        plt.tight_layout(rect=[0, 0, 0.8, 1])  # leave space for legend
 
     if suptitle:
         plt.suptitle(suptitle)
 
     #plt.tight_layout()
 
-    return metrics_df
+    return metrics_df, fig
 
 def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_columns=['lineage_clisi']):
 
@@ -1428,8 +1468,8 @@ sub_eclare_metrics, sub_eclare_integration = trajectory_metrics(subsampled_eclar
 scJoint_metrics, scJoint_integration = trajectory_metrics(scJoint_adata)
 glue_metrics, glue_integration = trajectory_metrics(glue_adata)
 
-trajectory_metrics_all([sub_eclare_metrics, scJoint_metrics, glue_metrics], methods_list, suptitle=None)
-integration_metrics_all([sub_eclare_integration, scJoint_integration, glue_integration], methods_list, suptitle='Multi-modal')
+sub_eclare_metrics_fig, sub_eclare_metrics_fig = trajectory_metrics_all([sub_eclare_metrics, scJoint_metrics, glue_metrics], methods_list, suptitle=None)
+_ = integration_metrics_all([sub_eclare_integration, scJoint_integration, glue_integration], methods_list, suptitle='Multi-modal')
 
 ## multimodal - ECLARE vs KD-CLIP vs CLIP
 methods_list = ['ECLARE'] + [f'KD-CLIP_{source_dataset}' for source_dataset in source_datasets] + [f'CLIP_{source_dataset}' for source_dataset in source_datasets]  
@@ -1449,8 +1489,12 @@ for source_dataset in source_datasets:
     clip_metrics[source_dataset] = subsampled_clip_metrics
     clip_integration[source_dataset] = subsampled_clip_integration
 
-trajectory_metrics_all([sub_eclare_metrics, *kd_clip_metrics.values(), *clip_metrics.values()], methods_list, suptitle=None)
-integration_metrics_all([sub_eclare_integration, *kd_clip_integration.values(), *clip_integration.values()], methods_list, suptitle='Multi-modal')
+_ = trajectory_metrics_all([sub_eclare_metrics, *kd_clip_metrics.values(), *clip_metrics.values()], methods_list, suptitle=None)
+_ = integration_metrics_all([sub_eclare_integration, *kd_clip_integration.values(), *clip_integration.values()], methods_list, suptitle='Multi-modal')
+
+def dev_fig2(sub_eclare_metrics_fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig2.svg')):
+    print(f'Saving figure to {manuscript_figpath}')
+    sub_eclare_metrics_fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
 
 '''
 ## RNA
@@ -1750,38 +1794,3 @@ dev_stages_atac = [dev_stage for dev_stage in dev_stages if dev_stage in student
 student_atac_sub.obs[dev_group_key] = student_atac_sub.obs[dev_group_key].cat.reorder_categories(dev_stages_atac, ordered=True)
 sc.pl.embedding(student_atac_sub, basis='X_umap_retrained', color=dev_group_key, palette=cmap_dev, sort_order=True)
 
-#%% project select ATAC and RNA latents through UMAP
-
-student_atac_latents_umap = umap_embedder.transform(student_atac_latents.detach().cpu().numpy())
-student_rna_latents_umap = umap_embedder.transform(student_rna_latents.detach().cpu().numpy())
-
-dev_rna = student_rna_keep.obs[dev_group_key].values
-dev_atac = student_atac_keep.obs[dev_group_key].values
-
-ct_rna = student_rna_keep.obs[cell_group].values
-ct_atac = student_atac_keep.obs[cell_group].values
-
-mod_atac = ['ATAC'] * len(student_atac_latents)
-
-student_latents_umap = np.concatenate([student_rna_latents_umap, student_atac_latents_umap], axis=0)
-dev = np.concatenate([dev_rna, dev_atac])
-ct = np.concatenate([ct_rna, ct_atac])
-modality = np.concatenate([['RNA'] * len(student_rna_latents), ['ATAC'] * len(student_atac_latents)])
-cmap_mod = { 'RNA': 'tab:blue', 'ATAC': 'tab:orange' }
-
-fig, ax = plt.subplots(2, 3, figsize=(15, 10))
-
-sns.scatterplot(x=student_atac_latents_umap[:, 0], y=student_atac_latents_umap[:, 1], hue=dev_atac, palette=cmap_dev, marker='.', hue_order=dev_stages, ax=ax[0,0])
-sns.scatterplot(x=student_latents_umap[:, 0], y=student_latents_umap[:, 1], hue=dev, palette=cmap_dev, marker='.', hue_order=dev_stages, ax=ax[1,0])
-ax[0,0].set_title('ATAC'); ax[1,0].set_title('ATAC & RNA')
-ax[0,0].xaxis.set_visible(False); ax[0,0].yaxis.set_visible(False); ax[1,0].xaxis.set_visible(False); ax[1,0].yaxis.set_visible(False)
-
-sns.scatterplot(x=student_atac_latents_umap[:, 0], y=student_atac_latents_umap[:, 1], hue=ct_atac, palette=cmap_ct, marker='.', ax=ax[0,1])
-sns.scatterplot(x=student_latents_umap[:, 0], y=student_latents_umap[:, 1], hue=ct, palette=cmap_ct, marker='.', ax=ax[1,1])
-ax[0,1].set_title('ATAC'); ax[1,1].set_title('ATAC & RNA')
-ax[0,1].xaxis.set_visible(False); ax[0,1].yaxis.set_visible(False); ax[1,1].xaxis.set_visible(False); ax[1,1].yaxis.set_visible(False)
-
-sns.scatterplot(x=student_atac_latents_umap[:, 0], y=student_atac_latents_umap[:, 1], hue=mod_atac, palette=cmap_mod, marker='.', ax=ax[0,2])
-sns.scatterplot(x=student_latents_umap[:, 0], y=student_latents_umap[:, 1], hue=modality, palette=cmap_mod, marker='.', ax=ax[1,2])
-ax[0,2].set_title('ATAC'); ax[1,2].set_title('ATAC & RNA')
-ax[0,2].xaxis.set_visible(False); ax[0,2].yaxis.set_visible(False); ax[1,2].xaxis.set_visible(False); ax[1,2].yaxis.set_visible(False)
