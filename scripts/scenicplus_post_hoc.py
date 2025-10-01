@@ -9,7 +9,7 @@ various downstream analyses including scoring, visualization, and export.
 Author: Generated for SCENIC+ downstream analysis
 Date: 2024
 """
-
+#%%
 import pandas as pd
 import numpy as np
 import warnings
@@ -32,6 +32,9 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import anndata as ad
 import pickle
+
+import scanpy as sc
+sc.settings._vector_friendly = True # forces rasterized=True for scatter plots, avoids each scatter point from being a separate SVG vector object
 
 import sys
 import os
@@ -586,6 +589,7 @@ def load_data(source_dataset='Cortex_Velmeshev', target_dataset=None, genes_by_p
 
     return rna, atac
 
+#%%
 if __name__ == "__main__":
 
     # Load ECLARE adata arising from developmental post-hoc analysis
@@ -611,6 +615,7 @@ if __name__ == "__main__":
     #    pickle.dump(cistopic_obj, f)
     
     with open(os.path.join(os.environ['OUTPATH'], 'cistopic_obj.pkl'), 'rb') as f:
+        print(f"Loading cistopic_obj from {os.path.join(os.environ['OUTPATH'], 'cistopic_obj.pkl')}")
         cistopic_obj = pickle.load(f)
 
     ## add suffix to rna_adata obs_names to make consistent with CistopicObject
@@ -693,9 +698,16 @@ if __name__ == "__main__":
     eclare_adata.uns['eRegulon_AUC_Gene_based'] = eregG
 
     ## save
-    eclare_adata.write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata.h5ad'))
+    #eclare_adata.write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata.h5ad'))
 
     ## add to eclare_adata.obs
+    eregG.columns = eregG.columns.str.split('_(', regex=False).str[0]
+    eregR.columns = eregR.columns.str.split('_(', regex=False).str[0]
+
+    print(f'Removing duplicate columns from eRegulon_AUC_Gene_based and eRegulon_AUC_Region_based')
+    eregG = eregG.loc[:, ~eregG.columns.duplicated()]
+    eregR = eregR.loc[:, ~eregR.columns.duplicated()]
+
     ereg = pd.concat([eregG, eregR], axis=0)
         
     ## Rename columns to remove the (Region_based) or (Gene_based) suffix
@@ -709,7 +721,7 @@ if __name__ == "__main__":
     plt.matshow(ereg_merged_scaled, aspect='auto')
 
     eclare_adata.obs = eclare_adata.obs.merge(ereg_merged_scaled, left_index=True, right_index=True, how='left')
-    #eclare_adata.write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata.h5ad'))
+    #eclare_adata.write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata_with_eRegulon_scores.h5ad'))
 
     ## correlate ereg with ordinal_pseudotime
     corrs = eclare_adata.obs.corr(method='spearman')['ordinal_pseudotime']
@@ -718,7 +730,6 @@ if __name__ == "__main__":
     #most_corr_signature_trunc = most_corr_signature.split('_(')[0]
     #most_corr_signatures = ereg.columns[ereg.columns.str.startswith(most_corr_signature_trunc)]
 
-    import scanpy as sc
     ## aggregate scores by Lineage
     agg_score = eclare_adata.obs.groupby('Lineage')[ereg_merged.columns].mean()
     max_agg_score_signatures = agg_score.idxmax(axis=1).to_dict()
@@ -760,13 +771,50 @@ if __name__ == "__main__":
     ## aggregate scores by Age_Range and Lineage
     agg_score = eclare_adata.obs.groupby(['Age_Range', 'Lineage'])[ereg_merged.columns].mean()
     max_agg_score_signatures = agg_score.idxmax(axis=1).to_dict()
-    for age_range in max_agg_score_signatures.keys():
-        for lineage in max_agg_score_signatures[age_range].keys():
-            sc.pl.draw_graph(eclare_adata[eclare_adata.obs['Age_Range']==age_range][eclare_adata.obs['Lineage']==lineage], color=max_agg_score_signatures[age_range][lineage], size=100)
+    for age_range, lineage in max_agg_score_signatures.keys():
+        sc.pl.draw_graph(eclare_adata[(eclare_adata.obs['Age_Range']==age_range) & (eclare_adata.obs['Lineage']==lineage)], color=max_agg_score_signatures[age_range, lineage], size=100)
     
-    import scanpy as sc
     sc.pl.draw_graph(eclare_adata, color=most_corr_signature, size=100)
 
+    ## focus on POU2F1 and DLX5 for VIP sub_cell_type
+    from scipy.special import softmax
+    #agg_score = eclare_adata.obs.groupby('sub_cell_type')[ereg_merged.columns].mean()
+    #agg_score.columns = agg_score.columns.str.split('_').str[0]
+    #softmax_agg_score_vip = agg_score.apply(softmax).loc['VIP']
+    #most_distinctive_signatures = softmax_agg_score_vip.sort_values(ascending=False).head(5)
+
+    # Select columns in eclare_adata.obs that are of float dtype
+    signatures = eclare_adata.copy()
+    signatures.obs = signatures.obs.loc[:, signatures.obs.columns.isin(ereg.columns)]
+    signatures.obs.columns = signatures.obs.columns.str.split('_').str[0]
+    signatures.obs = signatures.obs.groupby(axis=1, level=0).quantile(0.25)
+    # assert (signatures.obs.groupby(axis=1, level=0).apply(np.max, axis=1) == signatures.obs.groupby(axis=1, level=0).max()).values.mean() > 0.99
+
+    # To impose the same scale on the colorbar for both 'POU2F1' and 'DLX5', 
+    vmin = signatures.obs[['POU2F1', 'DLX5']].min().min()
+    vmax = signatures.obs[['POU2F1', 'DLX5']].max().max()
+    
+    ## GRNs plots
+    fig = sc.pl.draw_graph(signatures, color=['POU2F1', 'DLX5'], size=100, vmin=vmin, vmax=vmax, cmap='plasma', return_fig=True, show=False)
+    fig.set_size_inches(10, 4)
+
+    ## VIP density plot
+    eclare_adata.obs['is_vip'] = pd.Categorical(eclare_adata.obs['sub_cell_type'] == 'VIP').rename_categories({True: 'VIP', False: 'Non-VIP'})
+    sc.tl.embedding_density(eclare_adata, basis='draw_graph_fa', groupby='is_vip')
+    vip_fig = sc.pl.embedding_density(eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_is_vip', return_fig=True, group='VIP', title='VIP neurons density')
+    vip_fig.set_size_inches(4.75, 4)
+
+    ## INT density plot
+    eclare_adata.obs['is_INT'] = pd.Categorical(eclare_adata.obs['sub_cell_type'] == 'INT').rename_categories({True: 'INT', False: 'Non-INT'})
+    sc.tl.embedding_density(eclare_adata, basis='draw_graph_fa', groupby='is_INT')
+    INT_fig = sc.pl.embedding_density(eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_is_INT', return_fig=True, group='INT', title='INT neurons density')
+    INT_fig.set_size_inches(4.75, 4)
+
+    def dev_fig3(fig, vip_fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results')):
+        fig.savefig(os.path.join(manuscript_figpath, 'dev_fig3_grns.svg'), bbox_inches='tight', dpi=300)
+        vip_fig.savefig(os.path.join(manuscript_figpath, 'dev_fig3_vip.svg'), bbox_inches='tight', dpi=300)
+
+#%%
     from scenicplus.triplet_score import _rank_scores_and_assign_random_ranking_in_range_for_ties, _calculate_cross_species_rank_ratio_with_order_statistics
 
     def calculate_triplet_score(
