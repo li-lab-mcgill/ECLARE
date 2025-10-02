@@ -777,7 +777,7 @@ if __name__ == "__main__":
     sc.pl.draw_graph(eclare_adata, color=most_corr_signature, size=100)
 
     ## focus on POU2F1 and DLX5 for VIP sub_cell_type
-    from scipy.special import softmax
+    #from scipy.special import softmax
     #agg_score = eclare_adata.obs.groupby('sub_cell_type')[ereg_merged.columns].mean()
     #agg_score.columns = agg_score.columns.str.split('_').str[0]
     #softmax_agg_score_vip = agg_score.apply(softmax).loc['VIP']
