@@ -204,10 +204,12 @@ def create_loaders(
     test_len = int(len(data) - (train_len + valid_len))
 
     ## reduce data size to keep CPU RAM memory below 62G
+    '''
     if dataset == 'MDD':
         warn('Reducing MDD data size to keep CPU RAM memory below 62G')
         train_len = int(train_len * 0.5)
         valid_len = int(valid_len * 0.5)
+    '''
 
     train_valid_random_state = int(os.environ.get('RANDOM_STATE', 42))
     train_idx, valid_idx = next(StratifiedShuffleSplit(n_splits=1, train_size=train_len, test_size=valid_len, random_state=train_valid_random_state).split(X=np.empty(len(data)), y=celltypes))

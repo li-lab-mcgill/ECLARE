@@ -22,10 +22,10 @@ source_datasets=("PFC_Zhu" "PFC_V1_Wang")
 
 target_dataset="MDD"
 genes_by_peaks_str="NULL" #'17563_by_100000'
-clip_job_id='21164436'
+clip_job_id='04163347'
 
 ## Define total number of epochs
-total_epochs=10
+total_epochs=100
 target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
 
 ## Make new sub-directory for current job ID and assign to "TMPDIR" variable

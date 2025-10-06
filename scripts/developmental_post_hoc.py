@@ -42,6 +42,7 @@ methods_id_dict = {
     'ordinal': '27204131',
 }
 '''
+'''
 target_dataset = 'MDD'
 genes_by_peaks_str = '6816_by_55284'
 source_datasets = ['PFC_Zhu']
@@ -52,7 +53,17 @@ methods_id_dict = {
     'eclare': ['22105844'],
     'ordinal': '22130216',
 }
-
+'''
+target_dataset = 'MDD'
+genes_by_peaks_str = '17279_by_66623'
+source_datasets = ['PFC_V1_Wang']
+subsample = -1
+methods_id_dict = {
+    'clip': '04112343',
+    'kd_clip': '04120236',
+    'eclare': ['04133808'],
+    'ordinal': '22094649',
+}
 
 ## define search strings
 search_strings = {
@@ -529,7 +540,7 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
     elif cell_group_key == 'ClustersMapped':
         sc.pp.pca(adata, n_comps=30)
         sc.pp.neighbors(adata, n_neighbors=50, n_pcs=30, use_rep='X_pca', random_state=random_seed)
-        sc.tl.leiden(adata, resolution=0.5, random_state=random_seed)
+        sc.tl.leiden(adata, resolution=0.75, random_state=random_seed)
         entropy_threshold = 0.60
 
 
@@ -553,8 +564,8 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
         adata = adata[adata.obs['leiden'].isin(keep_leidens)]
 
         sc.pp.pca(adata, n_comps=adata.obsm['X_pca'].shape[-1])
-        sc.pp.neighbors(adata, n_neighbors=adata.uns['neighbors']['params']['n_neighbors'],  random_state=random_seed)
-        sc.tl.leiden(adata, random_state=random_seed)
+        sc.pp.neighbors(adata, n_neighbors=adata.uns['neighbors']['params']['n_neighbors'], n_pcs=adata.obsm['X_pca'].shape[-1], use_rep='X_pca', random_state=random_seed)
+        sc.tl.leiden(adata, resolution=adata.uns['leiden']['params']['resolution'], random_state=random_seed)
 
     ## UMAP
     sc.tl.umap(adata, random_state=random_seed)
@@ -677,6 +688,9 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
         'ordinal_pseudotime': 'ordinal pseud.',
         'Age_Range': 'age range',
     })
+
+    ## order reference variables such that appear in proper order in plot
+    metrics_df_melted['reference'] = pd.Categorical(metrics_df_melted['reference'], categories=['ordinal pseud.', 'age range'], ordered=True)
 
     if metrics_df_melted['metric'].nunique() > 1:
 
@@ -1049,6 +1063,11 @@ student_atac = paga_analysis(student_atac)
 
 #%% import source datasets
 
+source_clusters_dict = {
+    'PFC_Zhu': ['RG', 'IPC', 'EN-fetal-early', 'EN-fetal-late', 'EN'], # all: ['EN-fetal-late', 'IN-fetal', 'VSMC', 'Endothelial', 'RG', 'OPC', 'IN-CGE', 'Microglia', 'IN-MGE', 'EN-fetal-early', 'Astrocytes', 'IPC', 'Pericytes', 'EN', 'Oligodendrocytes']
+    'PFC_V1_Wang': ["RG-vRG", "IPC-EN", "EN-newborn", "EN-IT-immature", "EN-non-IT-immature", "EN-L2_3-IT", "EN-L4-IT-V1", "EN-L4-IT", "EN-L5-IT", "EN-L6-IT", "EN-L5_6-NP", "EN-L5-ET", "EN-L6-CT", "EN-L6b"],
+}
+
 source_adatas = {}
 
 for source_dataset in source_datasets:
@@ -1064,15 +1083,13 @@ for source_dataset in source_datasets:
     source_setup_func = return_setup_func_from_dataset(source_dataset)
     source_rna, source_atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_dict, atac_datapath, rna_datapath = source_setup_func(args, return_type='data')
 
-    #source_clusters = ['RG', 'IPC', 'IN-fetal', 'IN-MGE', 'IN-CGE']
-    source_clusters = ['RG', 'IPC', 'EN-fetal-early', 'EN-fetal-late', 'EN']
-    #all: ['EN-fetal-late', 'IN-fetal', 'VSMC', 'Endothelial', 'RG', 'OPC', 'IN-CGE', 'Microglia', 'IN-MGE', 'EN-fetal-early', 'Astrocytes', 'IPC', 'Pericytes', 'EN', 'Oligodendrocytes']
+    source_clusters = source_clusters_dict[source_dataset]
 
     source_rna.obs['modality'] = 'RNA'
     source_atac.obs['modality'] = 'ATAC'
 
     source_rna_atac = anndata.concat([source_rna[source_rna.obs[cell_group].isin(source_clusters)], source_atac[source_atac.obs[cell_group].isin(source_clusters)]], axis=0)
-    source_rna_atac_sub = subsample_adata(source_rna_atac, subsample, ['modality'], subsample_type='balanced')
+    source_rna_atac_sub = subsample_adata(source_rna_atac, subsample, ['modality', cell_group], subsample_type='balanced')
 
     source_rna_sub = source_rna[source_rna.obs_names.isin(source_rna_atac_sub.obs_names)]
     source_atac_sub = source_atac[source_atac.obs_names.isin(source_rna_atac_sub.obs_names)]
@@ -1114,7 +1131,11 @@ for source_dataset in source_datasets:
 
 #%% Combine source and target data
 
-source_adatas[source_dataset].obs.rename(columns={'Cell type': 'ClustersMapped', 'dev_stage': 'Age'}, inplace=True)
+if source_dataset == 'PFC_V1_Wang':
+    source_adatas[source_dataset].obs.rename(columns={'type': 'ClustersMapped', 'Group': 'Age'}, inplace=True)
+elif source_dataset == 'PFC_Zhu':
+    source_adatas[source_dataset].obs.rename(columns={'Cell type': 'ClustersMapped', 'dev_stage': 'Age'}, inplace=True)
+
 source_adatas[source_dataset].obs['SubClusters'] = source_adatas[source_dataset].obs['ClustersMapped'].copy()
 
 source_adatas[source_dataset].obs['source_or_target'] = 'source'
@@ -1124,8 +1145,7 @@ source_target_adata = anndata.concat([ source_adatas[source_dataset], subsampled
 source_target_adata.obs = source_target_adata.obs.merge(subsampled_kd_clip_adatas[source_dataset].obs['Condition'], left_index=True, right_index=True, how='left')
 source_target_adata.obs['Age'] = pd.Categorical(source_target_adata.obs['Age'])
 
-#source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['InN', 'RG', 'IPC', 'IN-fetal', 'IN-MGE'])]
-source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'EN-fetal-early', 'EN-fetal-late', 'EN'])]
+#source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'EN-fetal-early', 'EN-fetal-late', 'EN'])]
 
 source_target_adata = paga_analysis(source_target_adata, dev_group_key='Age', cell_group_key='ClustersMapped', correct_imbalance=True)
 
@@ -1181,7 +1201,7 @@ df = df.merge(subsampled_kd_clip_adatas[source_dataset].obs['Condition'], left_o
 source_target_adata.obs = source_target_adata.obs.merge(df.set_index('cell')['most_common_cluster'], left_index=True, right_index=True, how='left')
 
 
-fig, ax = plt.subplots(1, 2, figsize=[10, 7], sharex=True)
+fig, ax = plt.subplots(1, 2, figsize=[df['most_common_cluster'].nunique() + 8, 7], sharex=True)
 #sns.boxplot(df, x='most_common_cluster', y='mean_neighbors_ordinal_pseudotime', ax=ax[0])
 #sns.boxplot(df, x='most_common_cluster', y='mean_neighbors_dpt_pseudotime', ax=ax[1])
 sns.barplot(df, x='most_common_cluster', y='mean_neighbors_ordinal_pseudotime', hue='Condition', errorbar='se', ax=ax[0])
@@ -1191,6 +1211,76 @@ ax[0].set_ylabel('Ordinal Pseudotime'); ax[1].set_ylabel('DPT Pseudotime')
 ax[0].set_xlabel(''); ax[1].set_xlabel('')
 plt.tight_layout(); plt.show()
 
+def devmdd_fig1(df, source_dataset, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_fig1.svg')):
+
+    if source_dataset == 'PFC_Zhu':
+        fig, ax = plt.subplots(1, 1, figsize=[5, 6])
+
+        # Barplot
+        pastel2_colors = sns.color_palette('Pastel2')
+        # Flip the order of the first two colors
+        pastel2_colors = [pastel2_colors[1], pastel2_colors[0]] + list(pastel2_colors[2:])
+        sns.barplot(
+            df,
+            x='most_common_cluster',
+            y='mean_neighbors_ordinal_pseudotime',
+            hue='Condition',
+            errorbar='se',
+            palette='Pastel1',
+            linewidth=2,
+            edgecolor='.5',
+            ax=ax)
+
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=30)
+        ax.set_ylabel('Ordinal Pseudotime')
+        ax.set_xlabel('')
+        ax.set_ylim(30, 62)
+
+    elif source_dataset == 'PFC_V1_Wang':
+        fig, ax = plt.subplots(1, 1, figsize=[5, 6])
+
+        # Barplot
+        pastel2_colors = sns.color_palette('Pastel2')
+        # Flip the order of the first two colors
+        pastel2_colors = [pastel2_colors[1], pastel2_colors[0]] + list(pastel2_colors[2:])
+        sns.barplot(
+            df,
+            x='mean_neighbors_ordinal_pseudotime',
+            y='most_common_cluster',
+            hue='Condition',
+            errorbar='se',
+            palette='Pastel1',
+            linewidth=2,
+            edgecolor='.5',
+            ax=ax)
+
+        ax.set_xlabel('Ordinal Pseudotime')
+        ax.set_ylabel('')
+        ax.set_xlim(30, 70)
+
+    plt.tight_layout()
+    fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    plt.close()
+
+def devmdd_fig2(adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results')):
+    #adata = source_target_adata.copy()
+    pos = adata.uns['paga']['pos']
+    target_adata = adata[adata.obs['source_or_target']=='target'].copy()
+    perm_idxs = np.random.permutation(len(target_adata))
+    size_0_for_na = np.where(target_adata.obs['most_common_cluster'].isna(), 0, 100)
+
+    sc.settings._vector_friendly = True
+    sc.settings.figdir = manuscript_figpath
+    sc.pl.paga_compare(target_adata[perm_idxs], color='most_common_cluster', title='', size=size_0_for_na[perm_idxs], node_size_scale=3, save='_devmdd_fig2.svg') # will prepend "paga_compare" to the filename
+
+    #fig, ax = plt.subplots(1, 2, figsize=[10, 5], sharex=True)
+    #sc.pl.draw_graph(target_adata[perm_idxs], color='most_common_cluster', size=size_0_for_na[perm_idxs], na_in_legend=False, ax=ax[1])
+    #ax_paga = sc.pl.paga(target_adata[perm_idxs], color='most_common_cluster', pos=pos, show=False)
+    #plt.tight_layout(); plt.show()
+
+
+
+'''
 fig, ax = plt.subplots(1, 2, figsize=[10, 7], sharex=True)
 #sns.boxplot(df, x='most_common_cluster', y='ordinal_pseudotime', ax=ax[0])
 #sns.boxplot(df, x='most_common_cluster', y='dpt_pseudotime', ax=ax[1])
@@ -1201,7 +1291,9 @@ ax[0].set_ylabel('Ordinal Pseudotime'); ax[1].set_ylabel('DPT Pseudotime')
 ax[0].set_xlabel(''); ax[1].set_xlabel('')
 ax[0].set_ylim(20, 55)
 plt.tight_layout(); plt.show()
+'''
 
+'''
 pre_EN_mapper = {
     'EN': 'EN',
     'EN-fetal-late': 'pre-EN',
@@ -1226,6 +1318,7 @@ ax[0].set_ylabel('Ordinal Pseudotime'); ax[1].set_ylabel('DPT Pseudotime')
 ax[0].set_xlabel(''); ax[1].set_xlabel('')
 ax[0].set_ylim(30, 50)
 plt.tight_layout(); plt.show()
+'''
 
 target_adata = source_target_adata[source_target_adata.obs['source_or_target']=='target'].copy()
 
@@ -1255,7 +1348,7 @@ paths = [
 ]
 
 ## plot rolling mean and standard error of ordinal pseudotime for each leiden cluster
-window_len = 5
+window_len = 3
 
 means = target_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].mean()
 means_pivot = means.reset_index().pivot_table(index='leiden', columns=['modality','Condition'], values='ordinal_pseudotime')
@@ -1284,23 +1377,29 @@ for descr, path in [paths[0]]:
     #means_pivot_path['leiden'] = pd.Categorical(means_pivot_path['leiden'], categories=path, ordered=True)
     #std_errs_pivot_path['leiden'] = pd.Categorical(std_errs_pivot_path['leiden'], categories=path, ordered=True)
 
-    fig, ax = plt.subplots(1,3, figsize=[20,8], sharex=True, sharey=True)
-    sns.lineplot(data=means_pivot_path, x='leiden', y='ordinal_pseudotime', errorbar=None, marker='.', linewidth=1.2, ax=ax[0])
+    fig, ax = plt.subplots(1,3, figsize=[15,8], sharex=True, sharey=True)
+    sns.lineplot(data=means_pivot_path, x='leiden', y='ordinal_pseudotime', color='grey', errorbar=None, marker='.', linewidth=1.2, ax=ax[0])
     sns.lineplot(data=means_pivot_path[means_pivot_path['modality']=='RNA'], x='leiden', y='ordinal_pseudotime', hue='Condition_modality', hue_order=['case_RNA', 'control_RNA'], errorbar=None, marker='.', linewidth=1.2, ax=ax[1])
     sns.lineplot(data=means_pivot_path[means_pivot_path['modality']=='ATAC'], x='leiden', y='ordinal_pseudotime', hue='Condition_modality', hue_order=['case_ATAC', 'control_ATAC'], errorbar=None, marker='.', linewidth=1.2, linestyle='--', ax=ax[2])
 
     x = means_pivot_path['leiden']; low = (means_pivot_path['ordinal_pseudotime'] - std_errs_pivot_path['ordinal_pseudotime']).values; high = (means_pivot_path['ordinal_pseudotime'] + std_errs_pivot_path['ordinal_pseudotime']).values
     high_low = x.to_frame().assign(low=low, high=high)
-    ax[0].fill_between(x.unique().tolist(), high_low.groupby('leiden')['low'].mean(), high_low.groupby('leiden')['high'].mean(), alpha=0.1)
+    ax[0].fill_between(x.unique().tolist(), high_low.groupby('leiden')['low'].mean(), high_low.groupby('leiden')['high'].mean(), alpha=0.1, color='grey')
     ax[1].fill_between(x[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], low[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], high[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], alpha=0.1)
     ax[1].fill_between(x[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], low[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], high[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], alpha=0.1)
     ax[2].fill_between(x[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], low[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], high[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], alpha=0.1)
     ax[2].fill_between(x[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], low[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], high[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], alpha=0.1)
-    #ax[1].fill_between(x, low, high, alpha=0.2, color='grey')
 
     ax[0].set_title('all nuclei'); ax[1].set_title('RNA'); ax[2].set_title('ATAC')
     plt.suptitle(f'{descr}')
     plt.tight_layout(); plt.show()
+
+def devmdd_fig4(lineplots_fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_fig4.svg')):
+
+    fig.suptitle('')
+    fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    plt.close()
+
 
 ## case vs control leiden cluster proportions
 plt.figure(figsize=[8,6])
