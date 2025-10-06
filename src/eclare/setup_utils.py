@@ -760,10 +760,16 @@ def mdd_setup(
         atac.obs['Sex'] = atac.obs['Sex'].str.lower()
         atac.obs['Condition'] = atac.obs['Condition'].str.lower()
 
+
         ## already being loaded by other dataset, datapath of which genes-to-peaks mask is stored
         genes_to_peaks_binary_mask = genes_peaks_dict = None
 
         cell_group = cell_groups['atac']
+
+        ## TMP - keep only ExNeu cells
+        print('!!!! TMP - keeping only cells from ExN lineage !!!!')
+        atac = atac[atac.obs[cell_group].isin(['ExN'])].copy()
+        rna = rna[rna.obs[cell_group].isin(['ExN'])].copy()
 
     elif args.genes_by_peaks_str is None:
     
@@ -996,7 +1002,7 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         "IPC": "1",
         "EN-fetal-early": "2",
         "EN-fetal-late": "3",
-        "EN-postnatal": "4",
+        "EN": "4",
     }
 
     if args.genes_by_peaks_str is not None:
@@ -1052,9 +1058,9 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         assert (keep_atac == keep_rna).all()
 
         ## TMP - keep only ExNeu cells
-        #print('!!!! TMP - keeping only cells from EN lineage !!!!')
-        #keep_atac = keep_atac & atac.obs[cell_group].isin(EN_cell_type_branches.keys())
-        #keep_rna = keep_rna & rna.obs[cell_group].isin(EN_cell_type_branches.keys())
+        print('!!!! TMP - keeping only cells from EN lineage !!!!')
+        keep_atac = keep_atac & atac.obs[cell_group].isin(EN_cell_type_branches.keys())
+        keep_rna = keep_rna & rna.obs[cell_group].isin(EN_cell_type_branches.keys())
 
         atac = atac[keep_atac].to_memory()
         rna = rna[keep_rna].to_memory()
@@ -1490,17 +1496,17 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
         "RG-vRG": "0",
         "IPC-EN": "1",
         "EN-newborn": "2",
-        "EN-IT-immature": "3.IT",
         "EN-non-IT-immature": "3.non-IT",
-        "EN-L2_3-IT": "4.IT.BP3",
-        "EN-L4-IT-V1": "4.IT.BP3",
-        "EN-L4-IT": "4.IT.BP4",
-        "EN-L5-IT": "4.IT.BP4",
-        "EN-L6-IT": "4.IT.BP2",
-        "EN-L5_6-NP": "4.non-IT.BP5",
+        "EN-L5_6-NP": "4.non-IT.BP5", # according to Wang et al. 2025 fig 3, BPs youngest to oldest: 5 < 2 < 4 < 3
         "EN-L5-ET": "4.non-IT.BP5",
         "EN-L6-CT": "4.non-IT.BP5",
-        "EN-L6b": "4.non-IT.BP5"
+        "EN-L6b": "4.non-IT.BP5",
+        "EN-IT-immature": "3.IT",
+        "EN-L6-IT": "4.IT.BP2",
+        "EN-L4-IT": "4.IT.BP4",
+        "EN-L5-IT": "4.IT.BP4",
+        "EN-L2_3-IT": "4.IT.BP3",
+        "EN-L4-IT-V1": "4.IT.BP3",
     }
 
 
@@ -1560,9 +1566,9 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
         assert (keep_atac == keep_rna).all()
 
         ## TMP - keep only ExNeu cells
-        #print('!!!! TMP - keeping only cells from EN lineage !!!!')
-        #keep_atac = keep_atac & atac.obs[cell_group].isin(EN_cell_type_branches.keys())
-        #keep_rna = keep_rna & rna.obs[cell_group].isin(EN_cell_type_branches.keys())
+        print('!!!! TMP - keeping only cells from EN lineage !!!!')
+        keep_atac = keep_atac & atac.obs[cell_group].isin(EN_cell_type_branches.keys())
+        keep_rna = keep_rna & rna.obs[cell_group].isin(EN_cell_type_branches.keys())
 
         atac = atac[keep_atac].to_memory()
         rna = rna[keep_rna].to_memory()

@@ -45,10 +45,10 @@ datasets=($(awk -F',' '{if (NR > 1) print $1}' "$csv_file"))
 
 target_dataset="MDD"
 genes_by_peaks_str='17563_by_100000'
-clip_job_id='21164436'
+clip_job_id='04163347'
 
 ## Define total number of epochs
-total_epochs=10
+total_epochs=100
 target_dataset_lowercase=$(echo "${target_dataset}" | tr '[:upper:]' '[:lower:]')
 
 ## Make new sub-directory for current job ID and assign to "TMPDIR" variable
