@@ -59,9 +59,9 @@ genes_by_peaks_str = '17279_by_66623'
 source_datasets = ['PFC_V1_Wang']
 subsample = -1
 methods_id_dict = {
-    'clip': '04112343',
-    'kd_clip': '04120236',
-    'eclare': ['04133808'],
+    'clip': '04163347',
+    'kd_clip': '07185908',
+    'eclare': ['04203819'],
     'ordinal': '22094649',
 }
 
@@ -312,6 +312,9 @@ if target_dataset == 'MDD':
     student_rna_sub         = student_rna[student_rna.obs_names.isin(student_rna_atac_sub.obs_names)]
     student_atac_sub        = student_atac[student_atac.obs_names.isin(student_rna_atac_sub.obs_names)]
 
+    student_rna_sub.obs = student_rna_sub.obs.merge(student_rna_atac_sub.obs['Age_bins'], left_index=True, right_index=True, how='left')
+    student_atac_sub.obs = student_atac_sub.obs.merge(student_rna_atac_sub.obs['Age_bins'], left_index=True, right_index=True, how='left')
+
 elif target_dataset == 'Cortex_Velmeshev':
 
     student_rna_sub = subsample_adata(student_rna[rna_idxs], subsample, [cell_group, dev_group_key], subsample_type='balanced')
@@ -518,14 +521,13 @@ for source_dataset in source_datasets:
 from scib.metrics.lisi import clisi_graph, ilisi_graph
 from scib.metrics import nmi, ari
 from scipy.stats import pearsonr, spearmanr, kendalltau
+import random
 
 def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', correct_imbalance=False, random_seed=0):
     # Set random seed for reproducibility
-    import random
     np.random.seed(random_seed)
     random.seed(random_seed)
     try:
-        import torch
         torch.manual_seed(random_seed)
     except ImportError:
         pass
@@ -540,7 +542,7 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
     elif cell_group_key == 'ClustersMapped':
         sc.pp.pca(adata, n_comps=30)
         sc.pp.neighbors(adata, n_neighbors=50, n_pcs=30, use_rep='X_pca', random_state=random_seed)
-        sc.tl.leiden(adata, resolution=0.75, random_state=random_seed)
+        sc.tl.leiden(adata, resolution=0.25, random_state=random_seed)
         entropy_threshold = 0.60
 
 
@@ -1100,6 +1102,7 @@ for source_dataset in source_datasets:
     source_rna_cells_sub = torch.from_numpy(source_rna_sub.X.toarray().astype(np.float32))
     source_atac_cells_sub = torch.from_numpy(source_atac_sub.X.toarray().astype(np.float32))
     
+    ## KD-CLIP embeddings
     source_rna_latents_sub, _ = kd_clip_student_models[source_dataset](source_rna_cells_sub, modality=0)
     source_atac_latents_sub, _ = kd_clip_student_models[source_dataset](source_atac_cells_sub, modality=1)
 
@@ -1108,6 +1111,19 @@ for source_dataset in source_datasets:
 
     source_latents_sub = np.vstack([source_rna_latents_sub, source_atac_latents_sub])
     source_adatas[source_dataset] = sc.AnnData(
+        X=source_latents_sub,
+        obs=pd.concat([source_rna_sub.obs.assign(modality='RNA'), source_atac_sub.obs.assign(modality='ATAC')], axis=0),
+    )
+
+    ## CLIP embeddings
+    source_rna_latents_sub, _ = clip_models[source_dataset](source_rna_cells_sub, modality=0)
+    source_atac_latents_sub, _ = clip_models[source_dataset](source_atac_cells_sub, modality=1)
+
+    source_rna_latents_sub = source_rna_latents_sub.detach().cpu().numpy()
+    source_atac_latents_sub = source_atac_latents_sub.detach().cpu().numpy()
+
+    source_latents_sub = np.vstack([source_rna_latents_sub, source_atac_latents_sub])
+    source_adatas[source_dataset + '_clip'] = sc.AnnData(
         X=source_latents_sub,
         obs=pd.concat([source_rna_sub.obs.assign(modality='RNA'), source_atac_sub.obs.assign(modality='ATAC')], axis=0),
     )
@@ -1124,6 +1140,7 @@ for source_dataset in source_datasets:
         ordinal_atac_pt_sub = torch.from_numpy(match_histograms(ordinal_atac_prebias_sub.detach().cpu().numpy().flatten(), subsampled_kd_clip_adatas[source_dataset].obs['ordinal_pseudotime'].values))
 
         source_adatas[source_dataset].obs['ordinal_pseudotime'] = torch.cat([ordinal_rna_pt_sub, ordinal_atac_pt_sub], axis=0)
+        source_adatas[source_dataset + '_clip'].obs['ordinal_pseudotime'] = torch.cat([ordinal_rna_pt_sub, ordinal_atac_pt_sub], axis=0)
 
 
 #for source_dataset in source_datasets:
@@ -1137,20 +1154,23 @@ elif source_dataset == 'PFC_Zhu':
     source_adatas[source_dataset].obs.rename(columns={'Cell type': 'ClustersMapped', 'dev_stage': 'Age'}, inplace=True)
 
 source_adatas[source_dataset].obs['SubClusters'] = source_adatas[source_dataset].obs['ClustersMapped'].copy()
+source_adatas[source_dataset].obs['Age_bins'] = source_adatas[source_dataset].obs['Age'].copy()
 
 source_adatas[source_dataset].obs['source_or_target'] = 'source'
+source_adatas[source_dataset].obs['dataset_name'] = source_dataset
+
 subsampled_kd_clip_adatas[source_dataset].obs['source_or_target'] = 'target'
+subsampled_kd_clip_adatas[source_dataset].obs['dataset_name'] = target_dataset
 
 source_target_adata = anndata.concat([ source_adatas[source_dataset], subsampled_kd_clip_adatas[source_dataset] ], axis=0)
 source_target_adata.obs = source_target_adata.obs.merge(subsampled_kd_clip_adatas[source_dataset].obs['Condition'], left_index=True, right_index=True, how='left')
 source_target_adata.obs['Age'] = pd.Categorical(source_target_adata.obs['Age'])
 
 #source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'EN-fetal-early', 'EN-fetal-late', 'EN'])]
+source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'EN-newborn', 'EN-IT-immature', 'EN-L6-IT', 'EN-L5-IT', 'EN-L4-IT', 'EN-L2_3-IT'])]
 
-source_target_adata = paga_analysis(source_target_adata, dev_group_key='Age', cell_group_key='ClustersMapped', correct_imbalance=True)
-
-#leiden_sorted = source_target_adata.obs.groupby('leiden')['ordinal_pseudotime'].mean().sort_values().index.tolist()
-#source_target_adata.obs['leiden'] = pd.Categorical(source_target_adata.obs['leiden'], categories=leiden_sorted, ordered=True)
+source_target_adata = paga_analysis(source_target_adata, dev_group_key='Age', cell_group_key='ClustersMapped', correct_imbalance=False)
+#source_target_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'source_target_adata_{source_dataset}_{target_dataset}.h5ad'))
 
 ## plot FA embeddings comparing source and target datasets
 colors = ['source_or_target', 'modality', 'dpt_pseudotime', 'ordinal_pseudotime', 'ClustersMapped']
@@ -1237,7 +1257,10 @@ def devmdd_fig1(df, source_dataset, manuscript_figpath=os.path.join(os.environ['
         ax.set_ylim(30, 62)
 
     elif source_dataset == 'PFC_V1_Wang':
-        fig, ax = plt.subplots(1, 1, figsize=[5, 6])
+
+        df['most_common_cluster'] = df['most_common_cluster'].replace({'EN-L2_3-IT': 'EN-ITs', 'EN-L4-IT': 'EN-ITs', 'EN-L5-IT': 'EN-ITs', 'EN-L6-IT': 'EN-ITs'})
+
+        fig, ax = plt.subplots(1, 1, figsize=[5, 3])
 
         # Barplot
         pastel2_colors = sns.color_palette('Pastel2')
@@ -1262,23 +1285,145 @@ def devmdd_fig1(df, source_dataset, manuscript_figpath=os.path.join(os.environ['
     fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
     plt.close()
 
-def devmdd_fig2(adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results')):
-    #adata = source_target_adata.copy()
-    pos = adata.uns['paga']['pos']
-    target_adata = adata[adata.obs['source_or_target']=='target'].copy()
-    perm_idxs = np.random.permutation(len(target_adata))
-    size_0_for_na = np.where(target_adata.obs['most_common_cluster'].isna(), 0, 100)
+def devmdd_fig2(target_adata, source_adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results')):
+    #pos = adata.uns['paga']['pos']
 
     sc.settings._vector_friendly = True
     sc.settings.figdir = manuscript_figpath
-    sc.pl.paga_compare(target_adata[perm_idxs], color='most_common_cluster', title='', size=size_0_for_na[perm_idxs], node_size_scale=3, save='_devmdd_fig2.svg') # will prepend "paga_compare" to the filename
 
-    #fig, ax = plt.subplots(1, 2, figsize=[10, 5], sharex=True)
-    #sc.pl.draw_graph(target_adata[perm_idxs], color='most_common_cluster', size=size_0_for_na[perm_idxs], na_in_legend=False, ax=ax[1])
-    #ax_paga = sc.pl.paga(target_adata[perm_idxs], color='most_common_cluster', pos=pos, show=False)
-    #plt.tight_layout(); plt.show()
+    ## target data
+    adata = target_adata.copy()
+    sc.pl.umap(adata, color='most_common_cluster', title='target data (imputed)', save='_devmdd_fig3.svg')
+
+    perm_idxs = np.flip(np.random.permutation(len(adata)))
+    size_0_for_na = np.where(adata.obs['most_common_cluster'].isna(), 0, 25)
+
+    sc.tl.paga(adata, groups='leiden')
+    sc.pl.paga_compare(adata[perm_idxs])
+    sc.pl.paga_compare(adata[perm_idxs], color='most_common_cluster', legend_loc='right margin', right_margin=0.9, title='', size=size_0_for_na[perm_idxs], node_size_scale=3, frameon=True, save='_devmdd_fig2.svg') # will prepend "paga_compare" to the filename
+
+    #sc.pl.paga_compare(adata[perm_idxs], color='ordinal_pseudotime_magic', size=size_0_for_na[perm_idxs], right_margin=0.4)
+
+    sc.pl.draw_graph(adata[perm_idxs], color='leiden', size=size_0_for_na[perm_idxs], na_in_legend=False, cmap='plasma', title='', save='_devmdd_fig5.svg')
+
+    #sc.pl.draw_graph(adata[perm_idxs], color='most_common_cluster', size=size_0_for_na[perm_idxs], na_in_legend=False, title='')
+    #sc.pl.paga(adata)
+
+    ## source data
+    adata = source_adata.copy()
+    adata.obs['ClustersMapped'] = pd.Categorical(adata.obs['ClustersMapped'], categories=target_adata.obs['most_common_cluster'].cat.categories, ordered=True)
+    sc.pl.umap(adata, color='ClustersMapped', title='source data', legend_loc=None, save='_devmdd_fig4.svg')
 
 
+
+target_adata = source_target_adata[source_target_adata.obs['source_or_target']=='target'].copy()
+colors_uns_keys = [key for key in list(target_adata.uns.keys()) if '_colors' in key]
+for key in colors_uns_keys: del target_adata.uns[key]
+
+## case vs control ordinal pseudotime for each leiden cluster
+leiden_sorted = target_adata.obs.groupby('leiden')['ordinal_pseudotime'].mean().sort_values().index.tolist()
+target_adata.obs['leiden'] = pd.Categorical(target_adata.obs['leiden'], categories=leiden_sorted, ordered=True)
+
+leiden_diff = (target_adata.obs.groupby(['leiden','Condition'])['ordinal_pseudotime'].mean()
+          .unstack()
+          .pipe(lambda m: m['case'] - m['control']))
+
+leiden_sorted_case_more_control = leiden_diff[leiden_diff > 0].index.tolist()
+leiden_sorted_control_more_case = leiden_diff[leiden_diff < 0].index.tolist()
+
+sc.pl.embedding(target_adata, color='leiden', basis='X_draw_graph_fa', na_in_legend=False, palette='plasma')
+#sc.pl.paga_compare(target_adata, color="ordinal_pseudotime", threshold=0.25, right_margin=0.5)
+
+
+paths = [
+    ("MDD_ExN_all", leiden_sorted),
+    ("MDD_ExN_case_more_control", leiden_sorted_case_more_control),
+    ("MDD_ExN_control_more_case", leiden_sorted_control_more_case),
+]
+
+## plot rolling mean and standard error of ordinal pseudotime for each leiden cluster
+window_len = 3
+
+means = target_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].mean()
+means_pivot = means.reset_index().pivot_table(index='leiden', columns=['modality','Condition'], values='ordinal_pseudotime')
+means_pivot = means_pivot.rolling(window_len, min_periods=0).mean()
+means_pivot = means_pivot.melt(ignore_index=False).rename(columns={'value': 'ordinal_pseudotime'})
+means_pivot['Condition_modality'] = means_pivot[['Condition','modality']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1)
+
+std_errs = target_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].std() / np.sqrt(target_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].count())
+std_errs_pivot = std_errs.reset_index().pivot_table(index='leiden', columns=['modality','Condition'], values='ordinal_pseudotime')
+std_errs_pivot = std_errs_pivot.rolling(window_len, min_periods=0).mean()
+std_errs_pivot = std_errs_pivot.melt(ignore_index=False).rename(columns={'value': 'ordinal_pseudotime'})
+std_errs_pivot['Condition_modality'] = std_errs_pivot[['Condition','modality']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1)
+
+## resort Leiden clusters
+leiden_sorted = means_pivot.groupby('leiden')['ordinal_pseudotime'].mean().sort_values().index.tolist()
+means_pivot.index = pd.CategoricalIndex(means_pivot.index, categories=leiden_sorted, ordered=True)
+std_errs_pivot.index = pd.CategoricalIndex(std_errs_pivot.index, categories=leiden_sorted, ordered=True)
+means_pivot.sort_index(inplace=True)
+std_errs_pivot.sort_index(inplace=True)
+
+for descr, path in [paths[0]]:
+
+    means_pivot_path = means_pivot[means_pivot.index.isin(path)].reset_index()
+    std_errs_pivot_path = std_errs_pivot[std_errs_pivot.index.isin(path)].reset_index()
+
+    #means_pivot_path['leiden'] = pd.Categorical(means_pivot_path['leiden'], categories=path, ordered=True)
+    #std_errs_pivot_path['leiden'] = pd.Categorical(std_errs_pivot_path['leiden'], categories=path, ordered=True)
+
+    fig, ax = plt.subplots(1,3, figsize=[15,8], sharex=True, sharey=True)
+    sns.lineplot(data=means_pivot_path, x='leiden', y='ordinal_pseudotime', color='grey', errorbar=None, marker='.', markersize=20, linewidth=2, ax=ax[0])
+    sns.lineplot(data=means_pivot_path[means_pivot_path['modality']=='RNA'], x='leiden', y='ordinal_pseudotime', palette='Pastel1', hue='Condition_modality', hue_order=['case_RNA', 'control_RNA'], errorbar=None, marker='.', markersize=20, linewidth=2, ax=ax[1])
+    sns.lineplot(data=means_pivot_path[means_pivot_path['modality']=='ATAC'], x='leiden', y='ordinal_pseudotime', palette='Pastel1', hue='Condition_modality', hue_order=['case_ATAC', 'control_ATAC'], errorbar=None, marker='.', markersize=20, linewidth=2, linestyle='--', ax=ax[2])
+
+    x = means_pivot_path['leiden']; low = (means_pivot_path['ordinal_pseudotime'] - std_errs_pivot_path['ordinal_pseudotime']).values; high = (means_pivot_path['ordinal_pseudotime'] + std_errs_pivot_path['ordinal_pseudotime']).values
+    high_low = x.to_frame().assign(low=low, high=high)
+    ax[0].fill_between(x.unique().tolist(), high_low.groupby('leiden')['low'].mean(), high_low.groupby('leiden')['high'].mean(), alpha=0.15, color='grey')
+    ax[1].fill_between(x[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], low[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], high[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], alpha=0.3, color=sns.color_palette('Pastel1')[0])
+    ax[1].fill_between(x[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], low[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], high[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], alpha=0.3, color=sns.color_palette('Pastel1')[1])
+    ax[2].fill_between(x[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], low[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], high[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], alpha=0.3, color=sns.color_palette('Pastel1')[0])
+    ax[2].fill_between(x[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], low[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], high[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], alpha=0.3, color=sns.color_palette('Pastel1')[1])
+
+    ax[0].set_title('all nuclei'); ax[1].set_title('RNA'); ax[2].set_title('ATAC')
+    plt.suptitle(f'{descr}')
+    plt.tight_layout(); plt.show()
+
+def devmdd_fig4(lineplots_fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_fig4.svg')):
+
+    lineplots_fig.suptitle('')
+    lineplots_fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    plt.close()
+
+
+## case vs control leiden cluster proportions
+plt.figure(figsize=[8,6])
+leiden_proportions = target_adata.obs.groupby('Condition')['leiden'].value_counts(normalize=True).swaplevel().sort_index()
+sns.barplot(data=leiden_proportions.reset_index(), x='leiden', y='proportion', hue='Condition')
+
+## case vs control most common cluster proportions
+most_common_cluster_proportions = source_target_adata[source_target_adata.obs['source_or_target']=='target'].obs.groupby('Condition')['most_common_cluster'].value_counts(normalize=True).swaplevel().sort_index()
+plt.figure(figsize=[5,6])
+sns.barplot(data=most_common_cluster_proportions.reset_index(), x='most_common_cluster', y='proportion', hue='Condition')
+plt.xticks(rotation=30)
+
+def dev_fig4(adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig4.svg')):
+    sc.settings._vector_friendly = True
+    #adata = source_target_adata.copy()
+    permute_idxs = np.random.permutation(len(adata))
+    adata.obs = adata.obs.rename(columns={
+        'dpt_pseudotime': 'DPT pseudotime',
+        'ordinal_pseudotime': 'ordinal pseudotime',
+        'ClustersMapped': 'developmental cell type'
+        })
+    adata.uns['lineage_colors'] = ['purple','orange']
+    colors = ['modality','developmental cell type', 'ordinal pseudotime', 'leiden']
+
+    adata.obs['developmental cell type'] = pd.Categorical(adata.obs['developmental cell type'], categories=['EN-fetal-early','EN-fetal-late','EN','ExN'], ordered=True)
+    adata.obs['developmental cell type'] = adata.obs['developmental cell type'].replace({'ExN':np.nan})
+    dev_fig4 = sc.pl.draw_graph(adata[permute_idxs], color=colors, wspace=0.5, ncols=2, return_fig=True, na_in_legend=False)
+
+    print(f'Saving figure to {manuscript_figpath}')
+    dev_fig4.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
 
 '''
 fig, ax = plt.subplots(1, 2, figsize=[10, 7], sharex=True)
@@ -1319,118 +1464,6 @@ ax[0].set_xlabel(''); ax[1].set_xlabel('')
 ax[0].set_ylim(30, 50)
 plt.tight_layout(); plt.show()
 '''
-
-target_adata = source_target_adata[source_target_adata.obs['source_or_target']=='target'].copy()
-
-
-## case vs control ordinal pseudotime for each leiden cluster
-leiden_sorted = target_adata.obs.groupby('leiden')['ordinal_pseudotime'].mean().sort_values().index.tolist()
-target_adata.obs['leiden'] = pd.Categorical(target_adata.obs['leiden'], categories=leiden_sorted, ordered=True)
-plt.figure(figsize=[8,6])
-sns.lineplot(data=target_adata.obs, x='leiden', y='ordinal_pseudotime', hue='Condition', errorbar='se', marker='.', linewidth=0.2)
-
-leiden_diff = (target_adata.obs.groupby(['leiden','Condition'])['ordinal_pseudotime'].mean()
-          .unstack()
-          .pipe(lambda m: m['case'] - m['control']))
-
-leiden_sorted_case_more_control = leiden_diff[leiden_diff > 0].index.tolist()
-leiden_sorted_control_more_case = leiden_diff[leiden_diff < 0].index.tolist()
-
-sc.pl.embedding(target_adata, color='leiden', basis='X_draw_graph_fa', na_in_legend=False, palette='plasma', groups=leiden_sorted_case_more_control)
-sc.pl.embedding(target_adata, color='leiden', basis='X_draw_graph_fa', na_in_legend=False, palette='plasma', groups=leiden_sorted_control_more_case)
-
-sc.pl.paga_compare(target_adata, color="ordinal_pseudotime", threshold=0.25, right_margin=0.5)
-
-paths = [
-    ("MDD_ExN_all", leiden_sorted),
-    ("MDD_ExN_case_more_control", leiden_sorted_case_more_control),
-    ("MDD_ExN_control_more_case", leiden_sorted_control_more_case),
-]
-
-## plot rolling mean and standard error of ordinal pseudotime for each leiden cluster
-window_len = 3
-
-means = target_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].mean()
-means_pivot = means.reset_index().pivot_table(index='leiden', columns=['modality','Condition'], values='ordinal_pseudotime')
-means_pivot = means_pivot.rolling(window_len, min_periods=0).mean()
-means_pivot = means_pivot.melt(ignore_index=False).rename(columns={'value': 'ordinal_pseudotime'})
-means_pivot['Condition_modality'] = means_pivot[['Condition','modality']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1)
-
-std_errs = target_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].std() / np.sqrt(target_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].count())
-std_errs_pivot = std_errs.reset_index().pivot_table(index='leiden', columns=['modality','Condition'], values='ordinal_pseudotime')
-std_errs_pivot = std_errs_pivot.rolling(window_len, min_periods=0).mean()
-std_errs_pivot = std_errs_pivot.melt(ignore_index=False).rename(columns={'value': 'ordinal_pseudotime'})
-std_errs_pivot['Condition_modality'] = std_errs_pivot[['Condition','modality']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1)
-
-## resort Leiden clusters
-leiden_sorted = means_pivot.groupby('leiden')['ordinal_pseudotime'].mean().sort_values().index.tolist()
-means_pivot.index = pd.CategoricalIndex(means_pivot.index, categories=leiden_sorted, ordered=True)
-std_errs_pivot.index = pd.CategoricalIndex(std_errs_pivot.index, categories=leiden_sorted, ordered=True)
-means_pivot.sort_index(inplace=True)
-std_errs_pivot.sort_index(inplace=True)
-
-for descr, path in [paths[0]]:
-
-    means_pivot_path = means_pivot[means_pivot.index.isin(path)].reset_index()
-    std_errs_pivot_path = std_errs_pivot[std_errs_pivot.index.isin(path)].reset_index()
-
-    #means_pivot_path['leiden'] = pd.Categorical(means_pivot_path['leiden'], categories=path, ordered=True)
-    #std_errs_pivot_path['leiden'] = pd.Categorical(std_errs_pivot_path['leiden'], categories=path, ordered=True)
-
-    fig, ax = plt.subplots(1,3, figsize=[15,8], sharex=True, sharey=True)
-    sns.lineplot(data=means_pivot_path, x='leiden', y='ordinal_pseudotime', color='grey', errorbar=None, marker='.', linewidth=1.2, ax=ax[0])
-    sns.lineplot(data=means_pivot_path[means_pivot_path['modality']=='RNA'], x='leiden', y='ordinal_pseudotime', hue='Condition_modality', hue_order=['case_RNA', 'control_RNA'], errorbar=None, marker='.', linewidth=1.2, ax=ax[1])
-    sns.lineplot(data=means_pivot_path[means_pivot_path['modality']=='ATAC'], x='leiden', y='ordinal_pseudotime', hue='Condition_modality', hue_order=['case_ATAC', 'control_ATAC'], errorbar=None, marker='.', linewidth=1.2, linestyle='--', ax=ax[2])
-
-    x = means_pivot_path['leiden']; low = (means_pivot_path['ordinal_pseudotime'] - std_errs_pivot_path['ordinal_pseudotime']).values; high = (means_pivot_path['ordinal_pseudotime'] + std_errs_pivot_path['ordinal_pseudotime']).values
-    high_low = x.to_frame().assign(low=low, high=high)
-    ax[0].fill_between(x.unique().tolist(), high_low.groupby('leiden')['low'].mean(), high_low.groupby('leiden')['high'].mean(), alpha=0.1, color='grey')
-    ax[1].fill_between(x[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], low[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], high[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], alpha=0.1)
-    ax[1].fill_between(x[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], low[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], high[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], alpha=0.1)
-    ax[2].fill_between(x[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], low[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], high[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], alpha=0.1)
-    ax[2].fill_between(x[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], low[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], high[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], alpha=0.1)
-
-    ax[0].set_title('all nuclei'); ax[1].set_title('RNA'); ax[2].set_title('ATAC')
-    plt.suptitle(f'{descr}')
-    plt.tight_layout(); plt.show()
-
-def devmdd_fig4(lineplots_fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_fig4.svg')):
-
-    fig.suptitle('')
-    fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
-    plt.close()
-
-
-## case vs control leiden cluster proportions
-plt.figure(figsize=[8,6])
-leiden_proportions = target_adata.obs.groupby('Condition')['leiden'].value_counts(normalize=True).swaplevel().sort_index()
-sns.barplot(data=leiden_proportions.reset_index(), x='leiden', y='proportion', hue='Condition')
-
-## case vs control most common cluster proportions
-most_common_cluster_proportions = source_target_adata[source_target_adata.obs['source_or_target']=='target'].obs.groupby('Condition')['most_common_cluster'].value_counts(normalize=True).swaplevel().sort_index()
-plt.figure(figsize=[5,6])
-sns.barplot(data=most_common_cluster_proportions.reset_index(), x='most_common_cluster', y='proportion', hue='Condition')
-plt.xticks(rotation=30)
-
-def dev_fig4(adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig4.svg')):
-    sc.settings._vector_friendly = True
-    #adata = source_target_adata.copy()
-    permute_idxs = np.random.permutation(len(adata))
-    adata.obs = adata.obs.rename(columns={
-        'dpt_pseudotime': 'DPT pseudotime',
-        'ordinal_pseudotime': 'ordinal pseudotime',
-        'ClustersMapped': 'developmental cell type'
-        })
-    adata.uns['lineage_colors'] = ['purple','orange']
-    colors = ['modality','developmental cell type', 'ordinal pseudotime', 'leiden']
-
-    adata.obs['developmental cell type'] = pd.Categorical(adata.obs['developmental cell type'], categories=['EN-fetal-early','EN-fetal-late','EN','ExN'], ordered=True)
-    adata.obs['developmental cell type'] = adata.obs['developmental cell type'].replace({'ExN':np.nan})
-    dev_fig4 = sc.pl.draw_graph(adata[permute_idxs], color=colors, wspace=0.5, ncols=2, return_fig=True, na_in_legend=False)
-
-    print(f'Saving figure to {manuscript_figpath}')
-    dev_fig4.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
-
 
 #%% Perform t-test between Condition for each ClustersMapped
 import scipy.stats as stats
