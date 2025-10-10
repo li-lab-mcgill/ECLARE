@@ -169,6 +169,12 @@ student_rna, student_atac, cell_group, genes_to_peaks_binary_mask, genes_peaks_d
 if target_dataset == 'MDD':
     dev_group_key = 'Age'
     dev_stages = pd.Categorical(student_rna.obs[dev_group_key].sort_values().unique().tolist(), ordered=True)
+
+    rna_clusters_metadata = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'maitra_2023_SourceDataFigures', 'Fig1b_Fig1c_SuppFig1a_SuppFig1b_SuppFig1c_SuppFig1d.xlsx'))
+    subclusters = rna_clusters_metadata[['Cell', 'Cluster']].set_index('Cell').rename(columns={'Cluster': 'SubClusters'})
+    student_rna.obs = student_rna.obs.merge(subclusters, left_index=True, right_index=True, how='left')
+    #student_rna.obs = student_rna.obs.rename(columns={'RNA_snn_res.0.7': 'SubClusters'}).astype(str) # don't have labels for subclusters for RNA, so use one of integer-based cluster annotations
+
 elif target_dataset == 'Cortex_Velmeshev':
     dev_group_key = 'Age_Range'
     dev_stages = student_rna.obs[dev_group_key].cat.categories.tolist()
@@ -286,7 +292,8 @@ if cell_group == 'Lineage':
 
 elif cell_group == 'ClustersMapped':
     #clusters = student_rna.obs['ClustersMapped'].cat.categories.tolist()
-    target_clusters = ['ExN']
+    #target_clusters = ['ExN']
+    target_clusters = ['RG-vRG','IPC-EN','EN-newborn','EN-IT-immature','EN-non-IT-immature','ExN1','ExN1_L23','ExN2','ExN2_L23','EN-L2_3-IT'] # contains source and target clusters
     if student_rna.obs_names.isin(valid_rna_ids).any():
         rna_idxs = np.where(~student_rna.obs_names.isin(valid_rna_ids) & student_rna.obs['ClustersMapped'].isin(target_clusters))[0]
         atac_idxs = np.where(~student_atac.obs_names.isin(valid_atac_ids) & student_atac.obs['ClustersMapped'].isin(target_clusters))[0]
@@ -322,11 +329,6 @@ elif target_dataset == 'Cortex_Velmeshev':
 
 student_rna_cells_sub = torch.from_numpy(student_rna_sub.X.toarray().astype(np.float32))
 student_atac_cells_sub = torch.from_numpy(student_atac_sub.X.toarray().astype(np.float32))
-
-## define color palettes
-cmap_dev = plt.get_cmap('plasma', len(dev_stages))
-cmap_dev = {dev_stages[i]: cmap_dev(i) for i in range(len(dev_stages))}
-cmap_ct = create_celltype_palette(student_rna_sub.obs[cell_group].values, student_atac_sub.obs[cell_group].values, plot_color_palette=False)
 
 ## create obs
 obs = pd.concat([
@@ -540,8 +542,8 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
         entropy_threshold = 0.25
 
     elif cell_group_key == 'ClustersMapped':
-        sc.pp.pca(adata, n_comps=30)
-        sc.pp.neighbors(adata, n_neighbors=50, n_pcs=30, use_rep='X_pca', random_state=random_seed)
+        sc.pp.pca(adata, n_comps=10)
+        sc.pp.neighbors(adata, n_neighbors=100, n_pcs=10, use_rep='X_pca', random_state=random_seed)
         sc.tl.leiden(adata, resolution=0.25, random_state=random_seed)
         entropy_threshold = 0.60
 
@@ -553,16 +555,25 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
         sc.pl.umap(adata, color=['modality','leiden'])
 
         ## check for imbalanced clusters
-        imb = adata.obs.groupby('leiden')['modality'].agg(
-            proportion=lambda x: x.value_counts(normalize=True).max(),
-            n=lambda x: x.value_counts().max(),
-        )
+        '''
+        imb = adata.obs.groupby('leiden')[['modality', 'source_or_target']].agg([
+            ('proportion', lambda x: x.value_counts(normalize=True).max()),
+            ('n', lambda x: x.value_counts().max()),
+        ])
+        imb.columns = imb.columns.map('_'.join)
 
         Z = (imb['proportion']-0.5) / np.sqrt(0.25/imb['n'])
         imb['p'] = norm.sf(np.abs(Z))
         imb['entropy'] = -( (imb['proportion']*np.log(imb['proportion'])) + ((1-imb['proportion'])*np.log(1-imb['proportion'])) )
+        '''
 
-        keep_leidens = imb[imb['entropy'] > entropy_threshold].index.tolist()
+        imb = adata.obs.groupby('leiden')[['modality', 'source_or_target']].value_counts(normalize=True).reset_index().pivot_table(index='leiden', columns=['modality', 'source_or_target'], values='proportion')
+        k = imb.shape[-1]
+        max_entropy = -( 1/k * np.log(1/k) ) * k
+        imb['entropy'] = -( imb*np.log(imb) ).sum(axis=1)
+        imb['entropy_ratio'] = imb['entropy'] / max_entropy
+
+        keep_leidens = imb[imb['entropy_ratio'] > entropy_threshold].index.tolist()
         adata = adata[adata.obs['leiden'].isin(keep_leidens)]
 
         sc.pp.pca(adata, n_comps=adata.obsm['X_pca'].shape[-1])
@@ -612,12 +623,20 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
 
     elif cell_group_key in adata.obs.columns: # should be True in all cases
 
-        root_cell_group = adata.obs.groupby(cell_group_key)['ordinal_pseudotime'].mean().idxmin()
+        root_cell_group = adata.obs.groupby('leiden')['ordinal_pseudotime'].mean().idxmin()
         print(f'Root cell group: {root_cell_group}')
 
-        median_root_pseudotime = adata.obs.loc[adata.obs[cell_group_key] == root_cell_group, 'ordinal_pseudotime'].median()
-        iroot_cell_id = (adata.obs.loc[adata.obs[cell_group_key] == root_cell_group, 'ordinal_pseudotime'] == median_root_pseudotime).idxmax()
-        adata.uns['iroot'] = adata.obs_names.tolist().index(iroot_cell_id)
+        mask = adata.obs['leiden'] == root_cell_group
+        X = adata.X if not hasattr(adata, 'obsm') or 'X_pca' not in adata.obsm else adata.obsm['X_pca']
+        if hasattr(X, 'toarray'):  # handle sparse matrices
+            X = X.toarray()
+        centroid = X[mask.values].mean(axis=0)
+        dists = np.linalg.norm(X - centroid, axis=1)
+        adata.uns['iroot'] = np.argmin(np.where(mask.values, dists, np.inf))
+
+        #median_root_pseudotime = adata.obs.loc[adata.obs['leiden'] == root_cell_group, 'ordinal_pseudotime'].median()
+        #iroot_cell_id = (adata.obs.loc[adata.obs['leiden'] == root_cell_group, 'ordinal_pseudotime'] == median_root_pseudotime).idxmax()
+        #adata.uns['iroot'] = adata.obs_names.tolist().index(iroot_cell_id)
 
         #p = adata.obs.groupby('leiden')[cell_group_key].value_counts(normalize=True)
         #entropy_per_leiden = (-p*np.log(p)).groupby('leiden').mean().sort_values()
@@ -1167,9 +1186,15 @@ source_target_adata.obs = source_target_adata.obs.merge(subsampled_kd_clip_adata
 source_target_adata.obs['Age'] = pd.Categorical(source_target_adata.obs['Age'])
 
 #source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'EN-fetal-early', 'EN-fetal-late', 'EN'])]
-source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'EN-newborn', 'EN-IT-immature', 'EN-L6-IT', 'EN-L5-IT', 'EN-L4-IT', 'EN-L2_3-IT'])]
+#source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'RG-vRG', 'IPC-EN', 'EN-newborn', 'EN-IT-immature', 'EN-L2_3-IT'])]
 
-source_target_adata = paga_analysis(source_target_adata, dev_group_key='Age', cell_group_key='ClustersMapped', correct_imbalance=False)
+source_target_adata = source_target_adata[source_target_adata.obs['SubClusters'].isin(
+    ['RG-vRG', 'IPC-EN', 'EN-newborn', 'EN-IT-immature','EN-L2_3-IT'] + \
+    ['ExN1','ExN2','ExN1_L23','ExN2_L23'] + \
+    ['ExN6', 'ExN2_L23', 'ExN9_L23']
+        )]
+
+source_target_adata = paga_analysis(source_target_adata, dev_group_key='Age', cell_group_key='ClustersMapped', correct_imbalance=True)
 #source_target_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'source_target_adata_{source_dataset}_{target_dataset}.h5ad'))
 
 ## plot FA embeddings comparing source and target datasets
@@ -1203,7 +1228,7 @@ df = cross_batch_graph_neighbors_with_summary(
 )
 df.head()
 
-df['most_common_cluster'] = pd.Categorical(df['most_common_cluster'], categories=source_clusters + target_clusters, ordered=True)
+df['most_common_cluster'] = pd.Categorical(df['most_common_cluster'], categories=np.unique(source_clusters + target_clusters), ordered=True)
 
 count_in_source = source_target_adata.obs.loc[source_target_adata.obs['source_or_target'] == 'source', 'ClustersMapped'].value_counts()
 count_in_source.name = 'count_in_source'
@@ -1394,18 +1419,6 @@ def devmdd_fig4(lineplots_fig, manuscript_figpath=os.path.join(os.environ['OUTPA
     lineplots_fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
     plt.close()
 
-
-## case vs control leiden cluster proportions
-plt.figure(figsize=[8,6])
-leiden_proportions = target_adata.obs.groupby('Condition')['leiden'].value_counts(normalize=True).swaplevel().sort_index()
-sns.barplot(data=leiden_proportions.reset_index(), x='leiden', y='proportion', hue='Condition')
-
-## case vs control most common cluster proportions
-most_common_cluster_proportions = source_target_adata[source_target_adata.obs['source_or_target']=='target'].obs.groupby('Condition')['most_common_cluster'].value_counts(normalize=True).swaplevel().sort_index()
-plt.figure(figsize=[5,6])
-sns.barplot(data=most_common_cluster_proportions.reset_index(), x='most_common_cluster', y='proportion', hue='Condition')
-plt.xticks(rotation=30)
-
 def dev_fig4(adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig4.svg')):
     sc.settings._vector_friendly = True
     #adata = source_target_adata.copy()
@@ -1425,7 +1438,30 @@ def dev_fig4(adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_
     print(f'Saving figure to {manuscript_figpath}')
     dev_fig4.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
 
+## plot embedding density for each cell type
+source_target_adata.obs['ClustersMapped'] = pd.Categorical(source_target_adata.obs['ClustersMapped'], categories=source_target_adata.obs.groupby('ClustersMapped')['ordinal_pseudotime'].mean().sort_values().index.tolist(), ordered=True).remove_unused_categories()
+sc.tl.embedding_density(source_target_adata, basis='draw_graph_fa', groupby='ClustersMapped')
+sc.pl.embedding_density(source_target_adata, basis='draw_graph_fa', key='draw_graph_fa_density_ClustersMapped')
+
+target_adata.obs['SubClusters'] = pd.Categorical(target_adata.obs['SubClusters'], categories=target_adata.obs.groupby('SubClusters')['ordinal_pseudotime'].mean().sort_values().index.tolist(), ordered=True).remove_unused_categories()
+sc.tl.embedding_density(target_adata, basis='draw_graph_fa', groupby='SubClusters')
+sc.pl.embedding_density(target_adata[target_adata.obs['modality']=='ATAC'], basis='draw_graph_fa', key='draw_graph_fa_density_SubClusters')
+sc.pl.embedding_density(target_adata[target_adata.obs['modality']=='RNA'], basis='draw_graph_fa', key='draw_graph_fa_density_SubClusters')
+
+
+subsampled_eclare_adata = target_adata.copy()
 '''
+## case vs control leiden cluster proportions
+plt.figure(figsize=[8,6])
+leiden_proportions = target_adata.obs.groupby('Condition')['leiden'].value_counts(normalize=True).swaplevel().sort_index()
+sns.barplot(data=leiden_proportions.reset_index(), x='leiden', y='proportion', hue='Condition')
+
+## case vs control most common cluster proportions
+most_common_cluster_proportions = source_target_adata[source_target_adata.obs['source_or_target']=='target'].obs.groupby('Condition')['most_common_cluster'].value_counts(normalize=True).swaplevel().sort_index()
+plt.figure(figsize=[5,6])
+sns.barplot(data=most_common_cluster_proportions.reset_index(), x='most_common_cluster', y='proportion', hue='Condition')
+plt.xticks(rotation=30)
+
 fig, ax = plt.subplots(1, 2, figsize=[10, 7], sharex=True)
 #sns.boxplot(df, x='most_common_cluster', y='ordinal_pseudotime', ax=ax[0])
 #sns.boxplot(df, x='most_common_cluster', y='dpt_pseudotime', ax=ax[1])
@@ -1868,20 +1904,20 @@ os.makedirs(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results'), exist_o
 
 # Cast object columns to str before saving
 cast_object_columns_to_str(subsampled_eclare_adata)
-subsampled_eclare_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata.h5ad'))
+subsampled_eclare_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_eclare_adata_{target_dataset}.h5ad'))
 
 cast_object_columns_to_str(scJoint_adata)
-scJoint_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'scJoint_adata.h5ad'))
+scJoint_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'scJoint_adata_{target_dataset}.h5ad'))
 
 cast_object_columns_to_str(glue_adata)
-glue_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'glue_adata.h5ad'))
+glue_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'glue_adata_{target_dataset}.h5ad'))
 
 for source_dataset in source_datasets:
     cast_object_columns_to_str(subsampled_kd_clip_adatas[source_dataset])
-    subsampled_kd_clip_adatas[source_dataset].write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_kd_clip_adatas_{source_dataset}.h5ad'))
+    subsampled_kd_clip_adatas[source_dataset].write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_kd_clip_adatas_{source_dataset}_{target_dataset}.h5ad'))
 
     cast_object_columns_to_str(subsampled_clip_adatas[source_dataset])
-    subsampled_clip_adatas[source_dataset].write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_clip_adatas_{source_dataset}.h5ad'))
+    subsampled_clip_adatas[source_dataset].write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_clip_adatas_{source_dataset}_{target_dataset}.h5ad'))
 
 #%% load adatas
 
@@ -1921,6 +1957,12 @@ phate.plot.scatter2d(phate_op, c=dev_labels, xticklabels=False, yticklabels=Fals
 #%% train UMAP on subsampled data
 import seaborn as sns
 from eclare.post_hoc_utils import plot_umap_embeddings
+
+## define color palettes
+cmap_dev = plt.get_cmap('plasma', len(dev_stages))
+cmap_dev = {dev_stages[i]: cmap_dev(i) for i in range(len(dev_stages))}
+cmap_ct = create_celltype_palette(student_rna_sub.obs[cell_group].values, student_atac_sub.obs[cell_group].values, plot_color_palette=False)
+
 
 use_sub_data = True
 

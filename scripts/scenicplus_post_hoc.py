@@ -32,6 +32,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import anndata as ad
 import pickle
+import seaborn as sns
 
 import scanpy as sc
 sc.settings._vector_friendly = True # forces rasterized=True for scatter plots, avoids each scatter point from being a separate SVG vector object
@@ -580,25 +581,130 @@ def atac_to_cistopic_object(atac):
 
 def load_data(source_dataset='Cortex_Velmeshev', target_dataset=None, genes_by_peaks_str='9584_by_66620', valid_cell_ids=None):
 
-    rna = ad.read_h5ad(os.path.join(os.environ['DATAPATH'], source_dataset, "rna", f"rna_{genes_by_peaks_str}.h5ad"), backed='r')
-    atac = ad.read_h5ad(os.path.join(os.environ['DATAPATH'], source_dataset, "atac", f"atac_{genes_by_peaks_str}.h5ad"), backed='r')
+    ## modify filename based on presence of target dataset
+    if target_dataset is not None:
+        rna_filename = f"rna_{genes_by_peaks_str}_aligned_source_{target_dataset}.h5ad"
+        atac_filename = f"atac_{genes_by_peaks_str}_aligned_source_{target_dataset}.h5ad"
+    else:
+        rna_filename = f"rna_{genes_by_peaks_str}.h5ad"
+        atac_filename = f"atac_{genes_by_peaks_str}.h5ad"
 
+    ## paths to hard-coded datasets, avoids needing to import from eclare.setup_utils
+    if source_dataset == 'MDD':
+        rna = ad.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', rna_filename), backed='r')
+        atac = ad.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', atac_filename), backed='r')
+
+    elif source_dataset == 'Cortex_Velmeshev':
+        rna = ad.read_h5ad(os.path.join(os.environ['DATAPATH'], source_dataset, "rna", rna_filename), backed='r')
+        atac = ad.read_h5ad(os.path.join(os.environ['DATAPATH'], source_dataset, "atac", atac_filename), backed='r')
+
+    ## filter based on valid cell ids
     if valid_cell_ids is not None:
         rna = rna[rna.obs_names.isin(valid_cell_ids)].to_memory()
         atac = atac[atac.obs_names.isin(valid_cell_ids)].to_memory()
 
+    ## ensure that ATAC regions in chrom:start-end format
+    atac.var_names = atac.var_names.str.split('[:|-]', expand=True).to_frame().apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1).reset_index(drop=True).values
+    atac.var_names = atac.var_names.astype(str)
+
     return rna, atac
+
+def add_eregulon_to_dataframe(analyzer, tf_name, target_genes, chromosome_regions, 
+                             region_signature_name=None, gene_signature_name=None, 
+                             is_extended=False, gene_weights=None, region_weights=None):
+    """
+    Add a new eRegulon to the analyzer's DataFrame.
+    Call this right after parse_eRegulons_from_excel() but before create_eRegulon_objects().
+    
+    Parameters
+    ----------
+    analyzer : SCENICPlusDownstreamAnalyzer
+        The analyzer object
+    tf_name : str
+        Name of the transcription factor
+    target_genes : list
+        List of target gene names
+    chromosome_regions : list
+        List of chromosome regions
+    region_signature_name : str, optional
+        Name for the region signature (default: f"{tf_name}_regions")
+    gene_signature_name : str, optional
+        Name for the gene signature (default: f"{tf_name}_genes")
+    is_extended : bool, optional
+        Whether this is an extended eRegulon (default: False)
+    gene_weights : dict, optional
+        Dictionary mapping gene names to weights
+    region_weights : dict, optional
+        Dictionary mapping region names to weights
+    
+    Returns
+    -------
+    bool
+        True if successful
+    """
+    # Set default signature names if not provided
+    if region_signature_name is None:
+        region_signature_name = f"{tf_name}_regions"
+    if gene_signature_name is None:
+        gene_signature_name = f"{tf_name}_genes"
+    
+    # Create default weights if not provided
+    if gene_weights is None:
+        gene_weights = {gene: 1.0 for gene in target_genes}
+    if region_weights is None:
+        region_weights = {region: 1.0 for region in chromosome_regions}
+    
+    print(f"Adding custom eRegulon for TF '{tf_name}' to DataFrame...")
+    print(f"  - Target genes: {len(target_genes)}")
+    print(f"  - Target regions: {len(chromosome_regions)}")
+    print(f"  - Region signature: {region_signature_name}")
+    print(f"  - Gene signature: {gene_signature_name}")
+    
+    # Create new rows for the DataFrame
+    new_rows = []
+    
+    # Create a row for each gene-region pair
+    for gene in target_genes:
+        for region in chromosome_regions:
+            row = {
+                'TF': tf_name,
+                'Region_signature_name': region_signature_name,
+                'Gene_signature_name': gene_signature_name,
+                'Gene': gene,
+                'Region': region,
+                'is_extended': is_extended,
+                'TF2G_importance_x_abs_rho': gene_weights.get(gene, 1.0),
+                'R2G_importance_x_abs_rho': region_weights.get(region, 1.0),
+                'TF2G_rho': 0.0,  # Default correlation
+                'R2G_rho': 0.0     # Default correlation
+            }
+            new_rows.append(row)
+    
+    # Create DataFrame from new rows
+    new_df = pd.DataFrame(new_rows)
+    
+    # Add to the analyzer's DataFrame
+    analyzer.df = pd.concat([analyzer.df, new_df], ignore_index=True)
+    
+    print(f"Added {len(new_rows)} rows to DataFrame")
+    print(f"Total DataFrame size: {len(analyzer.df)} rows")
+    
+    return True
 
 #%%
 if __name__ == "__main__":
 
-    # Load ECLARE adata arising from developmental post-hoc analysis
-    eclare_adata = ad.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata.h5ad'))
-        
     # Load data
-    source_dataset = 'Cortex_Velmeshev'
-    target_dataset = None
-    genes_by_peaks_str = '9584_by_66620'
+    #source_dataset = 'Cortex_Velmeshev'
+    #target_dataset = None
+    #genes_by_peaks_str = '9584_by_66620'
+
+    source_dataset = 'MDD'
+    target_dataset = 'PFC_V1_Wang'
+    genes_by_peaks_str = '17279_by_66623'
+
+    # Load ECLARE adata arising from developmental post-hoc analysis
+    eclare_adata = ad.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_eclare_adata_{source_dataset}.h5ad'))
 
     rna_adata, atac = load_data(source_dataset=source_dataset, target_dataset=target_dataset, genes_by_peaks_str=genes_by_peaks_str, valid_cell_ids=eclare_adata.obs_names.tolist())
 
@@ -609,13 +715,15 @@ if __name__ == "__main__":
     # Remove duplicate obs_names from rna_adata and atac
     atac = atac[~atac.obs_names.duplicated()].copy()
     rna_adata = rna_adata[rna_adata.obs_names.isin(atac.obs_names)]
-
+ 
+    ## train cistopic object
     #cistopic_obj = atac_to_cistopic_object(atac)
-    #with open(os.path.join(os.environ['OUTPATH'], 'cistopic_obj.pkl'), 'wb') as f:
+    #with open(os.path.join(os.environ['OUTPATH'], f'cistopic_obj_{source_dataset}.pkl'), 'wb') as f:
     #    pickle.dump(cistopic_obj, f)
     
-    with open(os.path.join(os.environ['OUTPATH'], 'cistopic_obj.pkl'), 'rb') as f:
-        print(f"Loading cistopic_obj from {os.path.join(os.environ['OUTPATH'], 'cistopic_obj.pkl')}")
+    ## load cistopic object
+    with open(os.path.join(os.environ['OUTPATH'], f'cistopic_obj_{source_dataset}.pkl'), 'rb') as f:
+        print(f"Loading cistopic_obj from {os.path.join(os.environ['OUTPATH'], f'cistopic_obj_{source_dataset}.pkl')}")
         cistopic_obj = pickle.load(f)
 
     ## add suffix to rna_adata obs_names to make consistent with CistopicObject
@@ -639,6 +747,34 @@ if __name__ == "__main__":
     if not analyzer.parse_eRegulons_from_excel():
         print("Analysis failed at eRegulon parsing step. Check error messages above.")
         exit(1)
+
+    # Add custom eRegulon here (optional)
+    add_eregulon_to_dataframe(
+        analyzer=analyzer,
+        tf_name="NR4A2",
+        chromosome_regions=["chr9:71768678-71769178"],
+        target_genes=["ABHD17B"],
+        region_signature_name="NR4A2_custom_regions",
+        gene_signature_name="NR4A2_custom_genes"
+    )
+
+    add_eregulon_to_dataframe(
+        analyzer=analyzer,
+        tf_name="EGR1",
+        chromosome_regions=["chr9:71768678-71769178"],
+        target_genes=["ABHD17B"],
+        region_signature_name="EGR1_custom_regions",
+        gene_signature_name="EGR1_custom_genes"
+    )
+
+    add_eregulon_to_dataframe(
+        analyzer=analyzer,
+        tf_name="SOX2",
+        chromosome_regions=["chr9:71829361-71829861", "chr9:71830119-71830619"],
+        target_genes=["ABHD17B"],
+        region_signature_name="SOX2_custom_regions",
+        gene_signature_name="SOX2_custom_genes"
+    )
 
     # Step 2: Create eRegulon objects
     if not analyzer.create_eRegulon_objects():
@@ -667,8 +803,6 @@ if __name__ == "__main__":
     analyzer.generate_summary_report(f"{output_dir}/scenicplus_summary.txt")
 
     # Save the SCENIC+ object for future use
-    import pickle
-
     scenicplus_obj_path = os.path.join(output_dir, "scenicplus_obj.pkl")
     with open(scenicplus_obj_path, "wb") as f:
         pickle.dump(analyzer.scplus_obj, f)
@@ -787,116 +921,279 @@ if __name__ == "__main__":
     signatures = eclare_adata.copy()
     signatures.obs = signatures.obs.loc[:, signatures.obs.columns.isin(ereg.columns)]
     signatures.obs.columns = signatures.obs.columns.str.split('_').str[0]
-    signatures.obs = signatures.obs.groupby(axis=1, level=0).quantile(0.25)
+    signatures.obs = signatures.obs.groupby(axis=1, level=0).quantile(0.25) # merge
+    signatures.obs = signatures.obs.merge(eclare_adata.obs[['leiden', 'Condition', 'most_common_cluster']], left_index=True, right_index=True, how='left')
     # assert (signatures.obs.groupby(axis=1, level=0).apply(np.max, axis=1) == signatures.obs.groupby(axis=1, level=0).max()).values.mean() > 0.99
 
-    # To impose the same scale on the colorbar for both 'POU2F1' and 'DLX5', 
-    vmin = signatures.obs[['POU2F1', 'DLX5']].min().min()
-    vmax = signatures.obs[['POU2F1', 'DLX5']].max().max()
-    
-    ## GRNs plots
-    fig = sc.pl.draw_graph(signatures, color=['POU2F1', 'DLX5'], size=100, vmin=vmin, vmax=vmax, cmap='plasma', return_fig=True, show=False)
-    fig.set_size_inches(10, 4)
+    if source_dataset == 'Cortex_Velmeshev':
+        # To impose the same scale on the colorbar for both 'POU2F1' and 'DLX5', 
+        vmin = signatures.obs[['POU2F1', 'DLX5']].min().min()
+        vmax = signatures.obs[['POU2F1', 'DLX5']].max().max()
+        
+        ## GRNs plots
+        fig = sc.pl.draw_graph(signatures, color=['POU2F1', 'DLX5'], size=100, vmin=vmin, vmax=vmax, cmap='plasma', return_fig=True, show=False)
+        fig.set_size_inches(10, 4)
 
-    ## VIP density plot
-    eclare_adata.obs['is_vip'] = pd.Categorical(eclare_adata.obs['sub_cell_type'] == 'VIP').rename_categories({True: 'VIP', False: 'Non-VIP'})
-    sc.tl.embedding_density(eclare_adata, basis='draw_graph_fa', groupby='is_vip')
-    vip_fig = sc.pl.embedding_density(eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_is_vip', return_fig=True, group='VIP', title='VIP neurons density')
-    vip_fig.set_size_inches(4.75, 4)
+        ## VIP density plot
+        eclare_adata.obs['is_vip'] = pd.Categorical(eclare_adata.obs['sub_cell_type'] == 'VIP').rename_categories({True: 'VIP', False: 'Non-VIP'})
+        sc.tl.embedding_density(eclare_adata, basis='draw_graph_fa', groupby='is_vip')
+        vip_fig = sc.pl.embedding_density(eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_is_vip', return_fig=True, group='VIP', title='VIP neurons density')
+        vip_fig.set_size_inches(4.75, 4)
 
-    ## INT density plot
-    eclare_adata.obs['is_INT'] = pd.Categorical(eclare_adata.obs['sub_cell_type'] == 'INT').rename_categories({True: 'INT', False: 'Non-INT'})
-    sc.tl.embedding_density(eclare_adata, basis='draw_graph_fa', groupby='is_INT')
-    INT_fig = sc.pl.embedding_density(eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_is_INT', return_fig=True, group='INT', title='INT neurons density')
-    INT_fig.set_size_inches(4.75, 4)
+        ## INT density plot
+        eclare_adata.obs['is_INT'] = pd.Categorical(eclare_adata.obs['sub_cell_type'] == 'INT').rename_categories({True: 'INT', False: 'Non-INT'})
+        sc.tl.embedding_density(eclare_adata, basis='draw_graph_fa', groupby='is_INT')
+        INT_fig = sc.pl.embedding_density(eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_is_INT', return_fig=True, group='INT', title='INT neurons density')
+        INT_fig.set_size_inches(4.75, 4)
 
-    def dev_fig3(fig, vip_fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results')):
-        fig.savefig(os.path.join(manuscript_figpath, 'dev_fig3_grns.svg'), bbox_inches='tight', dpi=300)
-        vip_fig.savefig(os.path.join(manuscript_figpath, 'dev_fig3_vip.svg'), bbox_inches='tight', dpi=300)
+        def dev_fig3(fig, vip_fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results')):
+            fig.savefig(os.path.join(manuscript_figpath, 'dev_fig3_grns.svg'), bbox_inches='tight', dpi=300)
+            vip_fig.savefig(os.path.join(manuscript_figpath, 'dev_fig3_vip.svg'), bbox_inches='tight', dpi=300)
+
+    elif source_dataset == 'MDD':
+        # To impose the same scale on the colorbar for both 'POU2F1' and 'DLX5', 
+        vmin = signatures.obs[['ZNF184', 'NFIX']].min().min()
+        vmax = signatures.obs[['ZNF184', 'NFIX']].max().max()
+        
+        ## GRNs plots
+        fig = sc.pl.draw_graph(signatures[eclare_adata.obs['Condition']=='case'], color=['ZNF184', 'NFIX'], groups='case', size=100, vmin=vmin, vmax=vmax, cmap='plasma')#, return_fig=True, show=False)
+        fig = sc.pl.draw_graph(signatures[eclare_adata.obs['Condition']=='control'], color=['ZNF184', 'NFIX'], groups='control', size=100, vmin=vmin, vmax=vmax, cmap='plasma')
+        #fig.set_size_inches(10, 4)
+
+        sc.pl.draw_graph(signatures, color=['EGR1', 'SOX2', 'NR4A2'], size=100)
+
+        sns.lineplot(signatures.obs[['leiden','Condition','ZNF184']], x='leiden', y='ZNF184', hue='Condition', errorbar='se', marker='o')
+        sns.lineplot(signatures.obs[['leiden','Condition','NFIX']], x='leiden', y='NFIX', hue='Condition', errorbar='se', marker='o')
+
+        ## VIP density plot
+        eclare_adata.obs['most_common_cluster'] = pd.Categorical(eclare_adata.obs['most_common_cluster'], categories=eclare_adata.obs.groupby('most_common_cluster')['ordinal_pseudotime'].mean().sort_values(ascending=True).index.tolist(), ordered=True)
+        sc.tl.embedding_density(eclare_adata, basis='draw_graph_fa', groupby='most_common_cluster')
+        sc.pl.embedding_density(eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_most_common_cluster', ncols=5)
+        #fig.set_size_inches(4.75, 4)
 
 #%%
-    from scenicplus.triplet_score import _rank_scores_and_assign_random_ranking_in_range_for_ties, _calculate_cross_species_rank_ratio_with_order_statistics
+from scenicplus.triplet_score import _rank_scores_and_assign_random_ranking_in_range_for_ties, _calculate_cross_species_rank_ratio_with_order_statistics
 
-    def calculate_triplet_score(
-        eRegulon_metadata: pd.DataFrame) -> pd.DataFrame:
-        """
-        Calculate triplet score for eRegulons without TF-region importance, since don't have cistrome information.
-        /home/mcb/users/dmannk/.conda/envs/scenicplus/lib/python3.11/site-packages/scenicplus/triplet_score.py
-        """
+def calculate_triplet_score(
+    eRegulon_metadata: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate triplet score for eRegulons without TF-region importance, since don't have cistrome information.
+    /home/mcb/users/dmannk/.conda/envs/scenicplus/lib/python3.11/site-packages/scenicplus/triplet_score.py
+    """
 
-        eRegulon_metadata = eRegulon_metadata.copy()
+    eRegulon_metadata = eRegulon_metadata.copy()
 
-        TF_to_gene_score = eRegulon_metadata["TF2G_importance"].to_numpy()
-        region_to_gene_score = eRegulon_metadata["R2G_importance"].to_numpy()
+    TF_to_gene_score = eRegulon_metadata["TF2G_importance"].to_numpy()
+    region_to_gene_score = eRegulon_metadata["R2G_importance"].to_numpy()
 
-        #rank the scores
-        TF_to_gene_rank = _rank_scores_and_assign_random_ranking_in_range_for_ties(
-            TF_to_gene_score)
-        region_to_gene_rank = _rank_scores_and_assign_random_ranking_in_range_for_ties(
-            region_to_gene_score)
+    #rank the scores
+    TF_to_gene_rank = _rank_scores_and_assign_random_ranking_in_range_for_ties(
+        TF_to_gene_score)
+    region_to_gene_rank = _rank_scores_and_assign_random_ranking_in_range_for_ties(
+        region_to_gene_score)
 
-        #create rank ratios
-        TF_to_gene_rank_ratio = (TF_to_gene_rank.astype(np.float64) + 1) / TF_to_gene_rank.shape[0]
-        region_to_gene_rank_ratio = (region_to_gene_rank.astype(np.float64) + 1) / region_to_gene_rank.shape[0]
-        
-        #create aggregated rank
-        rank_ratios = np.array([
-            TF_to_gene_rank_ratio, region_to_gene_rank_ratio])
-        aggregated_rank = np.zeros((rank_ratios.shape[1],), dtype = np.float64)
-        for i in range(rank_ratios.shape[1]):
-                aggregated_rank[i] = _calculate_cross_species_rank_ratio_with_order_statistics(rank_ratios[:, i])
-        eRegulon_metadata["triplet_rank"] = aggregated_rank.argsort().argsort()
-        return eRegulon_metadata
-
-    eRegulon_metadata = analyzer.scplus_obj.uns['eRegulon_metadata'].copy()
-    eRegulon_metadata = calculate_triplet_score(eRegulon_metadata)
-    triplet_ranks = eRegulon_metadata['triplet_rank']
-
-    from pyscenic.binarization import binarize
-    from typing import Optional, List
-
-    def binarize_AUC(scplus_obj,
-                    auc_key: Optional[str] = 'eRegulon_AUC',
-                    out_key: Optional[str] = 'eRegulon_AUC_thresholds',
-                    signature_keys: Optional[List[str]] = ['Gene_based', 'Region_based'],
-                    n_cpu: Optional[int] = 1):
-
-        """
-        Binarize eRegulons using AUCell, ensuring to return binary matrix and thresholds.
-        /home/mcb/users/dmannk/other/scenicplus/src/scenicplus/eregulon_enrichment.py
-        """
-
-        if not out_key in scplus_obj.uns.keys():
-            scplus_obj.uns[out_key] = {}
-        for signature in signature_keys:
-            auc_mtx = scplus_obj.uns[auc_key][signature]
-            auc_mtx_binarized, auc_thresholds = binarize(auc_mtx, num_workers=n_cpu)
-            scplus_obj.uns[out_key][signature] = auc_mtx_binarized
-            scplus_obj.uns[out_key][signature + '_thresholds'] = auc_thresholds
-
-    binarize_AUC(analyzer.scplus_obj, signature_keys=['Gene_based', 'Region_based'])
-
-    binary_AUC_gene = analyzer.scplus_obj.uns['eRegulon_AUC_thresholds']['Gene_based'].copy()
-    binary_AUC_region = analyzer.scplus_obj.uns['eRegulon_AUC_thresholds']['Region_based'].copy()
-
-    binary_AUC_gene.index = binary_AUC_gene.index.str.replace('___cisTopic', '')
-    binary_AUC_region.index = binary_AUC_region.index.str.replace('___cisTopic', '').map(cell_id_mapper)
-    binary_AUC_df = pd.concat([binary_AUC_gene, binary_AUC_region], axis=0)
-
-    binary_AUC_df.columns = binary_AUC_df.columns.str.split('_(', regex=False).str[0]
-    binary_AUC_df = binary_AUC_df.groupby(binary_AUC_df.columns, axis=1).sum()
-
-    # Convert columns of binary_AUC_df to categorical dtype (since binary values)
-    for col in binary_AUC_df.columns:
-        binary_AUC_df[col] = binary_AUC_df[col].astype(int).astype(str).astype('category')
-
-    eclare_adata_binarized_AUC = eclare_adata.copy()
-    eclare_adata_binarized_AUC.obs = eclare_adata_binarized_AUC.obs.drop(columns=ereg_merged.columns)
-    eclare_adata_binarized_AUC.obs = eclare_adata_binarized_AUC.obs.merge(binary_AUC_df, left_index=True, right_index=True, how='left')
+    #create rank ratios
+    TF_to_gene_rank_ratio = (TF_to_gene_rank.astype(np.float64) + 1) / TF_to_gene_rank.shape[0]
+    region_to_gene_rank_ratio = (region_to_gene_rank.astype(np.float64) + 1) / region_to_gene_rank.shape[0]
     
-    ## density plots
-    sc.tl.embedding_density(eclare_adata_binarized_AUC, basis='draw_graph_fa', groupby=most_corr_signature)
-    sc.pl.embedding_density(eclare_adata_binarized_AUC, basis='draw_graph_fa', key=f'draw_graph_fa_density_{most_corr_signature}', group='1', title=most_corr_signature)
+    #create aggregated rank
+    rank_ratios = np.array([
+        TF_to_gene_rank_ratio, region_to_gene_rank_ratio])
+    aggregated_rank = np.zeros((rank_ratios.shape[1],), dtype = np.float64)
+    for i in range(rank_ratios.shape[1]):
+            aggregated_rank[i] = _calculate_cross_species_rank_ratio_with_order_statistics(rank_ratios[:, i])
+    eRegulon_metadata["triplet_rank"] = aggregated_rank.argsort().argsort()
+    return eRegulon_metadata
+
+eRegulon_metadata = analyzer.scplus_obj.uns['eRegulon_metadata'].copy()
+eRegulon_metadata = calculate_triplet_score(eRegulon_metadata)
+triplet_ranks = eRegulon_metadata['triplet_rank']
+
+from pyscenic.binarization import binarize
+from typing import Optional, List
+
+def binarize_AUC(scplus_obj,
+                auc_key: Optional[str] = 'eRegulon_AUC',
+                out_key: Optional[str] = 'eRegulon_AUC_thresholds',
+                signature_keys: Optional[List[str]] = ['Gene_based', 'Region_based'],
+                n_cpu: Optional[int] = 1):
+
+    """
+    Binarize eRegulons using AUCell, ensuring to return binary matrix and thresholds.
+    /home/mcb/users/dmannk/other/scenicplus/src/scenicplus/eregulon_enrichment.py
+    """
+
+    if not out_key in scplus_obj.uns.keys():
+        scplus_obj.uns[out_key] = {}
+    for signature in signature_keys:
+        auc_mtx = scplus_obj.uns[auc_key][signature]
+        auc_mtx_binarized, auc_thresholds = binarize(auc_mtx, num_workers=n_cpu)
+        scplus_obj.uns[out_key][signature] = auc_mtx_binarized
+        scplus_obj.uns[out_key][signature + '_thresholds'] = auc_thresholds
+
+binarize_AUC(analyzer.scplus_obj, signature_keys=['Gene_based', 'Region_based'])
+
+binary_AUC_gene = analyzer.scplus_obj.uns['eRegulon_AUC_thresholds']['Gene_based'].copy()
+binary_AUC_region = analyzer.scplus_obj.uns['eRegulon_AUC_thresholds']['Region_based'].copy()
+
+binary_AUC_gene.index = binary_AUC_gene.index.str.replace('___cisTopic', '')
+binary_AUC_region.index = binary_AUC_region.index.str.replace('___cisTopic', '').map(cell_id_mapper)
+binary_AUC_df = pd.concat([binary_AUC_gene, binary_AUC_region], axis=0)
+
+binary_AUC_df.columns = binary_AUC_df.columns.str.split('_(', regex=False).str[0]
+binary_AUC_df = binary_AUC_df.groupby(binary_AUC_df.columns, axis=1).sum()
+
+# Convert columns of binary_AUC_df to categorical dtype (since binary values)
+for col in binary_AUC_df.columns:
+    binary_AUC_df[col] = binary_AUC_df[col].astype(int).astype(str).astype('category')
+
+eclare_adata_binarized_AUC = eclare_adata.copy()
+eclare_adata_binarized_AUC.obs = eclare_adata_binarized_AUC.obs.drop(columns=ereg_merged.columns)
+eclare_adata_binarized_AUC.obs = eclare_adata_binarized_AUC.obs.merge(binary_AUC_df, left_index=True, right_index=True, how='left')
+
+## density plots
+sc.tl.embedding_density(eclare_adata_binarized_AUC, basis='draw_graph_fa', groupby=most_corr_signature)
+sc.pl.embedding_density(eclare_adata_binarized_AUC, basis='draw_graph_fa', key=f'draw_graph_fa_density_{most_corr_signature}', group='1', title=most_corr_signature)
 
 
-    exit(0)
+exit(0)
+
+
+def create_eregulon_signature(scenicplus_obj, tf_name, target_genes, chromosome_regions, 
+                             region_signature_name=None, gene_signature_name=None, 
+                             is_extended=False, gene_weights=None, region_weights=None):
+    """
+    Create an eRegulon signature and add it to the scenicplus_obj.
+    
+    Parameters
+    ----------
+    scenicplus_obj : SCENICPLUS object
+        The SCENIC+ object to add the eRegulon to
+    tf_name : str
+        Name of the transcription factor
+    target_genes : list
+        List of target gene names
+    chromosome_regions : list
+        List of chromosome regions (e.g., ['chr1:1000-2000', 'chr2:3000-4000'])
+    region_signature_name : str, optional
+        Name for the region signature (default: f"{tf_name}_regions")
+    gene_signature_name : str, optional
+        Name for the gene signature (default: f"{tf_name}_genes")
+    is_extended : bool, optional
+        Whether this is an extended eRegulon (default: False)
+    gene_weights : dict, optional
+        Dictionary mapping gene names to weights (default: None)
+    region_weights : dict, optional
+        Dictionary mapping region names to weights (default: None)
+    
+    Returns
+    -------
+    eRegulon object
+        The created eRegulon object
+    """
+    from collections import namedtuple
+    
+    # Set default signature names if not provided
+    if region_signature_name is None:
+        region_signature_name = f"{tf_name}_regions"
+    if gene_signature_name is None:
+        gene_signature_name = f"{tf_name}_genes"
+    
+    # Create default weights if not provided
+    if gene_weights is None:
+        gene_weights = {gene: 1.0 for gene in target_genes}
+    if region_weights is None:
+        region_weights = {region: 1.0 for region in chromosome_regions}
+    
+    # Define the R2G namedtuple for regions2genes entries
+    R2G = namedtuple("R2G", ["region", "target", "importance", "rho"])
+    
+    # Create regions2genes list
+    r2g_list = []
+    for region in chromosome_regions:
+        for gene in target_genes:
+            # Get weights, defaulting to 1.0 if not specified
+            importance = gene_weights.get(gene, 1.0) * region_weights.get(region, 1.0)
+            rho = 0.0  # Default correlation value
+            
+            r2g_list.append(
+                R2G(
+                    region=str(region),
+                    target=str(gene),
+                    importance=float(importance),
+                    rho=float(rho)
+                )
+            )
+    
+    # Create the eRegulon object
+    er = eRegulon(
+        transcription_factor=str(tf_name),
+        cistrome_name=str(region_signature_name),
+        is_extended=bool(is_extended),
+        regions2genes=r2g_list,
+        context=frozenset({str(gene_signature_name)})
+    )
+    
+    # Set a readable name for the eRegulon
+    if not hasattr(er, "name") or er.name is None:
+        er.name = f"{tf_name}::{gene_signature_name}::{region_signature_name}"
+    
+    # Add to scenicplus_obj if it exists
+    if scenicplus_obj is not None:
+        # Initialize uns if it doesn't exist
+        if not hasattr(scenicplus_obj, 'uns') or scenicplus_obj.uns is None:
+            scenicplus_obj.uns = {}
+        
+        # Add to eRegulons list
+        if 'eRegulons' not in scenicplus_obj.uns:
+            scenicplus_obj.uns['eRegulons'] = []
+        
+        scenicplus_obj.uns['eRegulons'].append(er)
+        
+        # Create metadata entry for the eRegulon
+        metadata_entry = {
+            'TF': tf_name,
+            'Region_signature_name': region_signature_name,
+            'Gene_signature_name': gene_signature_name,
+            'Gene': target_genes,
+            'Region': chromosome_regions,
+            'is_extended': is_extended
+        }
+        
+        # Add weights if provided
+        if gene_weights:
+            metadata_entry['TF2G_importance_x_abs_rho'] = [gene_weights.get(gene, 1.0) for gene in target_genes]
+        if region_weights:
+            metadata_entry['R2G_importance_x_abs_rho'] = [region_weights.get(region, 1.0) for region in chromosome_regions]
+        
+        # Add to metadata if it exists
+        if 'eRegulon_metadata' in scenicplus_obj.uns:
+            # Convert to DataFrame if it's not already
+            if isinstance(scenicplus_obj.uns['eRegulon_metadata'], dict):
+                # Create a new DataFrame from the metadata entry
+                new_metadata = pd.DataFrame([metadata_entry])
+                scenicplus_obj.uns['eRegulon_metadata'] = pd.concat([
+                    scenicplus_obj.uns['eRegulon_metadata'], 
+                    new_metadata
+                ], ignore_index=True)
+            else:
+                # It's already a DataFrame, append to it
+                new_row = pd.DataFrame([metadata_entry])
+                scenicplus_obj.uns['eRegulon_metadata'] = pd.concat([
+                    scenicplus_obj.uns['eRegulon_metadata'], 
+                    new_row
+                ], ignore_index=True)
+        else:
+            # Create new metadata DataFrame
+            scenicplus_obj.uns['eRegulon_metadata'] = pd.DataFrame([metadata_entry])
+        
+        print(f"Added eRegulon '{er.name}' to scenicplus_obj")
+        print(f"  - TF: {tf_name}")
+        print(f"  - Target genes: {len(target_genes)}")
+        print(f"  - Target regions: {len(chromosome_regions)}")
+        print(f"  - Is extended: {is_extended}")
+    
+    return er
+
+
+# %%
