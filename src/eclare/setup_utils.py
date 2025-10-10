@@ -1485,7 +1485,7 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
 
 
 
-def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='PFC_V1_Wang',\
+def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, return_backed=False, dataset='PFC_V1_Wang',\
     keep_group=[''], dev_group_key='Group', dev_stages=['FirstTrim', 'SecTrim', 'ThirdTrim', 'Inf', 'Adol']):
 
     datapath = os.path.join(os.environ['DATAPATH'], 'PFC_V1_Wang')
@@ -1542,8 +1542,14 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
         atac_fullpath = os.path.join(atac_datapath, ATAC_file)
         rna_fullpath = os.path.join(rna_datapath, RNA_file)
 
-        atac = anndata.read_h5ad(atac_fullpath)
-        rna  = anndata.read_h5ad(rna_fullpath)
+        atac = anndata.read_h5ad(atac_fullpath, backed='r')
+        rna  = anndata.read_h5ad(rna_fullpath, backed='r')
+
+        if return_backed:
+            return rna, atac, cell_group, dev_group_key, dev_stages
+
+        atac = atac.to_memory()
+        rna = rna.to_memory()
 
         ## retain from specific developmental stages
         keep_atac_subj = atac.obs['dev_stage'].str.contains('|'.join(keep_group), regex=True) # if keep_group=[''], then keeps all subjects
