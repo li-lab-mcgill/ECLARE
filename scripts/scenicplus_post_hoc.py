@@ -607,6 +607,9 @@ def load_data(source_dataset='Cortex_Velmeshev', target_dataset=None, genes_by_p
     atac.var_names = atac.var_names.str.split('[:|-]', expand=True).to_frame().apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1).reset_index(drop=True).values
     atac.var_names = atac.var_names.astype(str)
 
+    atac.raw.var.index = atac.raw.var.index.str.split('[:|-]', expand=True).to_frame().apply(lambda x: f'{x[0]}:{x[1]}-{x[2]}', axis=1).reset_index(drop=True).values
+    atac.raw.var.index = atac.raw.var.index.astype(str)
+
     return rna, atac
 
 def add_eregulon_to_dataframe(analyzer, tf_name, target_genes, chromosome_regions, 
@@ -699,13 +702,16 @@ if __name__ == "__main__":
     #target_dataset = None
     #genes_by_peaks_str = '9584_by_66620'
 
+    #source_dataset = 'MDD'
+    #target_dataset = 'PFC_V1_Wang'
+    #genes_by_peaks_str = '17279_by_66623'
+
     source_dataset = 'MDD'
-    target_dataset = 'PFC_V1_Wang'
-    genes_by_peaks_str = '17279_by_66623'
+    target_dataset = None
+    genes_by_peaks_str = '17563_by_100000'
 
     # Load ECLARE adata arising from developmental post-hoc analysis
     eclare_adata = ad.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_eclare_adata_{source_dataset}.h5ad'))
-
     rna_adata, atac = load_data(source_dataset=source_dataset, target_dataset=target_dataset, genes_by_peaks_str=genes_by_peaks_str, valid_cell_ids=eclare_adata.obs_names.tolist())
 
     ## set cell IDs of ATAC to be the same as the RNA
@@ -716,14 +722,17 @@ if __name__ == "__main__":
     atac = atac[~atac.obs_names.duplicated()].copy()
     rna_adata = rna_adata[rna_adata.obs_names.isin(atac.obs_names)]
  
+    ## set cistopic object path
+    cistopic_obj_path = os.path.join(os.environ['OUTPATH'], f"cistopic_obj_{source_dataset}_{genes_by_peaks_str if target_dataset is None else genes_by_peaks_str + '_' + target_dataset}.pkl")
+
     ## train cistopic object
     #cistopic_obj = atac_to_cistopic_object(atac)
-    #with open(os.path.join(os.environ['OUTPATH'], f'cistopic_obj_{source_dataset}.pkl'), 'wb') as f:
+    #with open(cistopic_obj_path, 'wb') as f:
     #    pickle.dump(cistopic_obj, f)
-    
+
     ## load cistopic object
-    with open(os.path.join(os.environ['OUTPATH'], f'cistopic_obj_{source_dataset}.pkl'), 'rb') as f:
-        print(f"Loading cistopic_obj from {os.path.join(os.environ['OUTPATH'], f'cistopic_obj_{source_dataset}.pkl')}")
+    with open(cistopic_obj_path, 'rb') as f:
+        print(f"Loading cistopic_obj from {cistopic_obj_path}")
         cistopic_obj = pickle.load(f)
 
     ## add suffix to rna_adata obs_names to make consistent with CistopicObject
@@ -961,6 +970,7 @@ if __name__ == "__main__":
         #fig.set_size_inches(10, 4)
 
         sc.pl.draw_graph(signatures, color=['EGR1', 'SOX2', 'NR4A2'], size=100)
+        sc.pl.draw_graph(signatures, color=signatures.obs.columns[signatures.obs.columns.isin(['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18'])], size=100)  # ['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18']
 
         sns.lineplot(signatures.obs[['leiden','Condition','ZNF184']], x='leiden', y='ZNF184', hue='Condition', errorbar='se', marker='o')
         sns.lineplot(signatures.obs[['leiden','Condition','NFIX']], x='leiden', y='NFIX', hue='Condition', errorbar='se', marker='o')
