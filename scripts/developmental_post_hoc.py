@@ -292,11 +292,11 @@ if cell_group == 'Lineage':
 
 elif cell_group == 'ClustersMapped':
     #clusters = student_rna.obs['ClustersMapped'].cat.categories.tolist()
-    #target_clusters = ['ExN']
-    target_clusters = ['RG-vRG','IPC-EN','EN-newborn','EN-IT-immature','EN-non-IT-immature','ExN1','ExN1_L23','ExN2','ExN2_L23','EN-L2_3-IT'] # contains source and target clusters
+    target_clusters_key = 'ClustersMapped'; q=17; target_clusters = ['ExN']
+    #target_clusters_key = 'SubClusters'; q=17; target_clusters = ['ExN1','ExN1_L23','ExN2','ExN2_L23','EN-L2_3-IT','ExN6','ExN9_L23'] # contains source and target clusters
     if student_rna.obs_names.isin(valid_rna_ids).any():
-        rna_idxs = np.where(~student_rna.obs_names.isin(valid_rna_ids) & student_rna.obs['ClustersMapped'].isin(target_clusters))[0]
-        atac_idxs = np.where(~student_atac.obs_names.isin(valid_atac_ids) & student_atac.obs['ClustersMapped'].isin(target_clusters))[0]
+        rna_idxs = np.where(~student_rna.obs_names.isin(valid_rna_ids) & student_rna.obs[target_clusters_key].isin(target_clusters))[0]
+        atac_idxs = np.where(~student_atac.obs_names.isin(valid_atac_ids) & student_atac.obs[target_clusters_key].isin(target_clusters))[0]
     else:
         print('WARNING: obs_names not in valid_rna_ids, resorting to reset_index().index.astype(str)')
         rna_idxs = np.where(student_rna.obs.reset_index().index.astype(str).isin(valid_rna_ids) & student_rna.obs['ClustersMapped'].isin(target_clusters))[0]
@@ -307,7 +307,7 @@ if target_dataset == 'MDD':
     student_rna.obs['modality'] = 'RNA'
     student_atac.obs['modality'] = 'ATAC'
     student_rna_atac = anndata.concat([student_rna[rna_idxs], student_atac[atac_idxs]], axis=0) # no features, since features don't align
-    student_rna_atac.obs['Age_bins'] = pd.qcut(student_rna_atac.obs[dev_group_key], q=17, labels=None)
+    student_rna_atac.obs['Age_bins'] = pd.qcut(student_rna_atac.obs[dev_group_key], q=q, labels=None)
 
     max_subsample = len(rna_idxs) + len(atac_idxs)
     if subsample > max_subsample:
@@ -542,8 +542,9 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
         entropy_threshold = 0.25
 
     elif cell_group_key == 'ClustersMapped':
-        sc.pp.pca(adata, n_comps=10)
-        sc.pp.neighbors(adata, n_neighbors=100, n_pcs=10, use_rep='X_pca', random_state=random_seed)
+        sc.pp.pca(adata, n_comps=30)
+        n_pcs = np.abs(adata.uns['pca']['variance_ratio'].cumsum() - 0.6).argmin() # get number of PCs to explain 60% of variance
+        sc.pp.neighbors(adata, n_neighbors=50, n_pcs=n_pcs, use_rep='X_pca', method='gauss', random_state=random_seed) # use gaussian kernel for correspondance between DPT and UMAP/FA, does not work if keep all IT EN cells
         sc.tl.leiden(adata, resolution=0.25, random_state=random_seed)
         entropy_threshold = 0.60
 
@@ -577,7 +578,7 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
         adata = adata[adata.obs['leiden'].isin(keep_leidens)]
 
         sc.pp.pca(adata, n_comps=adata.obsm['X_pca'].shape[-1])
-        sc.pp.neighbors(adata, n_neighbors=adata.uns['neighbors']['params']['n_neighbors'], n_pcs=adata.obsm['X_pca'].shape[-1], use_rep='X_pca', random_state=random_seed)
+        sc.pp.neighbors(adata, n_neighbors=adata.uns['neighbors']['params']['n_neighbors'], n_pcs=n_pcs, use_rep='X_pca', random_state=random_seed)
         sc.tl.leiden(adata, resolution=adata.uns['leiden']['params']['resolution'], random_state=random_seed)
 
     ## UMAP
@@ -648,6 +649,7 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
         adata.uns['iroot'] = adata.obs['ordinal_pseudotime'].argmin()
 
     ## DPT
+    sc.tl.diffmap(adata)
     sc.tl.dpt(adata)
     
     if 'sub_cell_type' in adata.obs.columns:
@@ -1086,6 +1088,7 @@ student_atac = paga_analysis(student_atac)
 
 source_clusters_dict = {
     'PFC_Zhu': ['RG', 'IPC', 'EN-fetal-early', 'EN-fetal-late', 'EN'], # all: ['EN-fetal-late', 'IN-fetal', 'VSMC', 'Endothelial', 'RG', 'OPC', 'IN-CGE', 'Microglia', 'IN-MGE', 'EN-fetal-early', 'Astrocytes', 'IPC', 'Pericytes', 'EN', 'Oligodendrocytes']
+    #'PFC_V1_Wang': ["EN-newborn", "EN-IT-immature", "EN-L2_3-IT"],
     'PFC_V1_Wang': ["RG-vRG", "IPC-EN", "EN-newborn", "EN-IT-immature", "EN-non-IT-immature", "EN-L2_3-IT", "EN-L4-IT-V1", "EN-L4-IT", "EN-L5-IT", "EN-L6-IT", "EN-L5_6-NP", "EN-L5-ET", "EN-L6-CT", "EN-L6b"],
 }
 
@@ -1110,7 +1113,7 @@ for source_dataset in source_datasets:
     source_atac.obs['modality'] = 'ATAC'
 
     source_rna_atac = anndata.concat([source_rna[source_rna.obs[cell_group].isin(source_clusters)], source_atac[source_atac.obs[cell_group].isin(source_clusters)]], axis=0)
-    source_rna_atac_sub = subsample_adata(source_rna_atac, subsample, ['modality', cell_group], subsample_type='balanced')
+    source_rna_atac_sub = subsample_adata(source_rna_atac, subsample, ['modality', 'dev_stage'], subsample_type='balanced')
 
     source_rna_sub = source_rna[source_rna.obs_names.isin(source_rna_atac_sub.obs_names)]
     source_atac_sub = source_atac[source_atac.obs_names.isin(source_rna_atac_sub.obs_names)]
@@ -1181,20 +1184,42 @@ source_adatas[source_dataset].obs['dataset_name'] = source_dataset
 subsampled_kd_clip_adatas[source_dataset].obs['source_or_target'] = 'target'
 subsampled_kd_clip_adatas[source_dataset].obs['dataset_name'] = target_dataset
 
-source_target_adata = anndata.concat([ source_adatas[source_dataset], subsampled_kd_clip_adatas[source_dataset] ], axis=0)
-source_target_adata.obs = source_target_adata.obs.merge(subsampled_kd_clip_adatas[source_dataset].obs['Condition'], left_index=True, right_index=True, how='left')
+source_adata = source_adatas[source_dataset]
+target_adata = subsampled_kd_clip_adatas[source_dataset]
+source_target_adata = anndata.concat([ source_adata, target_adata ], axis=0)
+
+source_target_adata.obs = source_target_adata.obs.merge(target_adata.obs['Condition'], left_index=True, right_index=True, how='left')
 source_target_adata.obs['Age'] = pd.Categorical(source_target_adata.obs['Age'])
 
 #source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'EN-fetal-early', 'EN-fetal-late', 'EN'])]
 #source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'RG-vRG', 'IPC-EN', 'EN-newborn', 'EN-IT-immature', 'EN-L2_3-IT'])]
 
 source_target_adata = source_target_adata[source_target_adata.obs['SubClusters'].isin(
-    ['RG-vRG', 'IPC-EN', 'EN-newborn', 'EN-IT-immature','EN-L2_3-IT'] + \
-    ['ExN1','ExN2','ExN1_L23','ExN2_L23'] + \
-    ['ExN6', 'ExN2_L23', 'ExN9_L23']
+    ['EN-newborn', 'EN-IT-immature','EN-L2_3-IT'] + \
+    ['ExN1','ExN2','ExN1_L23'] + \
+    ['ExN6', 'ExN9_L23']
         )]
 
-source_target_adata = paga_analysis(source_target_adata, dev_group_key='Age', cell_group_key='ClustersMapped', correct_imbalance=True)
+#%% Plot distribution of age and ordinal pseudotime
+
+adata = source_target_adata.copy()
+adata.obs_names_make_unique()
+adata.obs[['Age', 'ordinal_pseudotime']] = adata.obs[['Age', 'ordinal_pseudotime']].astype(float)
+adata.obs['SubClusters'] = pd.Categorical(adata.obs['SubClusters'], categories=source_clusters + target_clusters, ordered=True)
+
+fig, ax = plt.subplots(1, 2, figsize=[12, 8])
+sns.barplot(adata[adata.obs['source_or_target']=='source'].obs, x='modality', y='Age', hue='ClustersMapped', errorbar='se', ax=ax[0])
+sns.barplot(adata[adata.obs['source_or_target']=='source'].obs, x='modality', y='ordinal_pseudotime', hue='ClustersMapped', errorbar='se', ax=ax[1])
+plt.tight_layout(); plt.show()
+
+fig, ax = plt.subplots(1, 2, figsize=[6, 4])
+sns.barplot(adata[adata.obs['source_or_target']=='target'].obs, x='modality', y='Age', hue='Condition', errorbar='se', ax=ax[0])
+sns.barplot(adata[adata.obs['source_or_target']=='target'].obs, x='modality', y='ordinal_pseudotime', hue='Condition', errorbar='se', ax=ax[1])
+plt.tight_layout(); plt.show()
+
+#%% Run PAGA on combined source & target data
+source_target_adata = paga_analysis(source_target_adata, dev_group_key='Age', cell_group_key='ClustersMapped',
+    correct_imbalance=False)
 #source_target_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'source_target_adata_{source_dataset}_{target_dataset}.h5ad'))
 
 ## plot FA embeddings comparing source and target datasets
@@ -1552,12 +1577,13 @@ plt.show()
 
 #%% 3D embeddings to establish PAGA paths
 
+adata = source_target_adata.copy()
+
 #sc.tl.umap(adata, n_components=3)
 #sc.pl.umap(adata, color='leiden', projection='3d')
 
 paths = [
-    ('MDD_ExN_3510', ['3', '5', '1', '0']),
-    ('MDD_ExN_2640', ['2', '6', '4', '0']),
+    ('MDD_ExN_102', ['1', '0', '2']),
          ]
 paths_leiden_clusters = np.unique(np.hstack([path[1] for path in paths]))
 
