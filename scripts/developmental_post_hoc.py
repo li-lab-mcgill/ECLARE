@@ -544,8 +544,8 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
     elif cell_group_key == 'ClustersMapped':
         sc.pp.pca(adata, n_comps=30)
         n_pcs = np.abs(adata.uns['pca']['variance_ratio'].cumsum() - 0.6).argmin() # get number of PCs to explain 60% of variance
-        sc.pp.neighbors(adata, n_neighbors=50, n_pcs=n_pcs, use_rep='X_pca', method='gauss', random_state=random_seed) # use gaussian kernel for correspondance between DPT and UMAP/FA, does not work if keep all IT EN cells
-        sc.tl.leiden(adata, resolution=0.25, random_state=random_seed)
+        sc.pp.neighbors(adata, n_neighbors=100, n_pcs=n_pcs, use_rep='X_pca', method='gauss', random_state=random_seed) # use gaussian kernel for correspondance between DPT and UMAP/FA, does not work if keep all IT EN cells
+        sc.tl.leiden(adata, resolution=0.5, random_state=random_seed)
         entropy_threshold = 0.60
 
 
@@ -649,8 +649,12 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
         adata.uns['iroot'] = adata.obs['ordinal_pseudotime'].argmin()
 
     ## DPT
-    sc.tl.diffmap(adata)
-    sc.tl.dpt(adata)
+    sc.tl.diffmap(adata, n_comps=20) # X_diffmap components do not seem orthogonal to each other
+    # diffmap_corrs(adata)
+    # adata.obsm['X_diffmap'] = adata.obsm['X_diffmap'][:,1:7]
+    # adata.uns['diffmap_evals'] = adata.uns['diffmap_evals'][1:7]
+    sc.tl.dpt(adata, n_dcs=20)
+    # sc.pl.umap(adata, color=['leiden', 'dpt_pseudotime', 'ordinal_pseudotime'], ncols=3, wspace=0.5)
     
     if 'sub_cell_type' in adata.obs.columns:
         sc.pl.draw_graph(adata, color=['modality', cell_group_key, 'sub_cell_type', 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
@@ -1196,8 +1200,8 @@ source_target_adata.obs['Age'] = pd.Categorical(source_target_adata.obs['Age'])
 
 source_target_adata = source_target_adata[source_target_adata.obs['SubClusters'].isin(
     ['EN-newborn', 'EN-IT-immature','EN-L2_3-IT'] + \
-    ['ExN1','ExN2','ExN1_L23'] + \
-    ['ExN6', 'ExN9_L23']
+    ['ExN1_L23', 'ExN2_L23'] + \
+    ['ExN9_L23', 'ExN2_L23']
         )]
 
 #%% Plot distribution of age and ordinal pseudotime
@@ -1238,6 +1242,30 @@ f1 = sc.pl.draw_graph(target_adata, color=colors, ncols=len(colors), wspace=0.5,
 f2 = sc.pl.draw_graph(target_adata[target_adata.obs['Condition']=='case'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
 f3 = sc.pl.draw_graph(target_adata[target_adata.obs['Condition']=='control'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
 f1.show(); f2.show(); f3.show()
+
+#%% correlate diffusion components with ordinal pseudotime
+
+def diffmap_corrs(adata):
+    n_diffmaps = len(adata.uns['diffmap_evals'])
+    diffmap_df = pd.DataFrame(adata.obsm['X_diffmap'], columns=[f'dm{idx}' for idx in range(n_diffmaps)], index=adata.obs_names)
+    diffmap_corrs_df = pd.concat([adata.obs['ordinal_pseudotime'], diffmap_df], axis=1).corr()
+    diffmap_corrs_series = diffmap_corrs_df.loc['ordinal_pseudotime',:].iloc[1:]
+    return diffmap_corrs_series
+
+diffmap_corrs_df = pd.concat([
+    diffmap_corrs(source_target_adata).to_frame().assign(source_or_target='all'),
+    diffmap_corrs(source_target_adata[source_target_adata.obs['source_or_target']=='target']).to_frame().assign(source_or_target='target'),
+    diffmap_corrs(source_target_adata[source_target_adata.obs['source_or_target']=='source']).to_frame().assign(source_or_target='source')
+    ], axis=0).reset_index()
+
+fig, ax = plt.subplots(1, 1, figsize=[12, 8])
+sns.barplot(diffmap_corrs_df, x='index', y='ordinal_pseudotime', hue='source_or_target', ax=ax)
+plt.xticks(rotation=30)
+plt.xlabel('')
+plt.ylabel('Pearson correlation')
+plt.title('Diffusion components vs. ordinal pseudotime')
+plt.tight_layout(); plt.show()
+
 
 #%% perform label transfer between source and target datasets
 
