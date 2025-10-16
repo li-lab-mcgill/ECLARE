@@ -55,14 +55,14 @@ methods_id_dict = {
 }
 '''
 target_dataset = 'MDD'
-genes_by_peaks_str = '17279_by_66623'
-source_datasets = ['PFC_V1_Wang']
+genes_by_peaks_str = '6816_by_55284'#'17279_by_66623'
+source_datasets = ['PFC_Zhu', 'PFC_V1_Wang']
 subsample = -1
 methods_id_dict = {
     'clip': '04163347',
     'kd_clip': '07185908',
     'eclare': ['04203819'],
-    'ordinal': '22094649',
+    'ordinal': '14112531',
 }
 
 ## define search strings
@@ -173,6 +173,9 @@ if target_dataset == 'MDD':
     rna_clusters_metadata = pd.read_excel(os.path.join(os.environ['DATAPATH'], 'maitra_2023_SourceDataFigures', 'Fig1b_Fig1c_SuppFig1a_SuppFig1b_SuppFig1c_SuppFig1d.xlsx'))
     subclusters = rna_clusters_metadata[['Cell', 'Cluster']].set_index('Cell').rename(columns={'Cluster': 'SubClusters'})
     student_rna.obs = student_rna.obs.merge(subclusters, left_index=True, right_index=True, how='left')
+
+    student_rna.obs['SubClusters'] = student_rna.obs['SubClusters'].astype(str) + '_RNA'
+    student_atac.obs['SubClusters'] = student_atac.obs['SubClusters'].astype(str) + '_ATAC'
     #student_rna.obs = student_rna.obs.rename(columns={'RNA_snn_res.0.7': 'SubClusters'}).astype(str) # don't have labels for subclusters for RNA, so use one of integer-based cluster annotations
 
 elif target_dataset == 'Cortex_Velmeshev':
@@ -315,6 +318,8 @@ if target_dataset == 'MDD':
 
     student_rna_atac_sub    = subsample_adata(student_rna_atac, subsample, ['Age_bins', 'Condition', 'modality'], subsample_type='balanced')
     sns.barplot(student_rna_atac_sub.obs, x='modality', y='Age', hue='Condition', errorbar='se'); plt.ylim([30,50])
+    sns.catplot(data=student_rna_atac_sub.obs, x='modality', y='Age', hue='Condition', col='SubClusters', kind='bar', height=5, aspect=.75)
+    sns.catplot(data=student_rna_atac_sub.obs, x='modality', hue='Condition', col='SubClusters', kind='count')
 
     student_rna_sub         = student_rna[student_rna.obs_names.isin(student_rna_atac_sub.obs_names)]
     student_atac_sub        = student_atac[student_atac.obs_names.isin(student_rna_atac_sub.obs_names)]
@@ -377,6 +382,10 @@ for source_dataset in source_datasets:
         obs=obs,
     )
 
+    if target_dataset == 'MDD':
+        print(f'Skipping other source dataset(s) given MDD target dataset')
+        break
+
 #%% create adatas for teacher data
 
 valid_ids = obs.index # will get overwritten below
@@ -398,6 +407,9 @@ for source_dataset in source_datasets:
 
     teacher_rna_latents, _ = clip_models[source_dataset].to('cpu')(teacher_rna, modality=0)
     teacher_atac_latents, _ = clip_models[source_dataset].to('cpu')(teacher_atac, modality=1)
+
+    #kd_teacher_rna_latents, _ = kd_clip_teacher_models[source_dataset].to('cpu')(teacher_rna, modality=0)
+    #kd_teacher_atac_latents, _ = kd_clip_teacher_models[source_dataset].to('cpu')(teacher_atac, modality=1)
 
     teacher_rna_latents = teacher_rna_latents.detach().cpu().numpy()
     teacher_atac_latents = teacher_atac_latents.detach().cpu().numpy()
@@ -481,41 +493,15 @@ except:
     print('WARNING: ECLARE adata not created')
 
 for source_dataset in source_datasets:
-    subsampled_kd_clip_adatas[source_dataset].obs['ordinal_pseudotime'] = ordinal_pseudotimes
+
     subsampled_clip_adatas[source_dataset].obs['ordinal_pseudotime'] = ordinal_pseudotimes
+    assert subsampled_clip_adatas[source_dataset].obs_names.tolist() == (student_rna_sub.obs_names.tolist() + student_atac_sub.obs_names.tolist())
 
-
-#%% Import latents from other models
-
-## specify job IDs
-scJoint_job_id  = '20250905_125142'
-glue_job_id     = '20250906_003832'
-
-## add to dictionary
-methods_id_dict['scJoint'] = scJoint_job_id
-methods_id_dict['scGLUE'] = glue_job_id
-
-## scJoint
-scJoint_path = os.path.join(os.environ['OUTPATH'], 'scJoint_data_tmp', scJoint_job_id, 'scJoint_latents.h5ad')
-scJoint_adata = sc.read_h5ad(scJoint_path)
-scJoint_adata.obs = scJoint_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
-
-## scGLUE
-glue_path = os.path.join(os.environ['OUTPATH'], 'glue', glue_job_id, 'glue_latents.h5ad')
-glue_adata = sc.read_h5ad(glue_path)
-glue_adata.obs = glue_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
-
-## find overlapping cell IDs between ECLARE and scJoint/scGLUE
-valid_ids = set(subsampled_eclare_adata.obs_names) & set(glue_adata.obs_names) & set(scJoint_adata.obs_names)
-
-## keep only overlapping cells
-subsampled_eclare_adata = subsampled_eclare_adata[subsampled_eclare_adata.obs_names.isin(valid_ids)]
-
-scJoint_adata = scJoint_adata[scJoint_adata.obs_names.isin(valid_ids)]
-glue_adata = glue_adata[glue_adata.obs_names.isin(valid_ids)]
-
-for source_dataset in source_datasets:
-    subsampled_kd_clip_adatas[source_dataset] = subsampled_kd_clip_adatas[source_dataset][subsampled_kd_clip_adatas[source_dataset].obs_names.isin(valid_ids)]
+    try:
+        subsampled_kd_clip_adatas[source_dataset].obs['ordinal_pseudotime'] = ordinal_pseudotimes
+        assert subsampled_kd_clip_adatas[source_dataset].obs_names.tolist() == (student_rna_sub.obs_names.tolist() + student_atac_sub.obs_names.tolist())
+    except:
+        print(f'WARNING: KD-CLIP adata not created for {source_dataset}')
 
 
 #%% PAGA
@@ -525,7 +511,7 @@ from scib.metrics import nmi, ari
 from scipy.stats import pearsonr, spearmanr, kendalltau
 import random
 
-def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', correct_imbalance=False, random_seed=0):
+def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', correct_imbalance=False, do_fa=True, random_seed=0):
     # Set random seed for reproducibility
     np.random.seed(random_seed)
     random.seed(random_seed)
@@ -543,10 +529,10 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
 
     elif cell_group_key == 'ClustersMapped':
         sc.pp.pca(adata, n_comps=30)
-        n_pcs = np.abs(adata.uns['pca']['variance_ratio'].cumsum() - 0.6).argmin() # get number of PCs to explain 60% of variance
-        sc.pp.neighbors(adata, n_neighbors=100, n_pcs=n_pcs, use_rep='X_pca', method='gauss', random_state=random_seed) # use gaussian kernel for correspondance between DPT and UMAP/FA, does not work if keep all IT EN cells
-        sc.tl.leiden(adata, resolution=0.5, random_state=random_seed)
-        entropy_threshold = 0.60
+        n_pcs = np.abs(adata.uns['pca']['variance_ratio'].cumsum() - 0.66).argmin() # get number of PCs to explain 60% of variance
+        sc.pp.neighbors(adata, n_neighbors=200, n_pcs=n_pcs, use_rep='X_pca', method='umap', random_state=random_seed) # use gaussian kernel for correspondance between DPT and UMAP/FA, does not work if keep all IT EN cells
+        sc.tl.leiden(adata, resolution=0.6, random_state=random_seed)
+        entropy_threshold = 0.8
 
 
     if correct_imbalance:
@@ -604,8 +590,9 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
     sc.tl.paga(adata, groups="leiden")
     sc.pl.paga(adata, color=["leiden", "modality", cell_group_key, "ordinal_pseudotime"])
 
-    ## Graph based on PAGA
-    sc.tl.draw_graph(adata, init_pos='paga', random_state=random_seed)
+    if do_fa:
+        ## Graph based on PAGA
+        sc.tl.draw_graph(adata, init_pos='paga', random_state=random_seed)
 
     ## Pseudotime with DPT
 
@@ -656,10 +643,16 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
     sc.tl.dpt(adata, n_dcs=20)
     # sc.pl.umap(adata, color=['leiden', 'dpt_pseudotime', 'ordinal_pseudotime'], ncols=3, wspace=0.5)
     
-    if 'sub_cell_type' in adata.obs.columns:
-        sc.pl.draw_graph(adata, color=['modality', cell_group_key, 'sub_cell_type', 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
-    else:
-        sc.pl.draw_graph(adata, color=['modality', cell_group_key, 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
+    if do_fa:            
+        if 'sub_cell_type' in adata.obs.columns:
+            sc.pl.draw_graph(adata, color=['modality', cell_group_key, 'sub_cell_type', 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
+        else:
+            sc.pl.draw_graph(adata, color=['modality', cell_group_key, 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
+    elif not do_fa:
+        if 'sub_cell_type' in adata.obs.columns:
+            sc.pl.umap(adata, color=['modality', cell_group_key, 'sub_cell_type', 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
+        else:
+            sc.pl.umap(adata, color=['modality', cell_group_key, 'dpt_pseudotime', 'ordinal_pseudotime', dev_group_key], ncols=3, wspace=0.5)
 
     return adata
 
@@ -1004,10 +997,10 @@ import pandas as pd
 import statsmodels.api as sm
 from scipy.stats import norm
 
-def hac_weighted_mean_test(df, path, direction='case_more_control'):
+def hac_weighted_mean_test(df, path, window_len, direction='all', pseudotime_key='ordinal_pseudotime'):
 
     # per-(leiden, condition) summaries
-    g = (df.groupby(['leiden', 'Condition'])['ordinal_pseudotime']
+    g = (df.groupby(['leiden', 'Condition'])[pseudotime_key]
         .agg(mean='mean', sd='std', n='size')
         .reset_index())
     g['se'] = g['sd'] / np.sqrt(g['n'])
@@ -1046,8 +1039,8 @@ def hac_weighted_mean_test(df, path, direction='case_more_control'):
     X = np.ones((len(d), 1))
     ols = sm.WLS(d.values, X, weights=w.values).fit()
 
-    # choose maxlags (e.g., 2 or 3; or ~= n^(1/3))
-    maxlags = max(1, int(round(len(d) ** (1/3))))
+    # choose maxlags (e.g., window_len; or ~= n^(1/3))
+    maxlags = window_len if window_len is not None else max(1, int(round(len(d) ** (1/3))))
     hac = ols.get_robustcov_results(cov_type='HAC', maxlags=maxlags, use_correction=True)
 
     beta = hac.params[0]
@@ -1057,48 +1050,27 @@ def hac_weighted_mean_test(df, path, direction='case_more_control'):
     # one-sided p for H1: mean(diff) > 0
     p_one_sided = norm.sf(z)   # == 1 - norm.cdf(z)
 
+    # one-sided p for Leiden-level differences
+    d_df['z'] = d_df['d'] / d_df['seD']
+    d_df['p_one_sided'] = norm.sf(d_df['z'])
+
     print(f"Leiden K = {len(d)}, HAC maxlags = {maxlags}")
     print(f"Weighted mean diff = {beta:.3f} (HAC SE {se:.3f}), one-sided p = {p_one_sided:.4g}")
 
     return d_df, p_one_sided
 
-#%% run PAGA
-print('ECLARE'); subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata, dev_group_key=dev_group_key, cell_group_key=cell_group, correct_imbalance=True)
-print('scJoint'); scJoint_adata = paga_analysis(scJoint_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
-print('scGLUE'); glue_adata = paga_analysis(glue_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
-
-for source_dataset in source_datasets:
-    print(f'KD-CLIP {source_dataset}'); subsampled_kd_clip_adatas[source_dataset] = paga_analysis(subsampled_kd_clip_adatas[source_dataset], dev_group_key=dev_group_key, cell_group_key=cell_group, correct_imbalance=True)
-    print(f'CLIP {source_dataset}'); subsampled_clip_adatas[source_dataset] = paga_analysis(subsampled_clip_adatas[source_dataset], dev_group_key=dev_group_key, cell_group_key=cell_group, correct_imbalance=True)
-
-'''
-subsampled_eclare_adata_rna = paga_analysis(subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'])
-subsampled_eclare_adata_atac = paga_analysis(subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'ATAC'])
-
-scJoint_adata_rna = paga_analysis(scJoint_adata[scJoint_adata.obs['modality'].str.upper() == 'RNA'])
-scJoint_adata_atac = paga_analysis(scJoint_adata[scJoint_adata.obs['modality'].str.upper() == 'ATAC'])
-
-glue_adata_rna = paga_analysis(glue_adata[glue_adata.obs['modality'].str.upper() == 'RNA'])
-glue_adata_atac = paga_analysis(glue_adata[glue_adata.obs['modality'].str.upper() == 'ATAC'])
-
-student_rna.obs['modality'] = 'RNA'
-student_atac.obs['modality'] = 'ATAC'
-
-student_rna = paga_analysis(student_rna)
-student_atac = paga_analysis(student_atac)
-'''
 
 #%% import source datasets
 
 source_clusters_dict = {
     'PFC_Zhu': ['RG', 'IPC', 'EN-fetal-early', 'EN-fetal-late', 'EN'], # all: ['EN-fetal-late', 'IN-fetal', 'VSMC', 'Endothelial', 'RG', 'OPC', 'IN-CGE', 'Microglia', 'IN-MGE', 'EN-fetal-early', 'Astrocytes', 'IPC', 'Pericytes', 'EN', 'Oligodendrocytes']
-    #'PFC_V1_Wang': ["EN-newborn", "EN-IT-immature", "EN-L2_3-IT"],
-    'PFC_V1_Wang': ["RG-vRG", "IPC-EN", "EN-newborn", "EN-IT-immature", "EN-non-IT-immature", "EN-L2_3-IT", "EN-L4-IT-V1", "EN-L4-IT", "EN-L5-IT", "EN-L6-IT", "EN-L5_6-NP", "EN-L5-ET", "EN-L6-CT", "EN-L6b"],
+    'PFC_V1_Wang': ["EN-newborn", "EN-IT-immature", "EN-L2_3-IT"],
+    #'PFC_V1_Wang': ["RG-vRG", "IPC-EN", "EN-newborn", "EN-IT-immature", "EN-non-IT-immature", "EN-L2_3-IT", "EN-L4-IT-V1", "EN-L4-IT", "EN-L5-IT", "EN-L6-IT", "EN-L5_6-NP", "EN-L5-ET", "EN-L6-CT", "EN-L6b"],
 }
 
 source_adatas = {}
 
-for source_dataset in source_datasets:
+for source_dataset in [source_datasets[0]]:
 
     args = SimpleNamespace(
         source_dataset=source_dataset,
@@ -1117,7 +1089,7 @@ for source_dataset in source_datasets:
     source_atac.obs['modality'] = 'ATAC'
 
     source_rna_atac = anndata.concat([source_rna[source_rna.obs[cell_group].isin(source_clusters)], source_atac[source_atac.obs[cell_group].isin(source_clusters)]], axis=0)
-    source_rna_atac_sub = subsample_adata(source_rna_atac, subsample, ['modality', 'dev_stage'], subsample_type='balanced')
+    source_rna_atac_sub = subsample_adata(source_rna_atac, len(subsampled_kd_clip_adatas[source_dataset])//2, ['modality', 'type' if source_dataset == 'PFC_V1_Wang' else 'Cell type'], subsample_type='balanced')
 
     source_rna_sub = source_rna[source_rna.obs_names.isin(source_rna_atac_sub.obs_names)]
     source_atac_sub = source_atac[source_atac.obs_names.isin(source_rna_atac_sub.obs_names)]
@@ -1168,16 +1140,26 @@ for source_dataset in source_datasets:
         source_adatas[source_dataset].obs['ordinal_pseudotime'] = torch.cat([ordinal_rna_pt_sub, ordinal_atac_pt_sub], axis=0)
         source_adatas[source_dataset + '_clip'].obs['ordinal_pseudotime'] = torch.cat([ordinal_rna_pt_sub, ordinal_atac_pt_sub], axis=0)
 
+    else:
+
+        proxy = source_adatas[source_dataset].obs['dev_stage' if source_dataset == 'PFC_V1_Wang' else 'type']
+        proxy = proxy.cat.codes
+
+        source_adatas[source_dataset].obs['ordinal_pseudotime'] = proxy
+        source_adatas[source_dataset + '_clip'].obs['ordinal_pseudotime'] = proxy
+
 
 #for source_dataset in source_datasets:
 #    print(f'KD-CLIP {source_dataset}'); source_adatas[source_dataset] = paga_analysis(source_adatas[source_dataset], dev_group_key='dev_stage', cell_group_key=cell_group)
 
 #%% Combine source and target data
 
+source_dataset = source_datasets[0]
+
 if source_dataset == 'PFC_V1_Wang':
     source_adatas[source_dataset].obs.rename(columns={'type': 'ClustersMapped', 'Group': 'Age'}, inplace=True)
 elif source_dataset == 'PFC_Zhu':
-    source_adatas[source_dataset].obs.rename(columns={'Cell type': 'ClustersMapped', 'dev_stage': 'Age'}, inplace=True)
+    source_adatas[source_dataset].obs.rename(columns={'Cell type': 'ClustersMapped', 'dev_stage': 'Age', 'Donor ID': 'Sex'}, inplace=True)
 
 source_adatas[source_dataset].obs['SubClusters'] = source_adatas[source_dataset].obs['ClustersMapped'].copy()
 source_adatas[source_dataset].obs['Age_bins'] = source_adatas[source_dataset].obs['Age'].copy()
@@ -1198,18 +1180,27 @@ source_target_adata.obs['Age'] = pd.Categorical(source_target_adata.obs['Age'])
 #source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'EN-fetal-early', 'EN-fetal-late', 'EN'])]
 #source_target_adata = source_target_adata[source_target_adata.obs['ClustersMapped'].isin(['ExN', 'RG-vRG', 'IPC-EN', 'EN-newborn', 'EN-IT-immature', 'EN-L2_3-IT'])]
 
-source_target_adata = source_target_adata[source_target_adata.obs['SubClusters'].isin(
-    ['EN-newborn', 'EN-IT-immature','EN-L2_3-IT'] + \
-    ['ExN1_L23', 'ExN2_L23'] + \
-    ['ExN9_L23', 'ExN2_L23']
-        )]
+if source_dataset == 'PFC_V1_Wang':
+    source_target_adata = source_target_adata[source_target_adata.obs['SubClusters'].isin(
+        ['EN-newborn', 'EN-IT-immature','EN-L2_3-IT'] + \
+            ['ExN1_L23_ATAC', 'ExN2_L23_ATAC'] + \
+            ['ExN9_L23_RNA', 'ExN2_L23_RNA']
+            )]
+elif source_dataset == 'PFC_Zhu':
+    print('WARNING: not filtering SubClusters for PFC_Zhu')
+
+    #subclusters_props = target_adata.obs['SubClusters'].value_counts(normalize=True)
+    #subclusters_filtered = subclusters_props.loc[subclusters_props > 0.01].index.tolist() + source_clusters
+    #source_target_adata = source_target_adata[source_target_adata.obs['SubClusters'].isin(subclusters_filtered)]
+
+
 
 #%% Plot distribution of age and ordinal pseudotime
 
 adata = source_target_adata.copy()
 adata.obs_names_make_unique()
 adata.obs[['Age', 'ordinal_pseudotime']] = adata.obs[['Age', 'ordinal_pseudotime']].astype(float)
-adata.obs['SubClusters'] = pd.Categorical(adata.obs['SubClusters'], categories=source_clusters + target_clusters, ordered=True)
+#adata.obs['SubClusters'] = pd.Categorical(adata.obs['SubClusters'], categories=source_clusters + target_clusters, ordered=True)
 
 fig, ax = plt.subplots(1, 2, figsize=[12, 8])
 sns.barplot(adata[adata.obs['source_or_target']=='source'].obs, x='modality', y='Age', hue='ClustersMapped', errorbar='se', ax=ax[0])
@@ -1222,29 +1213,38 @@ sns.barplot(adata[adata.obs['source_or_target']=='target'].obs, x='modality', y=
 plt.tight_layout(); plt.show()
 
 #%% Run PAGA on combined source & target data
-source_target_adata = paga_analysis(source_target_adata, dev_group_key='Age', cell_group_key='ClustersMapped',
-    correct_imbalance=False)
+
+do_fa = False
+source_target_adata = paga_analysis(source_target_adata, dev_group_key='Age', cell_group_key='ClustersMapped', do_fa=do_fa,
+    correct_imbalance=True)
 #source_target_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'source_target_adata_{source_dataset}_{target_dataset}.h5ad'))
 
 ## plot FA embeddings comparing source and target datasets
-colors = ['source_or_target', 'modality', 'dpt_pseudotime', 'ordinal_pseudotime', 'ClustersMapped']
-f1 = sc.pl.draw_graph(source_target_adata, color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
-f2 = sc.pl.draw_graph(source_target_adata[source_target_adata.obs['source_or_target']=='target'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
-f3 = sc.pl.draw_graph(source_target_adata[source_target_adata.obs['source_or_target']=='source'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
-f1.show(); f2.show(); f3.show()
-
 source_target_adata = magic_diffusion(source_target_adata, 'ordinal_pseudotime', split_var='Condition', t=3)
-
 target_adata = source_target_adata[source_target_adata.obs['source_or_target']=='target'].copy()
 
-colors = ['Condition', 'modality', 'ordinal_pseudotime_magic']
-f1 = sc.pl.draw_graph(target_adata, color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
-f2 = sc.pl.draw_graph(target_adata[target_adata.obs['Condition']=='case'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
-f3 = sc.pl.draw_graph(target_adata[target_adata.obs['Condition']=='control'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
+if do_fa:
+    plot_func = sc.pl.draw_graph
+    basis = 'draw_graph_fa'
+elif not do_fa:
+    plot_func = sc.pl.umap
+    basis = 'umap'
+
+colors = ['source_or_target', 'modality', 'dpt_pseudotime', 'ordinal_pseudotime', 'ClustersMapped']
+f1 = plot_func(source_target_adata, color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
+f2 = plot_func(source_target_adata[source_target_adata.obs['source_or_target']=='target'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
+f3 = plot_func(source_target_adata[source_target_adata.obs['source_or_target']=='source'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
 f1.show(); f2.show(); f3.show()
 
-#%% correlate diffusion components with ordinal pseudotime
+colors = ['Condition', 'modality', 'ordinal_pseudotime_magic']
+f1 = plot_func(target_adata, color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
+f2 = plot_func(target_adata[target_adata.obs['Condition']=='case'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
+f3 = plot_func(target_adata[target_adata.obs['Condition']=='control'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
+f1.show(); f2.show(); f3.show()
 
+
+#%% correlate diffusion components with ordinal pseudotime
+'''
 def diffmap_corrs(adata):
     n_diffmaps = len(adata.uns['diffmap_evals'])
     diffmap_df = pd.DataFrame(adata.obsm['X_diffmap'], columns=[f'dm{idx}' for idx in range(n_diffmaps)], index=adata.obs_names)
@@ -1265,6 +1265,7 @@ plt.xlabel('')
 plt.ylabel('Pearson correlation')
 plt.title('Diffusion components vs. ordinal pseudotime')
 plt.tight_layout(); plt.show()
+'''
 
 
 #%% perform label transfer between source and target datasets
@@ -1281,7 +1282,7 @@ df = cross_batch_graph_neighbors_with_summary(
 )
 df.head()
 
-df['most_common_cluster'] = pd.Categorical(df['most_common_cluster'], categories=np.unique(source_clusters + target_clusters), ordered=True)
+df['most_common_cluster'] = pd.Categorical(df['most_common_cluster'], categories=source_clusters, ordered=True)
 
 count_in_source = source_target_adata.obs.loc[source_target_adata.obs['source_or_target'] == 'source', 'ClustersMapped'].value_counts()
 count_in_source.name = 'count_in_source'
@@ -1298,7 +1299,6 @@ df = df.merge(subsampled_kd_clip_adatas[source_dataset].obs['Condition'], left_o
 ## merge most_common_cluster onto adata.obs
 source_target_adata.obs = source_target_adata.obs.merge(df.set_index('cell')['most_common_cluster'], left_index=True, right_index=True, how='left')
 
-
 fig, ax = plt.subplots(1, 2, figsize=[df['most_common_cluster'].nunique() + 8, 7], sharex=True)
 #sns.boxplot(df, x='most_common_cluster', y='mean_neighbors_ordinal_pseudotime', ax=ax[0])
 #sns.boxplot(df, x='most_common_cluster', y='mean_neighbors_dpt_pseudotime', ax=ax[1])
@@ -1312,7 +1312,7 @@ plt.tight_layout(); plt.show()
 def devmdd_fig1(df, source_dataset, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_fig1.svg')):
 
     if source_dataset == 'PFC_Zhu':
-        fig, ax = plt.subplots(1, 1, figsize=[5, 6])
+        fig, ax = plt.subplots(1, 1, figsize=[6, 5])
 
         # Barplot
         pastel2_colors = sns.color_palette('Pastel2')
@@ -1320,8 +1320,8 @@ def devmdd_fig1(df, source_dataset, manuscript_figpath=os.path.join(os.environ['
         pastel2_colors = [pastel2_colors[1], pastel2_colors[0]] + list(pastel2_colors[2:])
         sns.barplot(
             df,
-            x='most_common_cluster',
-            y='mean_neighbors_ordinal_pseudotime',
+            y='most_common_cluster',
+            x='mean_neighbors_ordinal_pseudotime',
             hue='Condition',
             errorbar='se',
             palette='Pastel1',
@@ -1329,10 +1329,10 @@ def devmdd_fig1(df, source_dataset, manuscript_figpath=os.path.join(os.environ['
             edgecolor='.5',
             ax=ax)
 
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=30)
-        ax.set_ylabel('Ordinal Pseudotime')
-        ax.set_xlabel('')
-        ax.set_ylim(30, 62)
+        #ax.set_xticklabels(ax.get_xticklabels(), rotation=30)
+        ax.set_xlabel('Ordinal Pseudotime')
+        ax.set_ylabel('')
+        ax.set_xlim(30, 62)
 
     elif source_dataset == 'PFC_V1_Wang':
 
@@ -1361,6 +1361,7 @@ def devmdd_fig1(df, source_dataset, manuscript_figpath=os.path.join(os.environ['
 
     plt.tight_layout()
     fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    print(f'Saving figure to {manuscript_figpath}')
     plt.close()
 
 def devmdd_fig2(target_adata, source_adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results')):
@@ -1371,18 +1372,21 @@ def devmdd_fig2(target_adata, source_adata, manuscript_figpath=os.path.join(os.e
 
     ## target data
     adata = target_adata.copy()
-    sc.pl.umap(adata, color='most_common_cluster', title='target data (imputed)', save='_devmdd_fig3.svg')
+    sc.pl.umap(adata, color='most_common_cluster', title='MDD data (imputed)', save='_devmdd_fig3.svg')
 
     perm_idxs = np.flip(np.random.permutation(len(adata)))
-    size_0_for_na = np.where(adata.obs['most_common_cluster'].isna(), 0, 25)
+    size_0_for_na = np.where(adata.obs['most_common_cluster'].isna(), 0, 50)
 
     sc.tl.paga(adata, groups='leiden')
     sc.pl.paga_compare(adata[perm_idxs])
-    sc.pl.paga_compare(adata[perm_idxs], color='most_common_cluster', legend_loc='right margin', right_margin=0.9, title='', size=size_0_for_na[perm_idxs], node_size_scale=3, frameon=True, save='_devmdd_fig2.svg') # will prepend "paga_compare" to the filename
+    sc.pl.paga_compare(adata[perm_idxs], color='most_common_cluster', legend_loc='right margin', right_margin=0.9, title='', size=size_0_for_na[perm_idxs], fontsize=0, node_size_scale=3, frameon=True, save='_devmdd_fig2.svg') # will prepend "paga_compare" to the filename
 
     #sc.pl.paga_compare(adata[perm_idxs], color='ordinal_pseudotime_magic', size=size_0_for_na[perm_idxs], right_margin=0.4)
 
-    sc.pl.draw_graph(adata[perm_idxs], color='leiden', size=size_0_for_na[perm_idxs], na_in_legend=False, cmap='plasma', title='', save='_devmdd_fig5.svg')
+    if 'draw_graph' in adata.uns.keys():
+        sc.pl.draw_graph(adata[perm_idxs], color='leiden', size=size_0_for_na[perm_idxs], na_in_legend=False, cmap='plasma', title='', save='_devmdd_fig5.svg')
+    else:
+        sc.pl.umap(adata[perm_idxs], color='leiden', size=size_0_for_na[perm_idxs], na_in_legend=False, cmap='plasma', legend_loc='on data', legend_fontsize=8, title='', save='_devmdd_fig5.svg', groups=None)
 
     #sc.pl.draw_graph(adata[perm_idxs], color='most_common_cluster', size=size_0_for_na[perm_idxs], na_in_legend=False, title='')
     #sc.pl.paga(adata)
@@ -1390,11 +1394,19 @@ def devmdd_fig2(target_adata, source_adata, manuscript_figpath=os.path.join(os.e
     ## source data
     adata = source_adata.copy()
     adata.obs['ClustersMapped'] = pd.Categorical(adata.obs['ClustersMapped'], categories=target_adata.obs['most_common_cluster'].cat.categories, ordered=True)
-    sc.pl.umap(adata, color='ClustersMapped', title='source data', legend_loc=None, save='_devmdd_fig4.svg')
+    sc.pl.umap(adata, color='ClustersMapped', title='developmental data', legend_loc=None, save='_devmdd_fig4.svg')
+    print(f'Saving figure to {manuscript_figpath}')
 
 
 
+#%% UMAP of leiden clusters to be able to set paths
+
+source_adata = source_target_adata[source_target_adata.obs['source_or_target']=='source'].copy()
 target_adata = source_target_adata[source_target_adata.obs['source_or_target']=='target'].copy()
+
+if 'Sex' not in target_adata.obs.columns:
+    target_adata.obs = target_adata.obs.merge(student_rna_atac_sub.obs['Sex'], left_index=True, right_index=True, how='left')
+
 colors_uns_keys = [key for key in list(target_adata.uns.keys()) if '_colors' in key]
 for key in colors_uns_keys: del target_adata.uns[key]
 
@@ -1409,68 +1421,263 @@ leiden_diff = (target_adata.obs.groupby(['leiden','Condition'])['ordinal_pseudot
 leiden_sorted_case_more_control = leiden_diff[leiden_diff > 0].index.tolist()
 leiden_sorted_control_more_case = leiden_diff[leiden_diff < 0].index.tolist()
 
-sc.pl.embedding(target_adata, color='leiden', basis='X_draw_graph_fa', na_in_legend=False, palette='plasma')
-#sc.pl.paga_compare(target_adata, color="ordinal_pseudotime", threshold=0.25, right_margin=0.5)
+#sc.pl.embedding(target_adata, color='leiden', basis=basis, na_in_legend=False, palette='plasma')
+plot_func(target_adata, color='leiden', legend_loc='on data', alpha=0.2)
+#sc.pl.paga_compare(target_adata, color="ordinal_pseudotime", node_size_scale=3, legend_loc='right margin', right_margin=0.5)
 
+'''
+paths = [
+    ("MDD_ExN_all", leiden_sorted),
+    ('MDD_ExN_5_1_6_4_7_0', ['5', '1', '6', '4', '7', '0']),
+    ('MDD_ExN_5_3_11_10_9_8', ['5', '3', '11', '10', '9', '8']),
+]
+'''
+#%% set paths
 
 paths = [
     ("MDD_ExN_all", leiden_sorted),
-    ("MDD_ExN_case_more_control", leiden_sorted_case_more_control),
-    ("MDD_ExN_control_more_case", leiden_sorted_control_more_case),
+    ('MDD_ExN_5_1_6_4_7_0', ['5', '1', '6', '4', '7', '0']),
+    ('MDD_ExN_5_3_11_10_9_8', ['5', '3', '11', '10', '9', '8']),
 ]
 
-## plot rolling mean and standard error of ordinal pseudotime for each leiden cluster
-window_len = 3
+for path in paths[1:]:
+    last_leiden = path[-1][-1]
+    last_leiden_top5 = target_adata.obs.loc[target_adata.obs['leiden'] == last_leiden, 'SubClusters'].value_counts().head(5).index.tolist()
 
-means = target_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].mean()
-means_pivot = means.reset_index().pivot_table(index='leiden', columns=['modality','Condition'], values='ordinal_pseudotime')
-means_pivot = means_pivot.rolling(window_len, min_periods=0).mean()
-means_pivot = means_pivot.melt(ignore_index=False).rename(columns={'value': 'ordinal_pseudotime'})
-means_pivot['Condition_modality'] = means_pivot[['Condition','modality']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1)
+    print(path[0])
+    print(last_leiden_top5)
+    print('--------------------------------')
 
-std_errs = target_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].std() / np.sqrt(target_adata.obs.groupby(['leiden','modality','Condition'])['ordinal_pseudotime'].count())
-std_errs_pivot = std_errs.reset_index().pivot_table(index='leiden', columns=['modality','Condition'], values='ordinal_pseudotime')
-std_errs_pivot = std_errs_pivot.rolling(window_len, min_periods=0).mean()
-std_errs_pivot = std_errs_pivot.melt(ignore_index=False).rename(columns={'value': 'ordinal_pseudotime'})
-std_errs_pivot['Condition_modality'] = std_errs_pivot[['Condition','modality']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1)
+#%% Rename paths
 
-## resort Leiden clusters
-leiden_sorted = means_pivot.groupby('leiden')['ordinal_pseudotime'].mean().sort_values().index.tolist()
-means_pivot.index = pd.CategoricalIndex(means_pivot.index, categories=leiden_sorted, ordered=True)
-std_errs_pivot.index = pd.CategoricalIndex(std_errs_pivot.index, categories=leiden_sorted, ordered=True)
-means_pivot.sort_index(inplace=True)
-std_errs_pivot.sort_index(inplace=True)
+## create name mappers for paths and leiden clusters
+path_names_mapper = {
+    paths[0][0]: 'all',
+    paths[1][0]: 'L46',
+    paths[2][0]: 'L23',
+}
+print(path_names_mapper)
 
-for descr, path in [paths[0]]:
+path_leidens_mapper = {}
 
-    means_pivot_path = means_pivot[means_pivot.index.isin(path)].reset_index()
-    std_errs_pivot_path = std_errs_pivot[std_errs_pivot.index.isin(path)].reset_index()
+for descr, path in paths[1:]:
+    path_leidens = {}
+    # Only append path_names_mapper[descr] if leiden is unique within the path
+    seen_leidens = set()
+    for l, leiden in enumerate(path):
+        # Check if leiden cluster is unique among all defined paths (not just this path)
+        leiden_is_unique = sum([p.count(leiden) for _, p in paths[1:]]) == 1
+        if leiden_is_unique:
+            path_leidens[leiden] = f'{l}_{path_names_mapper[descr]}'
+        else:
+            path_leidens[leiden] = str(l)
+    path_leidens_mapper.update(path_leidens)
 
-    #means_pivot_path['leiden'] = pd.Categorical(means_pivot_path['leiden'], categories=path, ordered=True)
-    #std_errs_pivot_path['leiden'] = pd.Categorical(std_errs_pivot_path['leiden'], categories=path, ordered=True)
+## add missing leiden clusters
+for leiden in target_adata.obs['leiden'].unique().tolist():
+    if leiden not in path_leidens_mapper.keys():
+        print(f'{leiden} not in paths')
+        path_leidens_mapper[leiden] = leiden + '_na'
 
-    fig, ax = plt.subplots(1,3, figsize=[15,8], sharex=True, sharey=True)
-    sns.lineplot(data=means_pivot_path, x='leiden', y='ordinal_pseudotime', color='grey', errorbar=None, marker='.', markersize=20, linewidth=2, ax=ax[0])
-    sns.lineplot(data=means_pivot_path[means_pivot_path['modality']=='RNA'], x='leiden', y='ordinal_pseudotime', palette='Pastel1', hue='Condition_modality', hue_order=['case_RNA', 'control_RNA'], errorbar=None, marker='.', markersize=20, linewidth=2, ax=ax[1])
-    sns.lineplot(data=means_pivot_path[means_pivot_path['modality']=='ATAC'], x='leiden', y='ordinal_pseudotime', palette='Pastel1', hue='Condition_modality', hue_order=['case_ATAC', 'control_ATAC'], errorbar=None, marker='.', markersize=20, linewidth=2, linestyle='--', ax=ax[2])
+## apply name mappers to paths
+paths = [(path_names_mapper[descr], [path_leidens_mapper[leiden] for leiden in path]) for descr, path in paths]
 
-    x = means_pivot_path['leiden']; low = (means_pivot_path['ordinal_pseudotime'] - std_errs_pivot_path['ordinal_pseudotime']).values; high = (means_pivot_path['ordinal_pseudotime'] + std_errs_pivot_path['ordinal_pseudotime']).values
-    high_low = x.to_frame().assign(low=low, high=high)
-    ax[0].fill_between(x.unique().tolist(), high_low.groupby('leiden')['low'].mean(), high_low.groupby('leiden')['high'].mean(), alpha=0.15, color='grey')
-    ax[1].fill_between(x[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], low[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], high[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], alpha=0.3, color=sns.color_palette('Pastel1')[0])
-    ax[1].fill_between(x[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], low[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], high[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], alpha=0.3, color=sns.color_palette('Pastel1')[1])
-    ax[2].fill_between(x[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], low[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], high[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], alpha=0.3, color=sns.color_palette('Pastel1')[0])
-    ax[2].fill_between(x[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], low[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], high[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], alpha=0.3, color=sns.color_palette('Pastel1')[1])
+## apply name mappers to target_adata
+target_adata.obs['leiden_og'] = target_adata.obs['leiden']
+target_adata.obs['leiden'] = target_adata.obs['leiden'].map(path_leidens_mapper)
 
-    ax[0].set_title('all nuclei'); ax[1].set_title('RNA'); ax[2].set_title('ATAC')
-    plt.suptitle(f'{descr}')
-    plt.tight_layout(); plt.show()
+#sc.tl.umap(target_adata)
+#sc.pl.umap(target_adata, color='leiden', legend_loc='on data', alpha=0.2)
+#sc.tl.paga(target_adata, groups="leiden_renamed")
 
-def devmdd_fig4(lineplots_fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_fig4.svg')):
+sc.tl.paga(target_adata, groups="leiden")
+sc.pl.paga_compare(target_adata)
+sc.pl.paga_compare(target_adata, color="leiden", node_size_scale=5, size=25, legend_loc='on data', legend_fontsize=8, fontsize=8, right_margin=0.1)
+sc.pl.paga_compare(target_adata, color="ordinal_pseudotime", node_size_scale=5, size=25, legend_loc='on data', legend_fontsize=8, fontsize=8, right_margin=0.1)
 
-    lineplots_fig.suptitle('')
-    lineplots_fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
-    plt.close()
+#devmdd_fig2(target_adata, source_adata)
+
+#%% plot rolling mean and standard error of ordinal pseudotime for each leiden cluster
+
+def rolling_mean_and_std_err(target_adata, window_len, paths, d_df_dict_, p_one_sided_dict_, pseudotime_key='ordinal_pseudotime', plot_all=False):
+
+    ## rolling mean
+    means = target_adata.obs.groupby(['leiden','modality','Condition'])[pseudotime_key].mean()
+    means_pivot = means.reset_index().pivot_table(index='leiden', columns=['modality','Condition'], values=pseudotime_key)
+    means_pivot = means_pivot.rolling(window_len, min_periods=0).mean()
+    means_pivot = means_pivot.melt(ignore_index=False).rename(columns={'value': pseudotime_key})
+    means_pivot['Condition_modality'] = means_pivot[['Condition','modality']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1)
+
+    ## rolling standard error
+    std_errs = target_adata.obs.groupby(['leiden','modality','Condition'])[pseudotime_key].std() / np.sqrt(target_adata.obs.groupby(['leiden','modality','Condition'])[pseudotime_key].count())
+    std_errs_pivot = std_errs.reset_index().pivot_table(index='leiden', columns=['modality','Condition'], values=pseudotime_key)
+    std_errs_pivot = std_errs_pivot.rolling(window_len, min_periods=0).mean()
+    std_errs_pivot = std_errs_pivot.melt(ignore_index=False).rename(columns={'value': pseudotime_key})
+    std_errs_pivot['Condition_modality'] = std_errs_pivot[['Condition','modality']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1)
+
+    ## resort Leiden clusters
+    leiden_sorted = means_pivot.groupby('leiden')[pseudotime_key].mean().sort_values().index.tolist()
+    means_pivot.index = pd.CategoricalIndex(means_pivot.index, categories=leiden_sorted, ordered=True)
+    std_errs_pivot.index = pd.CategoricalIndex(std_errs_pivot.index, categories=leiden_sorted, ordered=True)
+    means_pivot.sort_index(inplace=True)
+    std_errs_pivot.sort_index(inplace=True)
+
+    figs = {}
+    for descr, path in paths:
+
+        means_pivot_path = means_pivot[means_pivot.index.isin(path)].reset_index()
+        std_errs_pivot_path = std_errs_pivot[std_errs_pivot.index.isin(path)].reset_index()
+
+        #means_pivot_path['leiden'] = means_pivot_path['leiden'].cat.remove_unused_categories()
+        #std_errs_pivot_path['leiden'] = std_errs_pivot_path['leiden'].cat.remove_unused_categories()
+
+        means_pivot_path['leiden'] = pd.Categorical(means_pivot_path['leiden'], categories=path, ordered=True)
+        std_errs_pivot_path['leiden'] = pd.Categorical(std_errs_pivot_path['leiden'], categories=path, ordered=True)
+
+        ## lineplots
+        fig, ax = plt.subplots(1,3 if plot_all else 2, figsize=[15 if plot_all else 8,8], sharex=True, sharey=True)
+        l1 = sns.lineplot(
+            data=means_pivot_path[means_pivot_path['modality']=='RNA'],
+            x='leiden', y=pseudotime_key, palette='Pastel1',
+            hue='Condition_modality', hue_order=['case_RNA', 'control_RNA'],
+            errorbar=None, marker='.', markersize=20, linewidth=2, ax=ax[-2]
+        )
+        l2 = sns.lineplot(
+            data=means_pivot_path[means_pivot_path['modality']=='ATAC'],
+            x='leiden', y=pseudotime_key, palette='Pastel1',
+            hue='Condition_modality', hue_order=['case_ATAC', 'control_ATAC'],
+            errorbar=None, marker='.', markersize=20, linewidth=2, linestyle='--', ax=ax[-1]
+        )
+
+        ## add asterisks for significant differences
+        y_shift = 0.3
+        l_shift = 0.125
+
+        p_one_sided_path_rna = p_one_sided_dict_['RNA'][descr]
+        p_one_sided_path_atac = p_one_sided_dict_['ATAC'][descr]
+        ylim_upper_rna = ax[-2].get_ylim()[1] - y_shift
+        ylim_upper_atac = ax[-1].get_ylim()[1] - y_shift
+
+        for l, leiden in enumerate(path):
+
+            p_one_sided_path_rna_leiden = d_df_dict_['RNA'][descr].loc[leiden].loc['p_one_sided']
+            p_one_sided_path_atac_leiden = d_df_dict_['ATAC'][descr].loc[leiden].loc['p_one_sided']
+
+            if p_one_sided_path_rna_leiden < 0.05:
+                ax[-2].text(l - l_shift, ylim_upper_rna, '†', fontsize=14, color='grey')
+            if p_one_sided_path_atac_leiden < 0.05:
+                ax[-1].text(l - l_shift, ylim_upper_atac, '†', fontsize=14, color='grey')
+
+        # Combine both legends and place to the right margin of plots, removing original legends
+        handles1, labels1 = ax[-2].get_legend_handles_labels()
+        handles2, labels2 = ax[-1].get_legend_handles_labels()
+        combined_handles = handles1 + handles2
+        combined_labels = labels1 + labels2
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_handles = []
+        unique_labels = []
+        for h, l in zip(combined_handles, combined_labels):
+            if l not in seen:
+                unique_handles.append(h)
+                unique_labels.append(l)
+                seen.add(l)
+        
+        # Remove original legends, if present
+        if ax[-2].get_legend() is not None:
+            ax[-2].get_legend().remove()
+        if ax[-1].get_legend() is not None:
+            ax[-1].get_legend().remove()
+
+        fig.legend(
+            handles=unique_handles,
+            labels=unique_labels,
+            loc='center left',
+            bbox_to_anchor=(1.0, 0.5)
+        )
+
+        ## fill between values for error bars
+        x = means_pivot_path['leiden']; low = (means_pivot_path[pseudotime_key] - std_errs_pivot_path[pseudotime_key]).values; high = (means_pivot_path[pseudotime_key] + std_errs_pivot_path[pseudotime_key]).values
+        high_low = x.to_frame().assign(low=low, high=high)
+        
+        x = x.sort_values()
+        high_low = high_low.sort_values('leiden')
+        high = high_low['high']
+        low = high_low['low']
+
+        ## fill between
+        ax[-2].fill_between(x[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], low[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], high[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='case')], alpha=0.3, color=sns.color_palette('Pastel1')[0])
+        ax[-2].fill_between(x[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], low[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], high[(means_pivot_path['modality']=='RNA') & (means_pivot_path['Condition']=='control')], alpha=0.3, color=sns.color_palette('Pastel1')[1])
+        ax[-1].fill_between(x[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], low[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], high[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='case')], alpha=0.3, color=sns.color_palette('Pastel1')[0])
+        ax[-1].fill_between(x[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], low[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], high[(means_pivot_path['modality']=='ATAC') & (means_pivot_path['Condition']=='control')], alpha=0.3, color=sns.color_palette('Pastel1')[1])
+
+        ax[-2].set_ylabel(pseudotime_key)
+        ax[-2].set_xticklabels(ax[-2].get_xticklabels(), rotation=30); ax[-1].set_xticklabels(ax[-1].get_xticklabels(), rotation=30)
+
+        sig_levels = pd.Series({1.0: 'ns', 0.05: '$\\bf{{*}}$', 0.01: '$\\bf{{**}}$', 0.001: '$\\bf{{***}}$'})
+        sig_level_rna = sig_levels.loc[p_one_sided_path_rna <= sig_levels.index].iloc[-1]
+        sig_level_atac = sig_levels.loc[p_one_sided_path_atac <= sig_levels.index].iloc[-1]
+
+        ax[-2].set_title(f'RNA [{sig_level_rna}]') #ax[-2].set_title(f'RNA ($\\it{{p}}$ = {p_one_sided_path_rna:.1g})')
+        ax[-1].set_title(f'ATAC [{sig_level_atac}]') #ax[-1].set_title(f'ATAC ($\\it{{p}}$ = {p_one_sided_path_atac:.1g})')
+
+        if plot_all:
+            sns.lineplot(data=means_pivot_path, x='leiden', y=pseudotime_key, color='grey', errorbar=None, marker='.', markersize=20, linewidth=2, ax=ax[0])
+            ax[0].fill_between(x.unique().tolist(), high_low.groupby('leiden')['low'].mean().dropna(), high_low.groupby('leiden')['high'].mean().dropna(), alpha=0.15, color='grey')
+            ax[0].set_title('all nuclei'); 
+            ax[0].set_xticklabels(ax[0].get_xticklabels(), rotation=30)
+
+        fig.suptitle(f'{descr}')
+        fig.tight_layout(); fig.show()
+        figs[descr] = fig
+
+    return figs
+
+#%% perform HAC weighted mean tests for each path and plot rolling mean and standard error
+
+from eclare.post_hoc_utils import tree
+
+pseudotime_key = 'ordinal_pseudotime'
+window_len = 1
+
+d_df_dict = tree()
+p_one_sided_dict = tree()
+
+for sex in ['both','female','male']:
+    for modality in ['RNA','ATAC']:
+        for descr, path in paths:
+
+            print(f'{sex} {modality} {descr}')
+
+            if sex == 'both':
+                df = target_adata.obs[
+                    (target_adata.obs['modality'] == modality)
+                ]
+            else:
+                df = target_adata.obs[
+                    (target_adata.obs['modality'] == modality) & \
+                    (target_adata.obs['Sex'] == sex)
+                ]
+
+            d_df, p_one_sided = hac_weighted_mean_test(df, path, window_len, direction='all', pseudotime_key=pseudotime_key)
+            d_df_dict[sex][modality][descr] = d_df
+            p_one_sided_dict[sex][modality][descr] = p_one_sided
+
+            print('')
+
+## lineplots
+figs_both = rolling_mean_and_std_err(target_adata, window_len, paths, d_df_dict['both'], p_one_sided_dict['both'], pseudotime_key=pseudotime_key)
+figs_female = rolling_mean_and_std_err(target_adata[target_adata.obs['Sex']=='female'], window_len, paths, d_df_dict['female'], p_one_sided_dict['female'], pseudotime_key=pseudotime_key)
+figs_male = rolling_mean_and_std_err(target_adata[target_adata.obs['Sex']=='male'], window_len, paths, d_df_dict['male'], p_one_sided_dict['male'], pseudotime_key=pseudotime_key)
+
+def devmdd_fig4(lineplots_figs, suffix='', manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_fig4.svg')):
+
+    for descr, fig in lineplots_figs.items():
+        fig.suptitle(fig._suptitle.get_text() + ' - ' + str(suffix) if fig._suptitle is not None else str(suffix))
+        fig.savefig(manuscript_figpath.replace('.svg', f'_{descr}_{suffix}.svg'), bbox_inches='tight', dpi=300)
+        print(f"Saving figure to {manuscript_figpath.replace('.svg', f'_{descr}_{suffix}.svg')}")
+        plt.close()
 
 def dev_fig4(adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig4.svg')):
     sc.settings._vector_friendly = True
@@ -1491,18 +1698,26 @@ def dev_fig4(adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_
     print(f'Saving figure to {manuscript_figpath}')
     dev_fig4.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
 
+#%%
 ## plot embedding density for each cell type
-source_target_adata.obs['ClustersMapped'] = pd.Categorical(source_target_adata.obs['ClustersMapped'], categories=source_target_adata.obs.groupby('ClustersMapped')['ordinal_pseudotime'].mean().sort_values().index.tolist(), ordered=True).remove_unused_categories()
-sc.tl.embedding_density(source_target_adata, basis='draw_graph_fa', groupby='ClustersMapped')
-sc.pl.embedding_density(source_target_adata, basis='draw_graph_fa', key='draw_graph_fa_density_ClustersMapped')
+sc.tl.embedding_density(source_target_adata, basis=basis, groupby='source_or_target')
+sc.pl.embedding_density(source_target_adata, basis=basis, key=f'{basis}_density_source_or_target', ncols=source_target_adata.obs['source_or_target'].nunique())
+
+source_adata.obs['SubClusters'] = pd.Categorical(source_adata.obs['SubClusters'], categories=source_clusters, ordered=True).remove_unused_categories()
+sc.tl.embedding_density(source_adata, basis=basis, groupby='SubClusters')
+sc.pl.embedding_density(source_adata, basis=basis, key=f'{basis}_density_SubClusters', ncols=source_adata.obs['SubClusters'].nunique())
+#sc.pl.embedding_density(source_adata[source_adata.obs['modality']=='ATAC'], basis=basis, key=f'{basis}_density_SubClusters')
+#sc.pl.embedding_density(source_adata[source_adata.obs['modality']=='RNA'], basis=basis, key=f'{basis}_density_SubClusters')
 
 target_adata.obs['SubClusters'] = pd.Categorical(target_adata.obs['SubClusters'], categories=target_adata.obs.groupby('SubClusters')['ordinal_pseudotime'].mean().sort_values().index.tolist(), ordered=True).remove_unused_categories()
-sc.tl.embedding_density(target_adata, basis='draw_graph_fa', groupby='SubClusters')
-sc.pl.embedding_density(target_adata[target_adata.obs['modality']=='ATAC'], basis='draw_graph_fa', key='draw_graph_fa_density_SubClusters')
-sc.pl.embedding_density(target_adata[target_adata.obs['modality']=='RNA'], basis='draw_graph_fa', key='draw_graph_fa_density_SubClusters')
+sc.tl.embedding_density(target_adata, basis=basis, groupby='SubClusters')
+sc.pl.embedding_density(target_adata, basis=basis, key=f'{basis}_density_SubClusters')
+#sc.pl.embedding_density(target_adata[target_adata.obs['modality']=='ATAC'], basis=basis, key=f'{basis}_density_SubClusters')
+#sc.pl.embedding_density(target_adata[target_adata.obs['modality']=='RNA'], basis=basis, key=f'{basis}_density_SubClusters')
 
-
+## create subsampled eclare adata, even if in fact is KD-CLIP data
 subsampled_eclare_adata = target_adata.copy()
+
 '''
 ## case vs control leiden cluster proportions
 plt.figure(figsize=[8,6])
@@ -1610,9 +1825,6 @@ adata = source_target_adata.copy()
 #sc.tl.umap(adata, n_components=3)
 #sc.pl.umap(adata, color='leiden', projection='3d')
 
-paths = [
-    ('MDD_ExN_102', ['1', '0', '2']),
-         ]
 paths_leiden_clusters = np.unique(np.hstack([path[1] for path in paths]))
 
 adata_ExN = adata[adata.obs['ClustersMapped'] == 'ExN'].copy()
@@ -1654,25 +1866,25 @@ for ipath, (descr, path) in enumerate(paths):
 
 plt.show()
 
-#%% add new columns to MDD obs data
+#%% PAGA paths
 
-student_rna_sub.obs = student_rna_sub.obs.merge(adata.obs.set_index('cell')[['most_common_cluster', 'dpt_pseudotime', 'leiden']], left_index=True, right_index=True, how='left')
+#student_rna_sub.obs = student_rna_sub.obs.merge(adata.obs.set_index('cell')[['most_common_cluster', 'dpt_pseudotime', 'leiden']], left_index=True, right_index=True, how='left')
+student_rna_sub.obs = student_rna_sub.obs.merge(source_target_adata.obs[['most_common_cluster', 'dpt_pseudotime', 'leiden']], left_index=True, right_index=True, how='left')
 rna_tmp = student_rna_sub[student_rna_sub.obs['ClustersMapped'] == 'ExN']
 
-student_atac_sub.obs = student_atac_sub.obs.merge(adata.obs.set_index('cell')[['most_common_cluster', 'dpt_pseudotime', 'leiden']], left_index=True, right_index=True, how='left')
+student_atac_sub.obs = student_atac_sub.obs.merge(source_target_adata.obs[['most_common_cluster', 'dpt_pseudotime', 'leiden']], left_index=True, right_index=True, how='left')
 atac_tmp = student_atac_sub[student_atac_sub.obs['ClustersMapped'] == 'ExN']
 
 r_rna = gene_obs_pearson(rna_tmp, "dpt_pseudotime")
 r_tops_rna = pd.concat([r_rna.sort_values(ascending=False).head(8), r_rna.sort_values(ascending=True).head(8)[::-1]], axis=0)
 r_tops_index_rna = r_tops_rna.index.tolist()
 
-_, axs = plt.subplots(ncols=len(paths), figsize=(10, 10), gridspec_kw={
-                     'wspace': 0.05, 'left': 0.12})
+_, axs = plt.subplots(ncols=len(paths), figsize=(10, 10), gridspec_kw={                     'wspace': 0.05, 'left': 0.12})
 plt.subplots_adjust(left=0.05, right=0.98, top=0.82, bottom=0.2)
 
 for ipath, (descr, path) in enumerate(paths):
     sc.pl.paga_path(
-        adata=tmp, 
+        adata=rna_tmp, 
         nodes=path, 
         keys=r_tops_index_rna,
         annotations=['dpt_pseudotime'],
@@ -1723,6 +1935,65 @@ for ipath, (descr, path) in enumerate(paths):
         show=False)
 
 plt.show()
+
+#%% Import latents from other models
+
+## specify job IDs
+scJoint_job_id  = '20250905_125142'
+glue_job_id     = '20250906_003832'
+
+## add to dictionary
+methods_id_dict['scJoint'] = scJoint_job_id
+methods_id_dict['scGLUE'] = glue_job_id
+
+## scJoint
+scJoint_path = os.path.join(os.environ['OUTPATH'], 'scJoint_data_tmp', scJoint_job_id, 'scJoint_latents.h5ad')
+scJoint_adata = sc.read_h5ad(scJoint_path)
+scJoint_adata.obs = scJoint_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
+
+## scGLUE
+glue_path = os.path.join(os.environ['OUTPATH'], 'glue', glue_job_id, 'glue_latents.h5ad')
+glue_adata = sc.read_h5ad(glue_path)
+glue_adata.obs = glue_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
+
+## find overlapping cell IDs between ECLARE and scJoint/scGLUE
+valid_ids = set(subsampled_eclare_adata.obs_names) & set(glue_adata.obs_names) & set(scJoint_adata.obs_names)
+
+## keep only overlapping cells
+subsampled_eclare_adata = subsampled_eclare_adata[subsampled_eclare_adata.obs_names.isin(valid_ids)]
+
+scJoint_adata = scJoint_adata[scJoint_adata.obs_names.isin(valid_ids)]
+glue_adata = glue_adata[glue_adata.obs_names.isin(valid_ids)]
+
+for source_dataset in source_datasets:
+    subsampled_kd_clip_adatas[source_dataset] = subsampled_kd_clip_adatas[source_dataset][subsampled_kd_clip_adatas[source_dataset].obs_names.isin(valid_ids)]
+
+
+#%% run PAGA
+print('ECLARE'); subsampled_eclare_adata = paga_analysis(subsampled_eclare_adata, dev_group_key=dev_group_key, cell_group_key=cell_group, correct_imbalance=True)
+print('scJoint'); scJoint_adata = paga_analysis(scJoint_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
+print('scGLUE'); glue_adata = paga_analysis(glue_adata, dev_group_key=dev_group_key, cell_group_key=cell_group)
+
+for source_dataset in source_datasets:
+    print(f'KD-CLIP {source_dataset}'); subsampled_kd_clip_adatas[source_dataset] = paga_analysis(subsampled_kd_clip_adatas[source_dataset], dev_group_key=dev_group_key, cell_group_key=cell_group, correct_imbalance=True)
+    print(f'CLIP {source_dataset}'); subsampled_clip_adatas[source_dataset] = paga_analysis(subsampled_clip_adatas[source_dataset], dev_group_key=dev_group_key, cell_group_key=cell_group, correct_imbalance=True)
+
+'''
+subsampled_eclare_adata_rna = paga_analysis(subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'])
+subsampled_eclare_adata_atac = paga_analysis(subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'ATAC'])
+
+scJoint_adata_rna = paga_analysis(scJoint_adata[scJoint_adata.obs['modality'].str.upper() == 'RNA'])
+scJoint_adata_atac = paga_analysis(scJoint_adata[scJoint_adata.obs['modality'].str.upper() == 'ATAC'])
+
+glue_adata_rna = paga_analysis(glue_adata[glue_adata.obs['modality'].str.upper() == 'RNA'])
+glue_adata_atac = paga_analysis(glue_adata[glue_adata.obs['modality'].str.upper() == 'ATAC'])
+
+student_rna.obs['modality'] = 'RNA'
+student_atac.obs['modality'] = 'ATAC'
+
+student_rna = paga_analysis(student_rna)
+student_atac = paga_analysis(student_atac)
+'''
 
 #%% draw graphs for all methods
 
@@ -1836,14 +2107,19 @@ def diffusion_distances(adata, t=1.0):
     # Euclidean on the scaled coords
     return pairwise_distances(Xw, metric="euclidean")
 
-X_key = 'X_draw_graph_fa'
-plot_key = 'X_draw_graph_fa'
+X_key = f'X_{basis}'
+plot_key = f'X_{basis}'
 
 X_rna = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'].obsm[X_key]
 X_atac = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'ATAC'].obsm[X_key]
 
 plot_rna = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'].obsm[plot_key]
 plot_atac = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'ATAC'].obsm[plot_key]
+
+groups_rna = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'].obs[['Condition','Sex']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1).values
+groups_atac = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'ATAC'].obs[['Condition','Sex']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1).values
+
+groups_mask = (groups_rna[:,None] == groups_atac[None,:])
 
 a = np.ones(len(X_rna)) / len(X_rna)
 b = np.ones(len(X_atac)) / len(X_atac)
@@ -1857,11 +2133,17 @@ else:
     #M = M_full[:len(X_rna), len(X_rna):].toarray()
     #M = 1 - M
 
-reg = M[~np.isnan(M)].mean() / 100
+## apply groups mask to M
+M[~groups_mask] = 1e12
+
+## compute regularization value
+reg = np.median(M[~np.isnan(M)]) / 100
 
 #G = ot.sinkhorn(a, b, M, 1e-3)
 #G = ot.emd(a, b, M)
-G = ot.partial.partial_wasserstein(a, b, M, m=0.75)
+m = len(b) / len(a)
+print(f'm: {m:.2f}')
+G = ot.partial.partial_wasserstein(a, b, M, m=m)
 #res = ot.solve(M, reg=None)
 #G = res.plan
 
@@ -1899,6 +2181,11 @@ subsampled_eclare_adata = subsampled_eclare_adata[subsampled_eclare_adata.obs_na
 subsampled_eclare_adata.obs['Cell_ID_OT'] = subsampled_eclare_adata.obs_names.to_list()
 subsampled_eclare_adata.obs.loc[subsampled_eclare_adata.obs['modality'] == 'ATAC', 'Cell_ID_OT'] = remaining_rna_ids.to_list() # transfered labels from RNA to ATAC
 
+groups = subsampled_eclare_adata.obs.set_index('Cell_ID_OT')[['Condition','Sex']].apply(lambda x: f'{x[0]}_{x[1]}', axis=1)
+max_ngroups_per_cellidot = groups.groupby('Cell_ID_OT').apply(lambda x: x.value_counts().max())
+prop_ingroup_pairs = max_ngroups_per_cellidot.value_counts(normalize=True).loc[2]
+print(f'Proportion of in-group pairs: {prop_ingroup_pairs:.2f}')
+
 #G_plot_trim = np.zeros_like(G_plot)
 #G_plot_trim[remaining_rna_idxs, remaining_atac_idxs] = G_plot[remaining_rna_idxs, remaining_atac_idxs]
 plot_rna_trim = subsampled_eclare_adata[subsampled_eclare_adata.obs['modality'] == 'RNA'].obsm[plot_key]
@@ -1917,11 +2204,8 @@ plt.gca().tick_params(left=False, bottom=False, labelleft=False, labelbottom=Fal
 plt.axis('on')
 
 ## density plots
-sc.tl.embedding_density(subsampled_eclare_adata, basis='draw_graph_fa', groupby='modality')
-sc.pl.embedding_density(subsampled_eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_modality')
-
-sc.tl.embedding_density(subsampled_eclare_adata, basis='draw_graph_fa', groupby='Lineage')
-sc.pl.embedding_density(subsampled_eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_Lineage')
+sc.tl.embedding_density(subsampled_eclare_adata, basis=basis, groupby='modality')
+sc.pl.embedding_density(subsampled_eclare_adata, basis=basis, key=f'{basis}_density_modality')
 
 #%% save results
 
@@ -1947,7 +2231,7 @@ def cast_object_columns_to_str(adata):
     """
     Cast all object dtype columns in adata.obs to str type, if possible.
     """
-    for col in adata.obs.select_dtypes(include=['object']).columns:
+    for col in adata.obs.select_dtypes(include=['object','category']).columns:
         try:
             adata.obs[col] = adata.obs[col].astype(str)
         except Exception as e:
@@ -1975,7 +2259,7 @@ for source_dataset in source_datasets:
 
 #%% load adatas
 
-subsampled_eclare_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata.h5ad'))
+subsampled_eclare_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_eclare_adata_{target_dataset}.h5ad'))
 scJoint_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'scJoint_adata.h5ad'))
 glue_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'glue_adata.h5ad'))
 
