@@ -296,7 +296,7 @@ if cell_group == 'Lineage':
 elif cell_group == 'ClustersMapped':
     #clusters = student_rna.obs['ClustersMapped'].cat.categories.tolist()
     target_clusters_key = 'ClustersMapped'; q=17; target_clusters = ['ExN']
-    #target_clusters_key = 'SubClusters'; q=17; target_clusters = ['ExN1','ExN1_L23','ExN2','ExN2_L23','EN-L2_3-IT','ExN6','ExN9_L23'] # contains source and target clusters
+    #target_clusters_key = 'SubClusters'; q=17; target_clusters = student_rna.obs.loc[student_rna.obs[target_clusters_key].str.contains('L23|L46', regex=True), target_clusters_key].unique().tolist()
     if student_rna.obs_names.isin(valid_rna_ids).any():
         rna_idxs = np.where(~student_rna.obs_names.isin(valid_rna_ids) & student_rna.obs[target_clusters_key].isin(target_clusters))[0]
         atac_idxs = np.where(~student_atac.obs_names.isin(valid_atac_ids) & student_atac.obs[target_clusters_key].isin(target_clusters))[0]
@@ -622,7 +622,7 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
     elif cell_group_key == 'ClustersMapped':
         sc.pp.pca(adata, n_comps=30)
         n_pcs = np.abs(adata.uns['pca']['variance_ratio'].cumsum() - 0.66).argmin() # get number of PCs to explain 60% of variance
-        sc.pp.neighbors(adata, n_neighbors=200, n_pcs=n_pcs, use_rep='X_pca', method='umap', random_state=random_seed) # use gaussian kernel for correspondance between DPT and UMAP/FA, does not work if keep all IT EN cells
+        sc.pp.neighbors(adata, n_neighbors=50, n_pcs=n_pcs, use_rep='X_pca', method='umap', random_state=random_seed) # use gaussian kernel for correspondance between DPT and UMAP/FA, does not work if keep all IT EN cells
         sc.tl.leiden(adata, resolution=0.6, random_state=random_seed)
         entropy_threshold = 0.8
 
@@ -1080,6 +1080,7 @@ def magic_diffusion(adata, var, split_var=None, t=3):
             adata_splits_var.append(adata_split.obs[f'{var}_magic'])
         
         adata_splits_var = pd.concat(adata_splits_var, axis=0)
+        adata_splits_var = adata_splits_var[~adata_splits_var.index.duplicated(keep='first')]
         adata.obs = adata.obs.merge(adata_splits_var, left_index=True, right_index=True, how='left')
 
     return adata
@@ -1176,8 +1177,8 @@ source_adatas[source_dataset].obs['dataset_name'] = source_dataset
 subsampled_kd_clip_adatas[source_dataset].obs['source_or_target'] = 'target'
 subsampled_kd_clip_adatas[source_dataset].obs['dataset_name'] = target_dataset
 
-source_adata = source_adatas[source_dataset]
-target_adata = subsampled_kd_clip_adatas[source_dataset]
+source_adata = source_adatas[source_dataset].copy()
+target_adata = subsampled_kd_clip_adatas[source_dataset].copy()
 source_target_adata = anndata.concat([ source_adata, target_adata ], axis=0)
 
 source_target_adata.obs = source_target_adata.obs.merge(target_adata.obs['Condition'], left_index=True, right_index=True, how='left')
@@ -1221,13 +1222,16 @@ plt.tight_layout(); plt.show()
 #%% Run PAGA on combined source & target data
 
 do_fa = False
+correct_imbalance = False
+
 source_target_adata = paga_analysis(source_target_adata, dev_group_key='Age', cell_group_key='ClustersMapped', do_fa=do_fa,
-    correct_imbalance=True)
+    correct_imbalance=correct_imbalance)
 #source_target_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'source_target_adata_{source_dataset}_{target_dataset}.h5ad'))
 
 ## plot FA embeddings comparing source and target datasets
 source_target_adata = magic_diffusion(source_target_adata, 'ordinal_pseudotime', split_var='Condition', t=3)
 target_adata = source_target_adata[source_target_adata.obs['source_or_target']=='target'].copy()
+source_adata = source_target_adata[source_target_adata.obs['source_or_target']=='source'].copy()
 
 if do_fa:
     plot_func = sc.pl.draw_graph
@@ -1338,7 +1342,7 @@ def pls_analysis(adata):
 def pls_analysis_2(adata):
 
     x = adata.obsm['X_diffmap'][:,1:]
-    pls_ordinal = PLSRegression(n_components=3)
+    pls_ordinal = PLSRegression(n_components=2)
 
     y_ordinal = adata.obs['ordinal_pseudotime']
     y_dpt = adata.obs['dpt_pseudotime']
@@ -1372,22 +1376,109 @@ def pls_analysis_2(adata):
     sc.pl.paga_compare(adata_hits)
     sc.pl.paga_compare(adata_hits, color=['ordinal_pseudotime'])
 
+def pls_analysis_3(adata):
 
-pls_analysis(source_adata)
-pls_analysis(target_adata)
-pls_analysis(source_target_adata)
+    sc.pp.pca(adata)
+    sc.pp.neighbors(adata, use_rep='X_pca', n_pcs=10, n_neighbors=50)
 
-## PLS for ordinal and dpt pseudotimes across all datasets
-pls = PLSSVD(n_components=2)
-x = target_adata.obsm['X_diffmap'][:,1:] #target_adata.obsm['X_pca']
-y = np.vstack([target_adata.obs['ordinal_pseudotime'].values, target_adata.obs['dpt_pseudotime'].values]).T
-pls.fit(x, y)
+    x = adata.obsm['X_pca']
+    y = adata.obs['dpt_pseudotime']
 
-y_weights_df = pd.DataFrame(pls.y_weights_, columns=['ordinal', 'dpt'])
-y_weights_df.plot(kind='bar', subplots=True, layout=(1, 2), legend=False, figsize=[10, 5])
+    pls = PLSRegression(n_components=30)
+    pls.fit(x,y_both)
 
-pls_coeffs_df = pd.DataFrame(pls.coef_.T, columns=['ordinal', 'dpt'])
-pls_coeffs_df.plot(kind='bar', subplots=True, layout=(1, 2), legend=False, figsize=[10, 5])
+    adata.obsm['X_dpt_pseudotime_pls'] = pls.x_scores_
+    sc.pp.neighbors(adata, use_rep='X_dpt_pseudotime_pls')
+
+    sc.tl.umap(adata)
+    sc.pl.umap(adata, color=['dpt_pseudotime', 'ordinal_pseudotime'])
+    sc.pl.umap(adata[adata.obs['source_or_target']=='target'], color=['dpt_pseudotime', 'dpt_pseudotime_pls', 'ordinal_pseudotime'])
+
+def pls_analysis_3(target_adata):
+
+    x = adata.obsm['X_pca']
+    pls = PLSRegression(n_components=5)
+
+    y_ordinal = adata.obs['ordinal_pseudotime']
+    y_diffmaps = adata.obsm['X_diffmap'][:,1:5]
+    y_both = np.column_stack([y_ordinal, y_diffmaps])
+
+    pls.fit(x, y_both)
+    fig, ax = plt.subplots(2, 1, figsize=[10, 10])
+    pd.DataFrame(pls.x_weights_.T).plot(kind='bar', legend=False, ax=ax[0])
+    pd.DataFrame(pls.y_weights_.T).plot(kind='bar', legend=False, ax=ax[1])
+    plt.tight_layout(); plt.show()
+
+    # Find PLS component where weight for ordinal_pseudotime is most similar to that for first diffmap component
+    ordinal_idx = 0  # index of ordinal_pseudotime in y_both
+    diffmap1_idx = 1  # index of first diffmap component in y_both
+
+    # Find indices of PLS components where both ordinal_pseudotime and first diffmap component have the same sign
+    ordinal_weights = pls.y_weights_[ordinal_idx]
+    diffmap1_weights = pls.y_weights_[diffmap1_idx]
+    same_sign_components = np.where(np.sign(ordinal_weights) == np.sign(diffmap1_weights))[0]
+    print(f"PLS components where weights for ordinal_pseudotime and first diffmap have same sign: {same_sign_components}")
+
+    X_new_pca = pls.x_scores_[:, same_sign_components]
+    adata.obsm['X_dpt_pseudotime_pls'] = X_new_pca
+
+    sc.pp.neighbors(adata, use_rep='X_dpt_pseudotime_pls', n_pcs=len(same_sign_components), n_neighbors=50)
+    sc.tl.leiden(adata, resolution=0.6, random_state=0, neighbors_key='X_dpt_pseudotime_pls_neighbors')
+
+    sc.tl.umap(adata)
+    sc.pl.umap(adata, color=['dpt_pseudotime', 'ordinal_pseudotime', 'leiden'])
+
+
+def diffmap_match_geom(adata):
+
+    if 'X_pca' not in adata.obsm.keys():
+        sc.pp.pca(adata)
+    if 'neighbors' not in adata.uns.keys():
+        sc.pp.neighbors(adata, use_rep='X_pca', n_pcs=10, n_neighbors=200)
+    if 'X_umap' not in adata.obsm.keys():
+        sc.tl.umap(adata)
+    if 'leiden' not in adata.obs.columns:
+        sc.tl.leiden(adata, resolution=0.6)
+    if 'paga' not in adata.uns.keys():
+        sc.tl.paga(adata, groups='leiden')
+    if 'X_diffmap' not in adata.obsm.keys():
+        sc.tl.diffmap(adata)
+
+    # DC1, DC2 (skip DC0)
+    dm = adata.obsm['X_diffmap'][:, 1:3]
+
+    # row-normalize connectivities (remove self loops if any)
+    W = adata.obsp[adata.uns['neighbors']['connectivities_key']].tocsr().copy()
+    W.setdiag(0); W.eliminate_zeros()
+    rsum = np.asarray(W.sum(1)).ravel(); rsum[rsum==0] = 1.0
+    Wn = W.multiply(1.0/rsum[:,None])
+
+    # local variance per DC: Var(X) = E[X^2] - E[X]^2, with E computed via Wn
+    Ex   = Wn @ dm                     # (n×2)
+    Ex2  = Wn @ (dm**2)                # (n×2)
+    Var  = Ex2 - Ex**2                 # (n×2)
+
+    share1 = Var[:,0] / (Var.sum(1) + 1e-12)
+    label = np.where(share1 > 0.55, "diffmap_1",
+            np.where(share1 < 0.45, "diffmap_2", "ambiguous"))
+
+    adata.obs["dm_match_geom"]  = pd.Categorical(label)
+    adata.obs["dm_share_dm1"]   = share1
+    
+    diffmap_adata = anndata.AnnData(adata.obsm['X_diffmap'], obsm={'X_umap': adata.obsm['X_umap']}, obs=adata.obs.copy())
+    diffmap_adata.var_names = pd.Index([f'dm{i}' for i in range(adata.obsm['X_diffmap'].shape[1])])
+    sc.pl.umap(diffmap_adata, color=['dm1', 'dm2', 'ordinal_pseudotime'], wspace=0.4)
+
+    sc.pl.umap(adata, color='dm_share_dm1')
+    sc.pl.paga_compare(adata, show=False); plt.close()
+    sc.pl.paga_compare(adata, color='dm_match_geom', legend_loc='right margin', right_margin=0.7, node_size_scale=5)
+
+    adata_dm1 = adata[adata.obs['dm_match_geom'].isin(['diffmap_1', 'ambiguous'])].copy()
+    sc.tl.paga(adata_dm1, groups='leiden')
+    sc.pl.paga_compare(adata_dm1, show=False); plt.close()
+    sc.pl.paga_compare(adata_dm1, color='ordinal_pseudotime', legend_loc='right margin', right_margin=0.7, node_size_scale=5)
+
+    return adata_dm1
 
 #%% perform label transfer between source and target datasets
 
@@ -1522,9 +1613,6 @@ def devmdd_fig2(target_adata, source_adata, manuscript_figpath=os.path.join(os.e
 
 #%% UMAP of leiden clusters to be able to set paths
 
-source_adata = source_target_adata[source_target_adata.obs['source_or_target']=='source'].copy()
-target_adata = source_target_adata[source_target_adata.obs['source_or_target']=='target'].copy()
-
 # For each SubCluster, compute the correlation matrix between 'dpt_pseudotime' and 'ordinal_pseudotime',
 corrs = target_adata.obs.groupby('SubClusters')[['dpt_pseudotime', 'ordinal_pseudotime']].corr(lambda x, y: spearmanr(x, y)[0]).unstack().loc[:, ('dpt_pseudotime', 'ordinal_pseudotime')]
 
@@ -1569,7 +1657,7 @@ paths = [
 '''
 #%% set paths
 
-'''
+
 paths = [
     ("MDD_ExN_all", leiden_sorted),
     ('MDD_ExN_5_1_6_4_7_0', ['5', '1', '6', '4', '7', '0']),
@@ -1578,9 +1666,10 @@ paths = [
 '''
 paths = [
     ("MDD_ExN_all", leiden_sorted),
-    ('MDD_ExN_0_8_2_1_10_12_13_5_3', ['0', '8', '2', '1', '10', '12', '13', '5', '3']),
-    ('MDD_ExN_0_4_9_6_7_11', ['0', '4', '9', '6', '7', '11']),
+    ('MDD_ExN_0_8_4_7_11_14_6_1_5', ['0', '8', '4', '7', '11', '14', '6', '1', '5']),
+    ('MDD_ExN_0_3_9_13_12_10_15', ['0', '3', '9', '13', '12', '10', '15']),
 ]
+'''
 
 for path in paths[1:]:
     last_leiden = path[-1][-1]
@@ -1638,6 +1727,28 @@ sc.pl.paga_compare(target_adata, color="leiden", node_size_scale=5, size=25, leg
 sc.pl.paga_compare(target_adata, color="ordinal_pseudotime", node_size_scale=5, size=25, legend_loc='on data', legend_fontsize=8, fontsize=8, right_margin=0.1)
 
 #devmdd_fig2(target_adata, source_adata)
+
+#%% see which are compliant with diffmap geometry
+
+target_adata_tmp = target_adata.copy()
+target_adata = diffmap_match_geom(target_adata_tmp)
+
+
+#%% keep cells that comply with first diffmap component
+
+remove_leidens = ['3_L23', '4_L23', '5_L23']
+target_adata = target_adata[~target_adata.obs['leiden'].isin(remove_leidens)].copy()
+sc.pl.umap(target_adata, color='leiden', legend_loc='on data', alpha=0.2)
+
+# Get the unique current leiden clusters in target_adata
+current_leidens = set(target_adata.obs['leiden'].unique().tolist())
+
+# Filter paths to only include leiden clusters still present
+paths = [
+    (descr, [leiden for leiden in path if leiden in current_leidens])
+    for descr, path in paths
+]
+
 
 #%% plot rolling mean and standard error of ordinal pseudotime for each leiden cluster
 
