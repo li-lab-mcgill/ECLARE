@@ -532,7 +532,7 @@ class SCENICPlusDownstreamAnalyzer:
 
         print(f"Summary report saved to '{output_path}'")
 
-def atac_to_cistopic_object(atac):
+def atac_to_cistopic_object(atac, model=None):
     from pycisTopic.cistopic_class import create_cistopic_object
     from pycisTopic.lda_models import run_cgs_models, evaluate_models
     from scipy.sparse import csr_matrix
@@ -558,19 +558,20 @@ def atac_to_cistopic_object(atac):
     cistopic_obj.add_cell_data(atac.obs)
 
     # Run topic modeling to create the required model attributes
-    print("Running cisTopic modeling...")
-    models = run_cgs_models(
-        cistopic_obj,
-        n_topics=[10, 20, 30],  # You can adjust these numbers
-        n_iter=100,  # Reduced for speed
-        random_state=42
-    )
+    if model is None:
+        print("Running cisTopic modeling...")
+        models = run_cgs_models(
+            cistopic_obj,
+            n_topics=[20],  # You can adjust these numbers
+            n_iter=100,  # Reduced for speed
+            random_state=42
+        )
 
-    model = evaluate_models(
-        models,
-        select_model = 20,
-        return_model = True
-    )
+        model = evaluate_models(
+            models,
+            select_model = 20,
+            return_model = True
+        )
     
     # Select the best model (e.g., the one with 20 topics)
     cistopic_obj.add_LDA_model(model)
@@ -712,6 +713,8 @@ if __name__ == "__main__":
 
     # Load ECLARE adata arising from developmental post-hoc analysis
     eclare_adata = ad.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_eclare_adata_{source_dataset}.h5ad'))
+    if 'most_common_cluster' not in eclare_adata.obs.columns:
+        eclare_adata.obs = eclare_adata.obs.drop(columns='most_common_cluster_y').rename(columns={'most_common_cluster_x': 'most_common_cluster'})
     rna_adata, atac = load_data(source_dataset=source_dataset, target_dataset=target_dataset, genes_by_peaks_str=genes_by_peaks_str, valid_cell_ids=eclare_adata.obs_names.tolist())
 
     ## set cell IDs of ATAC to be the same as the RNA
@@ -734,6 +737,10 @@ if __name__ == "__main__":
     with open(cistopic_obj_path, 'rb') as f:
         print(f"Loading cistopic_obj from {cistopic_obj_path}")
         cistopic_obj = pickle.load(f)
+        model = cistopic_obj.selected_model
+
+    ## create cistopic object with model
+    #cistopic_obj = atac_to_cistopic_object(atac, model=model)
 
     ## add suffix to rna_adata obs_names to make consistent with CistopicObject
     rna_adata.obs_names = rna_adata.obs_names + '___cisTopic'
@@ -820,6 +827,7 @@ if __name__ == "__main__":
     print(f"Complete analysis finished. Results saved to '{output_dir}'")
     print("Analysis completed successfully!")
 
+#%%
     ## extract Region-based and Gene-based eRegulon scores
     eregR = analyzer.scplus_obj.uns['eRegulon_AUC']['Region_based']
     eregG = analyzer.scplus_obj.uns['eRegulon_AUC']['Gene_based']
@@ -865,6 +873,22 @@ if __name__ == "__main__":
 
     eclare_adata.obs = eclare_adata.obs.merge(ereg_merged_scaled, left_index=True, right_index=True, how='left')
     #eclare_adata.write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata_with_eRegulon_scores.h5ad'))
+
+    redo_clustering = False
+    if redo_clustering:
+
+        n_comps = len(eclare_adata.uns['pca']['variance'])
+        sc.pp.pca(eclare_adata, n_comps=n_comps)
+
+        n_pcs = eclare_adata.uns['neighbors']['params']['n_pcs']
+        n_neighbors = eclare_adata.uns['neighbors']['params']['n_neighbors']
+        sc.pp.neighbors(eclare_adata, n_neighbors=n_neighbors, n_pcs=n_pcs, use_rep='X_pca', method='umap', random_state=0)
+
+        resolution = eclare_adata.uns['leiden']['params']['resolution']
+        sc.tl.leiden(eclare_adata, resolution=resolution, random_state=0)
+
+        sc.tl.umap(eclare_adata, random_state=0, init_pos='X_umap')
+        sc.pl.umap(eclare_adata, color=['modality','leiden'])
 
     ## correlate ereg with ordinal_pseudotime
     corrs = eclare_adata.obs.corr(method='spearman')['ordinal_pseudotime']
@@ -931,8 +955,17 @@ if __name__ == "__main__":
     signatures.obs = signatures.obs.loc[:, signatures.obs.columns.isin(ereg.columns)]
     signatures.obs.columns = signatures.obs.columns.str.split('_').str[0]
     signatures.obs = signatures.obs.groupby(axis=1, level=0).quantile(0.25) # merge
-    signatures.obs = signatures.obs.merge(eclare_adata.obs[['leiden', 'Condition', 'most_common_cluster']], left_index=True, right_index=True, how='left')
+    signatures.obs = signatures.obs.merge(eclare_adata.obs[['leiden', 'Condition', 'most_common_cluster', 'ordinal_pseudotime']], left_index=True, right_index=True, how='left')
+    signatures.obs['leiden'] = pd.Categorical(signatures.obs['leiden'], categories=signatures.obs.groupby('leiden')['ordinal_pseudotime'].mean().sort_values().index.tolist(), ordered=True)
     # assert (signatures.obs.groupby(axis=1, level=0).apply(np.max, axis=1) == signatures.obs.groupby(axis=1, level=0).max()).values.mean() > 0.99
+
+    ## set basis for density plots, based on whether uns['draw_graph'] is present
+    if 'draw_graph' in eclare_adata.uns.keys():
+        plot_func = sc.pl.draw_graph
+        basis = 'draw_graph_fa'
+    else:
+        plot_func = sc.pl.umap
+        basis = 'umap'
 
     if source_dataset == 'Cortex_Velmeshev':
         # To impose the same scale on the colorbar for both 'POU2F1' and 'DLX5', 
@@ -960,26 +993,64 @@ if __name__ == "__main__":
             vip_fig.savefig(os.path.join(manuscript_figpath, 'dev_fig3_vip.svg'), bbox_inches='tight', dpi=300)
 
     elif source_dataset == 'MDD':
-        # To impose the same scale on the colorbar for both 'POU2F1' and 'DLX5', 
-        vmin = signatures.obs[['ZNF184', 'NFIX']].min().min()
-        vmax = signatures.obs[['ZNF184', 'NFIX']].max().max()
+        ## set eRegulons
+        eRegulons_all = pd.Series(np.hstack(list({
+            'Velmeshev_L23': ['ZNF184', 'NFIX'],
+            'Velmeshev_L5': ['BACH2', 'SOX5'],
+            'Velmeshev_sexes_L6': ['CPLX3', 'JAM2', 'NXPH3'],
+            'Velmeshev_sexes_L23': ['RORA', 'CNIH3', 'CNTNAP3B'],
+            'sc-compReg': ['EGR1', 'SOX2', 'NR4A2'],
+            'Wang_MDD': ['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18']
+            }.values())))
+        eRegulons = eRegulons_all[eRegulons_all.isin(signatures.obs.columns)].tolist()
+
+        # To impose the same scale on the colorbar for both eGRNs 
+        vmin = signatures.obs[eRegulons].min().min()
+        vmax = signatures.obs[eRegulons].max().max()
         
         ## GRNs plots
-        fig = sc.pl.draw_graph(signatures[eclare_adata.obs['Condition']=='case'], color=['ZNF184', 'NFIX'], groups='case', size=100, vmin=vmin, vmax=vmax, cmap='plasma')#, return_fig=True, show=False)
-        fig = sc.pl.draw_graph(signatures[eclare_adata.obs['Condition']=='control'], color=['ZNF184', 'NFIX'], groups='control', size=100, vmin=vmin, vmax=vmax, cmap='plasma')
+        fig = plot_func(signatures[eclare_adata.obs['Condition']=='case'], color=eRegulons, groups='case', size=100, vmin=vmin, vmax=vmax, cmap='plasma')#, return_fig=True, show=False)
+        fig = plot_func(signatures[eclare_adata.obs['Condition']=='control'], color=eRegulons, groups='control', size=100, vmin=vmin, vmax=vmax, cmap='plasma')
         #fig.set_size_inches(10, 4)
 
-        sc.pl.draw_graph(signatures, color=['EGR1', 'SOX2', 'NR4A2'], size=100)
-        sc.pl.draw_graph(signatures, color=signatures.obs.columns[signatures.obs.columns.isin(['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18'])], size=100)  # ['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18']
+        plot_func(signatures, color=['EGR1', 'SOX2', 'NR4A2'], size=100)
+        plot_func(signatures, color=signatures.obs.columns[signatures.obs.columns.isin(['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18'])], size=100)  # ['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18']
 
-        sns.lineplot(signatures.obs[['leiden','Condition','ZNF184']], x='leiden', y='ZNF184', hue='Condition', errorbar='se', marker='o')
-        sns.lineplot(signatures.obs[['leiden','Condition','NFIX']], x='leiden', y='NFIX', hue='Condition', errorbar='se', marker='o')
+        ## plot leiden clusters
+        plot_func(signatures, color=['leiden'], size=100, legend_loc='on data')
+
+        '''
+        paths = [
+            ("MDD_ExN_all", signatures.obs['leiden'].cat.categories.tolist()),
+            ('MDD_ExN_1_0_5_6_4_7', ['1', '0', '5', '6', '4', '7']),
+            ('MDD_ExN_1_2_8_3', ['1', '2', '8', '3']),
+        ]
+        '''
+        paths= [
+            ('MDD_ExN_L23', ['0', '1_L23', '2_L23', '3_L23', '4_L23', '5_L23']),
+            ('MDD_ExN_L46', ['0', '1_L46', '2_L46', '3_L46', '4_L46', '5_L46']),
+        ]
+
+        fig, ax = plt.subplots(len(eRegulons), len(paths), figsize=(6, 10), sharex='col', sharey=False)
+        for i, (descr, path) in enumerate(paths):
+            path_signatures = signatures[signatures.obs['leiden'].isin(path)]
+            path_signatures.obs['leiden'] = pd.Categorical(path_signatures.obs['leiden'], categories=path, ordered=True)
+            ax[0,i].set_title(descr)
+            for j, eRegulon in enumerate(eRegulons):
+                sns.lineplot(path_signatures.obs[['leiden','Condition',eRegulon]], x='leiden', y=eRegulon, hue='Condition', palette='Pastel1', errorbar='se', marker='o', legend=True if (i,j)==(0,0) else False, ax=ax[j,i])
+
+        for a in ax.flat:
+            for label in a.get_xticklabels():
+                label.set_rotation(30)
+        plt.tight_layout()
 
         ## VIP density plot
         eclare_adata.obs['most_common_cluster'] = pd.Categorical(eclare_adata.obs['most_common_cluster'], categories=eclare_adata.obs.groupby('most_common_cluster')['ordinal_pseudotime'].mean().sort_values(ascending=True).index.tolist(), ordered=True)
-        sc.tl.embedding_density(eclare_adata, basis='draw_graph_fa', groupby='most_common_cluster')
-        sc.pl.embedding_density(eclare_adata, basis='draw_graph_fa', key='draw_graph_fa_density_most_common_cluster', ncols=5)
+        sc.tl.embedding_density(eclare_adata, basis=basis, groupby='most_common_cluster')
+        sc.pl.embedding_density(eclare_adata, basis=basis, key=f'{basis}_density_most_common_cluster', ncols=5)
         #fig.set_size_inches(4.75, 4)
+
+        #signatures.write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig3_signatures.h5ad'))
 
 #%%
 from scenicplus.triplet_score import _rank_scores_and_assign_random_ranking_in_range_for_ties, _calculate_cross_species_rank_ratio_with_order_statistics

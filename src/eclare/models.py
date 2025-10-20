@@ -23,7 +23,7 @@ class CLIP(nn.Module):
     HPARAMS = {
         'num_units': {
             'suggest_distribution': CategoricalDistribution(choices=[128, 256, 512]),
-            'default': 256
+            'default': 64
         },
         '_teacher_num_layers': {
             'suggest_distribution': CategoricalDistribution(choices=[1, 2]),
@@ -31,7 +31,7 @@ class CLIP(nn.Module):
         },
         '_student_num_layers': {
             'suggest_distribution': CategoricalDistribution(choices=[1, 2]),
-            'default': 2
+            'default': 3
         },
         'dropout_p': {
             'suggest_distribution': FloatDistribution(low=0.1, high=0.9),
