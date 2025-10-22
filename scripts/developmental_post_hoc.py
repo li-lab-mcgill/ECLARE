@@ -1731,20 +1731,26 @@ sc.pl.paga_compare(target_adata, color="ordinal_pseudotime", node_size_scale=5, 
 #%% load full datasets
 
 ## MDD data
-rna_filename = f"rna_17563_by_100000.h5ad"
-atac_filename = f"atac_17563_by_100000.h5ad"
+rna_filename = f"rna_16448_by_169411_aligned_source_PFC_Zhu.h5ad"
+atac_filename = f"atac_16448_by_169411_aligned_source_PFC_Zhu.h5ad"
 mdd_rna_full = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', rna_filename), backed='r')
 mdd_atac_full = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', atac_filename), backed='r')
 mdd_rna_full_sub = mdd_rna_full[mdd_rna_full.obs_names.isin(student_rna_sub.obs_names)].to_memory()
 mdd_atac_full_sub = mdd_atac_full[mdd_atac_full.obs_names.isin(student_atac_sub.obs_names)].to_memory()
 
 ## PFC Zhu data
-rna_filename = "PFC_Zhu_rna.h5ad" #f"rna_9832_by_70751.h5ad"
-atac_filename = "PFC_Zhu_atac.h5ad" #f"atac_9832_by_70751.h5ad"
+rna_filename = "rna_16448_by_169411_aligned_target_MDD.h5ad" #f"rna_9832_by_70751.h5ad"
+atac_filename = "atac_16448_by_169411_aligned_target_MDD.h5ad" #f"atac_9832_by_70751.h5ad"
 pfc_zhu_rna_full = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'rna', rna_filename), backed='r')
 pfc_zhu_atac_full = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'atac', atac_filename), backed='r')
 pfc_zhu_rna_full_sub = pfc_zhu_rna_full[pfc_zhu_rna_full.obs_names.isin(source_rna_sub.obs_names)].to_memory()
 pfc_zhu_atac_full_sub = pfc_zhu_atac_full[pfc_zhu_atac_full.obs_names.isin(source_atac_sub.obs_names)].to_memory()
+
+## add modality column to obs
+mdd_rna_full_sub.obs['modality'] = 'RNA'
+mdd_atac_full_sub.obs['modality'] = 'ATAC'
+pfc_zhu_rna_full_sub.obs['modality'] = 'RNA'
+pfc_zhu_atac_full_sub.obs['modality'] = 'ATAC'
 
 #%% get gene expression gene expression of select genes
 
@@ -1774,7 +1780,7 @@ def get_gene_expression_and_chromatin_accessibility(student_rna_sub, source_rna_
     ## chromatin accessibility
     hit = list(genes_peaks_dict.keys())
     peaks_list = list(genes_peaks_dict.values())[0]
-    peaks_bedtool_list = peaks_to_bedtool(peaks_list).slop(b=250, genome='hg38')
+    peaks_bedtool_list = peaks_to_bedtool(peaks_list)#.slop(b=250, genome='hg38')
     
     ## gene expression
     if student_rna_sub.var_names.isin(hit).any():
@@ -1785,7 +1791,7 @@ def get_gene_expression_and_chromatin_accessibility(student_rna_sub, source_rna_
         return None
 
     student_atac_var_names = list(student_atac_sub.var_names)
-    student_atac_bedtool = peaks_to_bedtool(student_atac_var_names).slop(b=250, genome='hg38')
+    student_atac_bedtool = peaks_to_bedtool(student_atac_var_names)#.slop(b=250, genome='hg38')
 
     # Get the list of indices in var_names corresponding to the overlapping peaks
     overlap = student_atac_bedtool.intersect(peaks_bedtool_list, u=True, f=0.01, F=0.01)
@@ -1864,7 +1870,27 @@ def get_gene_expression_and_chromatin_accessibility_full(mdd_rna, dev_rna, mdd_a
 
     return ld_buddy_hits, linked_hits, modalities
 
-def plot_gene_expression_and_chromatin_accessibility(ld_buddy_hits_df, linked_hits_df, obs, paths):
+def plot_gene_expression_and_chromatin_accessibility(ld_buddy_hits_df, linked_hits_df, obs, paths, plot_difference=False, separate_modalities=False):
+    """
+    Plot gene expression and chromatin accessibility data.
+    
+    Parameters:
+    -----------
+    ld_buddy_hits_df : DataFrame
+        DataFrame containing LD buddy hits data
+    linked_hits_df : DataFrame  
+        DataFrame containing linked hits data
+    obs : DataFrame
+        Observations DataFrame
+    paths : dict
+        Dictionary containing path information
+    plot_difference : bool, default False
+        If True, plot ATAC-RNA difference instead of individual modalities.
+        If False, plot individual RNA and ATAC modalities separately.
+    separate_modalities : bool, default False
+        If True, create separate figures for RNA and ATAC modalities.
+        If False, plot both modalities on the same figure.
+    """
 
     if (paths is not None):
         obs_keep = obs['leiden'].isin(dict(paths)['L46'])
@@ -1921,88 +1947,162 @@ def plot_gene_expression_and_chromatin_accessibility(ld_buddy_hits_df, linked_hi
                 **{pseudotime_key: hits_adata.obs.loc[source_indices][pseudotime_key], 'modality': hits_adata.obs.loc[source_indices]['modality'], 'Condition': 'developmental'},
             ).sort_values(pseudotime_key)
 
-            # Combined plotting for each modality
-            for modality in ['RNA', 'ATAC']:
+            if separate_modalities and not plot_difference:
+                # Create separate figures for each modality
+                modalities_to_plot = ['RNA', 'ATAC']
+            else:
+                # Create single figure (original behavior or difference plotting)
+                modalities_to_plot = [None]  # Single iteration for combined plotting
+                
+            for modality_plot in modalities_to_plot:
                 fig, ax = plt.subplots(int(np.ceil(n_genes/2)), 2, figsize=[14, 10], sharex=True, squeeze=False)
+                
+                if separate_modalities and not plot_difference:
+                    title_suffix = f' ({modality_plot})'
+                elif plot_difference:
+                    title_suffix = ' (ATAC-RNA difference)'
+                else:
+                    title_suffix = ' (source + target by Condition)'
+                    
+                plt.suptitle(f'{hits_name} - {pseudotime_key}{title_suffix}')
                 minx = max(tmp_target[pseudotime_key].min(), tmp_source[pseudotime_key].min())
                 maxx = min(tmp_target[pseudotime_key].max(), tmp_source[pseudotime_key].max())
                 ax[0, 0].set_xlim(minx, maxx)
-                
-                # Get target data for this modality
-                tmp_target_modality = tmp_target[tmp_target['modality'].eq(modality)].drop(columns=['modality'])
-                # Get source data for this modality
-                tmp_source_modality = tmp_source[tmp_source['modality'].eq(modality)].drop(columns=['modality'])
-
-                plt.suptitle(f'{modality} - {hits_name} - {pseudotime_key} (source + target by Condition)')
-                ax[-1, -1].set_xlabel(pseudotime_key)
-                ax[-1, 0].set_xlabel(pseudotime_key)
 
                 for i, gene in enumerate(hits_df.columns):
-
-                    # Create secondary y-axis for source data
-                    ax2 = ax[i // 2, i % 2].twinx()
+                    # Set up the subplot for this gene
+                    current_ax = ax[i // 2, i % 2]
+                    current_ax.set_title(f'{gene} - {genes_km_clusters_dict[gene].item()}' if gene in genes_km_clusters_dict else gene)
                     
-                    # Plot target conditions (case, control) on primary y-axis
-                    cond_data_list = {}
-                    for cond in tmp_target_modality['Condition'].unique():
-                        cond_data = tmp_target_modality[tmp_target_modality['Condition'].eq(cond)].drop(columns=['Condition']).set_index([pseudotime_key])
-                        cond_data = cond_data[cond_data.index.notna()]
-                        cond_data_list[cond] = cond_data
-
-                        if pseudotime_key in pseudotime_keys_continuous:
-                            cond_data = cond_data.rolling(window=window_len, win_type='hamming', center=True, min_periods=1).mean().reset_index().set_index(pseudotime_key)
-                        else:
-                            cond_data = cond_data.reset_index().groupby([pseudotime_key]).mean()
-                            cond_data.index = pd.Categorical(cond_data.index.astype(str), categories=cond_data.index.astype(str), ordered=True)
-
-                        ax[i // 2, i % 2].plot(cond_data.index, cond_data[gene], label=cond)
-                        ax[i // 2, i % 2].set_title(f'{gene} - {genes_km_clusters_dict[gene].item()}' if gene in genes_km_clusters_dict else gene)
-
-                    '''
-                    ## aligned dataframes
-                    # 1) build a common index (union of both pseudotime grids)
-                    idx = cond_data_list['case'].index.union(cond_data_list['control'].index).sort_values()
-
-                    # 2) reindex + interpolate on the index
-                    case_aligned = (
-                        cond_data_list['case'].reindex(idx)
-                        .interpolate(method='index')   # linear interpolation along index
-                        .ffill().bfill()               # edge fill if needed
-                    )
-
-                    control_aligned = (
-                        cond_data_list['control'].reindex(idx)
-                        .interpolate(method='index')
-                        .ffill().bfill()
-                    )
-
-                    # 3) combine (now they’re aligned row-by-row)
-                    aligned = pd.concat([case_aligned, control_aligned], axis=1, keys=['case', 'control'])
-                    case_control_gap = (aligned.loc[:,'case']-aligned.loc[:,'control']).rolling(window=window_len, win_type='hamming', center=True, min_periods=1).mean()
-                    ax[i // 2, i % 2].plot(case_control_gap.index, case_control_gap[gene], label='case - control')
-                    '''
-
-                    # Plot source data on secondary y-axis
-                    source_data = tmp_source_modality.drop(columns=['Condition'])
-
-                    if source_data[pseudotime_key].notna().all():
-                        source_data = source_data.set_index(pseudotime_key)
-
-                        if pseudotime_key in pseudotime_keys_continuous:
-                            source_data = source_data.rolling(window=window_len, win_type='hamming', center=True, min_periods=1).mean()
-                        else:
-                            source_data = source_data.reset_index().groupby([pseudotime_key]).mean()
-
-                        source_data = source_data[~source_data.index.isna()]
-                        ax2.plot(source_data.index, source_data[gene], label='source', alpha=0.5, color='gray', linestyle='--')
+                    # Create secondary y-axis for source data (once per gene)
+                    ax2 = current_ax.twinx()
+                    
+                    if plot_difference:
+                        # Compute ATAC - RNA difference for each condition
+                        for cond in ['case', 'control']:
+                            # Get ATAC and RNA data for this condition
+                            atac_data = tmp_target[(tmp_target['modality'] == 'ATAC') & (tmp_target['Condition'] == cond)].drop(columns=['modality', 'Condition']).set_index([pseudotime_key])
+                            rna_data = tmp_target[(tmp_target['modality'] == 'RNA') & (tmp_target['Condition'] == cond)].drop(columns=['modality', 'Condition']).set_index([pseudotime_key])
+                            
+                            # Align the dataframes on pseudotime
+                            common_idx = atac_data.index.intersection(rna_data.index)
+                            if len(common_idx) > 0:
+                                atac_aligned = atac_data.loc[common_idx]
+                                rna_aligned = rna_data.loc[common_idx]
+                                
+                                # Compute difference
+                                diff_data = atac_aligned - rna_aligned
+                                diff_data = diff_data[diff_data.index.notna()]
+                                
+                                if pseudotime_key in pseudotime_keys_continuous:
+                                    diff_data = diff_data.rolling(window=window_len, win_type='hamming', center=True, min_periods=1).mean()
+                                else:
+                                    diff_data = diff_data.reset_index().groupby([pseudotime_key]).mean()
+                                
+                                diff_data = diff_data[~diff_data.index.isna()]
+                                
+                                # Plot difference
+                                linestyle = '-' if cond == 'case' else '--'
+                                current_ax.plot(diff_data.index, diff_data[gene], 
+                                            label=f'{cond} (ATAC-RNA)', 
+                                            color='purple', 
+                                            linestyle=linestyle,
+                                            alpha=0.7)
+                    
+                    # Compute source difference (ATAC - RNA)
+                    atac_source = tmp_source[tmp_source['modality'] == 'ATAC'].drop(columns=['modality', 'Condition']).set_index([pseudotime_key])
+                    rna_source = tmp_source[tmp_source['modality'] == 'RNA'].drop(columns=['modality', 'Condition']).set_index([pseudotime_key])
+                    
+                    common_idx = atac_source.index.intersection(rna_source.index)
+                    if len(common_idx) > 0:
+                        atac_source_aligned = atac_source.loc[common_idx]
+                        rna_source_aligned = rna_source.loc[common_idx]
                         
+                        source_diff = atac_source_aligned - rna_source_aligned
+                        source_diff = source_diff[source_diff.index.notna()]
                         
-                        # Color the y-axis labels to match the data
-                        ax[i // 2, i % 2].tick_params(axis='y', labelcolor='blue')
-                        ax2.tick_params(axis='y', labelcolor='gray')
+                        if pseudotime_key in pseudotime_keys_continuous:
+                            source_diff = source_diff.rolling(window=window_len, win_type='hamming', center=True, min_periods=1).mean()
+                        else:
+                            source_diff = source_diff.reset_index().groupby([pseudotime_key]).mean()
+                        
+                        source_diff = source_diff[~source_diff.index.isna()]
+                        
+                        ax2.plot(source_diff.index, source_diff[gene], 
+                                label='source (ATAC-RNA)', 
+                                color='lightcoral', 
+                                linestyle=':', 
+                                alpha=0.6)
+                
                     else:
-                        print(f' - {pseudotime_key} is not available for source data')
+                        # Original plotting logic for individual modalities
+                        modalities_to_iterate = [modality_plot] if separate_modalities and modality_plot is not None else ['RNA', 'ATAC']
+                        
+                        for modality in modalities_to_iterate:
+                            
+                            # Get target data for this modality
+                            tmp_target_modality = tmp_target[tmp_target['modality'].eq(modality)].drop(columns=['modality'])
+                            # Get source data for this modality
+                            tmp_source_modality = tmp_source[tmp_source['modality'].eq(modality)].drop(columns=['modality'])
 
+                            # Plot target conditions (case, control) on primary y-axis
+                            cond_data_list = {}
+                            for cond in tmp_target_modality['Condition'].unique():
+                                cond_data = tmp_target_modality[tmp_target_modality['Condition'].eq(cond)].drop(columns=['Condition']).set_index([pseudotime_key])
+                                cond_data = cond_data[cond_data.index.notna()]
+                                cond_data_list[cond] = cond_data
+
+                                if pseudotime_key in pseudotime_keys_continuous:
+                                    cond_data = cond_data.rolling(window=window_len, win_type='hamming', center=True, min_periods=1).mean().reset_index().set_index(pseudotime_key)
+                                else:
+                                    cond_data = cond_data.reset_index().groupby([pseudotime_key]).mean()
+                                    cond_data.index = pd.Categorical(cond_data.index.astype(str), categories=cond_data.index.astype(str), ordered=True)
+
+                                # Plot with condition-specific linestyles and modality-specific colors
+                                color = 'blue' if modality == 'RNA' else 'red'
+                                linestyle = '-' if cond == 'case' else '--'
+                                current_ax.plot(cond_data.index, cond_data[gene], 
+                                              label=f'{cond} ({modality})', 
+                                              color=color, 
+                                              linestyle=linestyle,
+                                              alpha=0.7)
+
+                            # Plot source data on secondary y-axis
+                            source_data = tmp_source_modality.drop(columns=['Condition'])
+
+                            if source_data[pseudotime_key].notna().all():
+                                source_data = source_data.set_index(pseudotime_key)
+
+                                if pseudotime_key in pseudotime_keys_continuous:
+                                    source_data = source_data.rolling(window=window_len, win_type='hamming', center=True, min_periods=1).mean()
+                                else:
+                                    source_data = source_data.reset_index().groupby([pseudotime_key]).mean()
+
+                                source_data = source_data[~source_data.index.isna()]
+                                
+                                # Plot source data with modality-specific colors and source-specific linestyle
+                                color = 'lightblue' if modality == 'RNA' else 'lightcoral'
+                                ax2.plot(source_data.index, source_data[gene], 
+                                        label=f'source ({modality})', 
+                                        color=color, 
+                                        linestyle=':', 
+                                        alpha=0.6)
+                            else:
+                                print(f' - {pseudotime_key} is not available for source data ({modality})')
+
+                    # Set axis labels and styling
+                    current_ax.set_xlabel(pseudotime_key)
+                    current_ax.tick_params(axis='y', labelcolor='black')
+                    ax2.tick_params(axis='y', labelcolor='gray')
+                    
+                    # Add legends
+                    current_ax.legend(loc='upper left', fontsize=8)
+                    ax2.legend(loc='upper right', fontsize=8)
+
+                # Set x-axis labels for bottom row
+                ax[-1, -1].set_xlabel(pseudotime_key)
+                ax[-1, 0].set_xlabel(pseudotime_key)
+                
                 plt.tight_layout()
                 plt.show()
 
@@ -2067,7 +2167,7 @@ assert obs['index'].tolist() == ld_buddy_hits_df.index.tolist()
 #assert obs['orig_index'].sort_values().values.tolist() == np.arange(len(obs)).tolist()
 
 
-plot_gene_expression_and_chromatin_accessibility(ld_buddy_hits_df, linked_hits_df, obs, paths)
+plot_gene_expression_and_chromatin_accessibility(ld_buddy_hits_df, linked_hits_df, obs, paths, separate_modalities=True)
 
 
 #%% see which are compliant with diffmap geometry
