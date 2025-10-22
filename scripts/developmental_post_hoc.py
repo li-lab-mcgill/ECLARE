@@ -1657,7 +1657,7 @@ paths = [
 '''
 #%% set paths
 
-
+'''
 paths = [
     ("MDD_ExN_all", leiden_sorted),
     ('MDD_ExN_5_1_6_4_7_0', ['5', '1', '6', '4', '7', '0']),
@@ -1666,10 +1666,10 @@ paths = [
 '''
 paths = [
     ("MDD_ExN_all", leiden_sorted),
-    ('MDD_ExN_0_8_4_7_11_14_6_1_5', ['0', '8', '4', '7', '11', '14', '6', '1', '5']),
-    ('MDD_ExN_0_3_9_13_12_10_15', ['0', '3', '9', '13', '12', '10', '15']),
+    ('MDD_ExN_0_9_3_7_8_6_1_4', ['0', '9', '3', '7', '8', '6', '1', '4']),
+    ('MDD_ExN_0_2_10_11_12_14_13_15', ['0', '2', '10', '11', '12', '14', '13', '15']),
 ]
-'''
+
 
 for path in paths[1:]:
     last_leiden = path[-1][-1]
@@ -1727,6 +1727,332 @@ sc.pl.paga_compare(target_adata, color="leiden", node_size_scale=5, size=25, leg
 sc.pl.paga_compare(target_adata, color="ordinal_pseudotime", node_size_scale=5, size=25, legend_loc='on data', legend_fontsize=8, fontsize=8, right_margin=0.1)
 
 #devmdd_fig2(target_adata, source_adata)
+
+#%% load full datasets
+
+## MDD data
+rna_filename = f"rna_17563_by_100000.h5ad"
+atac_filename = f"atac_17563_by_100000.h5ad"
+mdd_rna_full = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', rna_filename), backed='r')
+mdd_atac_full = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', atac_filename), backed='r')
+mdd_rna_full_sub = mdd_rna_full[mdd_rna_full.obs_names.isin(student_rna_sub.obs_names)].to_memory()
+mdd_atac_full_sub = mdd_atac_full[mdd_atac_full.obs_names.isin(student_atac_sub.obs_names)].to_memory()
+
+## PFC Zhu data
+rna_filename = "PFC_Zhu_rna.h5ad" #f"rna_9832_by_70751.h5ad"
+atac_filename = "PFC_Zhu_atac.h5ad" #f"atac_9832_by_70751.h5ad"
+pfc_zhu_rna_full = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'rna', rna_filename), backed='r')
+pfc_zhu_atac_full = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'atac', atac_filename), backed='r')
+pfc_zhu_rna_full_sub = pfc_zhu_rna_full[pfc_zhu_rna_full.obs_names.isin(source_rna_sub.obs_names)].to_memory()
+pfc_zhu_atac_full_sub = pfc_zhu_atac_full[pfc_zhu_atac_full.obs_names.isin(source_atac_sub.obs_names)].to_memory()
+
+mdd_hits_in_pfc_zhu = mdd_hits.loc[mdd_hits['Target gene name'].isin(pfc_zhu_rna_full.var_names), 'Target gene name'].unique()
+mdd_hits_in_mdd = mdd_hits.loc[mdd_hits['Target gene name'].isin(mdd_rna_full.var_names), 'Target gene name'].unique()
+
+#%% get gene expression gene expression of select genes
+
+# Find overlap between student_atac_sub.var_names and peaks_list using BedTool
+from pybedtools import BedTool
+import re
+# Convert peak strings to BedTool format
+def peaks_to_bedtool(peaks):
+    # Parse: "chr9:123999023-124000462" -> chr9 123999023 124000462
+    bed_lines = []
+    for p in peaks:
+        chrom, start, end = re.split("[:|-]", p)
+        start_pos = int(start)
+        end_pos = int(end)
+        
+        # Skip invalid coordinates where start >= end
+        if start_pos >= end_pos:
+            print(f"Warning: Skipping invalid peak coordinates {p} (start >= end)")
+            continue
+            
+        bed_lines.append(f"{chrom}\t{start}\t{end}")
+    return BedTool("\n".join(bed_lines), from_string=True)
+
+## import information from Zhu et al. Supplementary Tables S12 and S7
+zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
+gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
+peak_gene_links = pd.read_excel(zhu_supp_tables, sheet_name='Table S7', header=2)
+
+## filter for MDD hits and get gene-peak links
+mdd_hits = gwas_hits[gwas_hits['Trait'].eq('MDD')]
+mdd_hits_gene_peaks = peak_gene_links[peak_gene_links['gene'].isin(mdd_hits['Target gene name'].unique())]
+mdd_hits = mdd_hits.merge(mdd_hits_gene_peaks, left_on='Target gene name', right_on='gene', how='left')
+mdd_hits.rename(columns={'gene': 'gene_linked', 'peak': 'peak_linked', 'Peak coordinates (hg38)': 'peak_ld_buddy'}, inplace=True)
+
+## group by gene and get list of peaks
+genes_peaks_ld_buddy_dict   = mdd_hits.dropna(subset='peak_ld_buddy').groupby('Target gene name')['peak_ld_buddy'].apply(list).to_dict()
+genes_peaks_linked_dict     = mdd_hits.dropna(subset='peak_linked').groupby('Target gene name')['peak_linked'].apply(list).to_dict()
+print('Number of genes with LD buddies: ', len(genes_peaks_ld_buddy_dict))
+print('Number of genes with linked peaks: ', len(genes_peaks_linked_dict))
+
+genes_km_clusters_dict = mdd_hits.dropna(subset='km').groupby('Target gene name')['km'].unique().to_dict()
+
+def get_gene_expression_and_chromatin_accessibility(student_rna_sub, source_rna_sub, student_atac_sub, source_atac_sub, genes_peaks_dict):
+
+    ## chromatin accessibility
+    hit = list(genes_peaks_dict.keys())
+    peaks_list = list(genes_peaks_dict.values())[0]
+    peaks_bedtool_list = peaks_to_bedtool(peaks_list).slop(b=250, genome='hg38')
+    
+    ## gene expression
+    if student_rna_sub.var_names.isin(hit).any():
+        target_gene_expr = student_rna_sub[:,student_rna_sub.var_names.isin(hit)].X.toarray().squeeze()
+        source_gene_expr = source_rna_sub[:,source_rna_sub.var_names.isin(hit)].X.toarray().squeeze()
+    else:
+        print(' - Target gene not found in student RNA data')
+        return None
+
+    student_atac_var_names = list(student_atac_sub.var_names)
+    student_atac_bedtool = peaks_to_bedtool(student_atac_var_names).slop(b=250, genome='hg38')
+
+    # Get the list of indices in var_names corresponding to the overlapping peaks
+    overlap = student_atac_bedtool.intersect(peaks_bedtool_list, u=True, f=0.01, F=0.01)
+    
+    # Map intersected results back to original peak coordinates
+    # Find which original peaks correspond to the overlapping slopped peaks
+    original_student_peaks_bedtool = peaks_to_bedtool(student_atac_var_names)
+    original_student_overlap = original_student_peaks_bedtool.intersect(overlap, u=True)
+
+    original_source_peaks_bedtool = peaks_to_bedtool(source_atac_sub.var_names)
+    original_source_overlap = original_source_peaks_bedtool.intersect(peaks_bedtool_list, u=True) # same peak set as peaks_bedtool_list
+
+    peaks_overlap_target = [f"{feature.chrom}:{feature.start}-{feature.end}" for feature in original_student_overlap]
+    peaks_overlap_source = [f"{feature.chrom}:{feature.start}-{feature.end}" for feature in original_source_overlap]
+
+    if len(peaks_overlap_target) == 0:
+        print(' - No overlapping peaks found')
+        return None
+
+    # Get indices for those peaks in the student and source atac data
+    target_indices = [i for i, v in enumerate(student_atac_sub.var_names.str.split(':|-', expand=True).to_frame().apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values) if v in peaks_overlap_target]
+    source_indices = [i for i, v in enumerate(source_atac_sub.var_names.str.split(':|-', expand=True).to_frame().apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values) if v in peaks_overlap_source]
+    if student_atac_sub.var_names.tolist() == source_atac_sub.var_names.tolist():
+        assert (target_indices == source_indices)
+    else:
+        print(' - Different number of peaks found in MDD and developmental data')
+
+    # Index by integer index for consistent results
+    target_chromatin_accessibility = student_atac_sub.X[:,target_indices].toarray().squeeze()
+    source_chromatin_accessibility = source_atac_sub.X[:,source_indices].toarray().squeeze()
+
+    ## create gene expression and chromatin accessibility dataframes
+    source_target_gene_expr = pd.Series(
+        np.concatenate([target_gene_expr, source_gene_expr], axis=0),
+        index=np.concatenate([student_rna_sub.obs_names, source_rna_sub.obs_names]),
+        name=hit[0]
+    )
+    
+    #import pdb; pdb.set_trace()
+    if len(target_chromatin_accessibility.shape) == 2:
+        target_chromatin_accessibility = target_chromatin_accessibility.mean(1)
+    if len(source_chromatin_accessibility.shape) == 2:
+        source_chromatin_accessibility = source_chromatin_accessibility.mean(1)
+
+    source_target_chromatin_accessibility = pd.Series(
+        np.concatenate([target_chromatin_accessibility, source_chromatin_accessibility], axis=0),
+        index=np.concatenate([student_atac_sub.obs_names, source_atac_sub.obs_names]),
+        name=hit[0]
+    )
+
+    ## merge gene expression and chromatin accessibility
+    source_target_hit = pd.concat([source_target_gene_expr, source_target_chromatin_accessibility], axis=0)
+    #source_target_hit = source_target_hit[~source_target_hit.index.duplicated(keep='first')]
+
+    return source_target_hit
+
+## get gene expression and chromatin accessibility for LD buddies and linked peaks
+def get_gene_expression_and_chromatin_accessibility_full(mdd_rna, dev_rna, mdd_atac, dev_atac, genes_peaks_ld_buddy_dict, genes_peaks_linked_dict):
+    ld_buddy_hits = []
+    for hit in genes_peaks_ld_buddy_dict.keys():
+        print(hit)
+        genes_peaks_ld_buddy_dict_hit = {hit: genes_peaks_ld_buddy_dict[hit]}
+        ld_buddy_hit = get_gene_expression_and_chromatin_accessibility(mdd_rna, dev_rna, mdd_atac, dev_atac, genes_peaks_ld_buddy_dict_hit)
+        if ld_buddy_hit is not None:
+            ld_buddy_hits.append(ld_buddy_hit)
+
+    linked_hits = []
+    for hit in genes_peaks_linked_dict.keys():
+        print(hit)
+        genes_peaks_linked_dict_hit = {hit: genes_peaks_linked_dict[hit]}
+        linked_hit = get_gene_expression_and_chromatin_accessibility(mdd_rna, dev_rna, mdd_atac, dev_atac, genes_peaks_linked_dict_hit)
+        if linked_hit is not None:
+            linked_hits.append(linked_hit)
+
+    return ld_buddy_hits, linked_hits
+
+#ld_buddy_hits, linked_hits = get_gene_expression_and_chromatin_accessibility_full(student_rna_sub, source_rna_sub, student_atac_sub, source_atac_sub, genes_peaks_ld_buddy_dict, genes_peaks_linked_dict)
+ld_buddy_hits, linked_hits = get_gene_expression_and_chromatin_accessibility_full(mdd_rna_full_sub, pfc_zhu_rna_full_sub, mdd_atac_full_sub, pfc_zhu_atac_full_sub, genes_peaks_ld_buddy_dict, genes_peaks_linked_dict)
+
+## concat hits dataframes
+ld_buddy_hits_df = pd.concat(ld_buddy_hits, axis=1)
+linked_hits_df = pd.concat(linked_hits, axis=1)
+
+## add modalities to hits dataframes to ensure that corresponding cells are identifiable
+modalities = student_rna_sub.obs['modality'].tolist() + source_rna_sub.obs['modality'].tolist() + student_atac_sub.obs['modality'].tolist() + source_atac_sub.obs['modality'].tolist()
+ld_buddy_hits_df['modality'] = modalities
+linked_hits_df['modality'] = modalities
+
+## create obs object with only unique cells
+obs = pd.merge(ld_buddy_hits_df['modality'].reset_index(), source_target_adata.obs.reset_index().assign(orig_index=np.arange(len(source_target_adata.obs))), left_on=['index','modality'], right_on=['index','modality'], how='left')
+obs['leiden'] = obs['leiden'].map(path_leidens_mapper)
+
+## create smaller age bins than Age_bins
+target_ages = obs.loc[obs['source_or_target'].eq('target'), 'Age']
+target_ages = target_ages.cat.remove_unused_categories().astype(float)
+if 'Age_bins_smaller' in obs.columns:
+    obs.drop(columns=['Age_bins_smaller'], inplace=True)
+obs.loc[obs['source_or_target'].eq('target'), 'Age_bins_smaller'] = pd.qcut(target_ages, q=5)
+
+## set most_common_cluster to ClustersMapped for source data
+obs.loc[obs['source_or_target'].eq('source'), 'most_common_cluster'] = pd.Categorical(obs.loc[obs['source_or_target'].eq('source'), 'ClustersMapped'], categories=source_clusters, ordered=True)
+
+assert obs['index'].tolist() == ld_buddy_hits_df.index.tolist()
+assert obs['orig_index'].sort_values().values.tolist() == np.arange(len(obs)).tolist()
+
+def plot_gene_expression_and_chromatin_accessibility(ld_buddy_hits_df, linked_hits_df, obs, paths):
+
+    if (paths is not None):
+        obs_keep = obs['leiden'].isin(dict(paths)['L46'])
+        ld_buddy_hits_df = ld_buddy_hits_df.loc[obs_keep.values]
+        linked_hits_df = linked_hits_df.loc[obs_keep.values]
+        obs = obs[obs_keep].copy()
+        obs['leiden'] = pd.Categorical(obs['leiden'], categories=dict(paths)['L46'], ordered=True)
+
+    obs_sort = obs['orig_index'].tolist()
+    obs.set_index('index', inplace=True)
+    ld_buddy_hits_df.drop(columns=['modality'], inplace=True)
+    linked_hits_df.drop(columns=['modality'], inplace=True)
+
+    ## create anndata object for LD buddies
+    ld_buddy_adata = anndata.AnnData(
+        ld_buddy_hits_df, obs=obs,
+        obsm={obsm_key: source_target_adata.obsm[obsm_key][obs_sort] for obsm_key in source_target_adata.obsm.keys()})
+
+    linked_adata = anndata.AnnData(
+        linked_hits_df, obs=obs,
+        obsm={obsm_key: source_target_adata.obsm[obsm_key][obs_sort] for obsm_key in source_target_adata.obsm.keys()})
+
+    #sc.pl.umap(source_target_adata, color='leiden', legend_loc='on data', alpha=0.3)
+    #sc.pl.umap(ld_buddy_adata[ld_buddy_adata.obs['source_or_target'].eq('target')], color=ld_buddy_adata.var_names, legend_loc='on data', size=50, ncols=len(ld_buddy_adata.var_names)//2)
+    #sc.pl.umap(linked_adata[linked_adata.obs['source_or_target'].eq('target')], color=linked_adata.var_names, legend_loc='on data', size=50)
+
+    pseudotime_keys_continuous = ['ordinal_pseudotime', 'dpt_pseudotime']
+    pseudotime_keys_ordinal = ['leiden', 'Age_bins', 'Age_bins_smaller', 'most_common_cluster']
+    pseudotime_keys = pseudotime_keys_continuous + pseudotime_keys_ordinal
+
+    for pseudotime_key in pseudotime_keys:
+
+        if pseudotime_key in pseudotime_keys_continuous:
+            n_stages = source_rna_atac_sub.obs['dev_stage'].nunique()
+            window_len = int(len(obs) // n_stages * 2)
+            window_len = int(window_len / 2)
+
+        for hits_df, hits_adata, hits_name in [(ld_buddy_hits_df, ld_buddy_adata, 'LD buddies'), (linked_hits_df, linked_adata, 'linked peaks')]:
+
+            n_genes = hits_df.shape[1]
+
+            # COMBINED ANALYSIS (source + target with conditions)
+            # Prepare target data (with Condition)
+            target_indices = hits_adata.obs.loc[hits_adata.obs['source_or_target'].eq('target')].index.tolist()
+            tmp_target = hits_df.loc[target_indices].copy()
+            tmp_target = tmp_target.assign(
+                **{pseudotime_key: hits_adata.obs.loc[target_indices][pseudotime_key], 'Condition': hits_adata.obs.loc[target_indices]['Condition'], 'modality': hits_adata.obs.loc[target_indices]['modality']},
+            ).sort_values(pseudotime_key)
+
+            # Prepare source data (no Condition, but we'll add a 'source' label)
+            source_indices = hits_adata.obs.loc[hits_adata.obs['source_or_target'].eq('source')].index.tolist()
+            tmp_source = hits_df.loc[source_indices].copy()
+            tmp_source = tmp_source.assign(
+                **{pseudotime_key: hits_adata.obs.loc[source_indices][pseudotime_key], 'modality': hits_adata.obs.loc[source_indices]['modality'], 'Condition': 'developmental'},
+            ).sort_values(pseudotime_key)
+
+            # Combined plotting for each modality
+            for modality in ['RNA', 'ATAC']:
+                fig, ax = plt.subplots(int(np.ceil(n_genes/2)), 2, figsize=[14, 10], sharex=True, squeeze=False)
+                
+                # Get target data for this modality
+                tmp_target_modality = tmp_target[tmp_target['modality'].eq(modality)].drop(columns=['modality'])
+                # Get source data for this modality
+                tmp_source_modality = tmp_source[tmp_source['modality'].eq(modality)].drop(columns=['modality'])
+
+                plt.suptitle(f'{modality} - {hits_name} - {pseudotime_key} (source + target by Condition)')
+                ax[-1, -1].set_xlabel(pseudotime_key)
+                ax[-1, 0].set_xlabel(pseudotime_key)
+
+                for i, gene in enumerate(hits_df.columns):
+
+                    # Create secondary y-axis for source data
+                    ax2 = ax[i // 2, i % 2].twinx()
+                    
+                    # Plot target conditions (case, control) on primary y-axis
+                    cond_data_list = {}
+                    for cond in tmp_target_modality['Condition'].unique():
+                        cond_data = tmp_target_modality[tmp_target_modality['Condition'].eq(cond)].drop(columns=['Condition']).set_index([pseudotime_key])
+                        cond_data = cond_data[cond_data.index.notna()]
+                        cond_data_list[cond] = cond_data
+
+                        if pseudotime_key in pseudotime_keys_continuous:
+                            cond_data = cond_data.rolling(window=window_len, win_type='hamming', center=True, min_periods=1).mean().reset_index().set_index(pseudotime_key)
+                        else:
+                            cond_data = cond_data.reset_index().groupby([pseudotime_key]).mean()
+                            cond_data.index = pd.Categorical(cond_data.index.astype(str), categories=cond_data.index.astype(str), ordered=True)
+
+                        ax[i // 2, i % 2].plot(cond_data.index, cond_data[gene], label=cond)
+                        ax[i // 2, i % 2].set_title(f'{gene} - {genes_km_clusters_dict[gene].item()}' if gene in genes_km_clusters_dict else gene)
+
+                    '''
+                    ## aligned dataframes
+                    # 1) build a common index (union of both pseudotime grids)
+                    idx = cond_data_list['case'].index.union(cond_data_list['control'].index).sort_values()
+
+                    # 2) reindex + interpolate on the index
+                    case_aligned = (
+                        cond_data_list['case'].reindex(idx)
+                        .interpolate(method='index')   # linear interpolation along index
+                        .ffill().bfill()               # edge fill if needed
+                    )
+
+                    control_aligned = (
+                        cond_data_list['control'].reindex(idx)
+                        .interpolate(method='index')
+                        .ffill().bfill()
+                    )
+
+                    # 3) combine (now they’re aligned row-by-row)
+                    aligned = pd.concat([case_aligned, control_aligned], axis=1, keys=['case', 'control'])
+                    case_control_gap = (aligned.loc[:,'case']-aligned.loc[:,'control']).rolling(window=window_len, win_type='hamming', center=True, min_periods=1).mean()
+                    ax[i // 2, i % 2].plot(case_control_gap.index, case_control_gap[gene], label='case - control')
+                    '''
+
+                    # Plot source data on secondary y-axis
+                    source_data = tmp_source_modality.drop(columns=['Condition'])
+
+                    if source_data[pseudotime_key].notna().all():
+                        source_data = source_data.set_index(pseudotime_key)
+
+                        if pseudotime_key in pseudotime_keys_continuous:
+                            source_data = source_data.rolling(window=window_len, win_type='hamming', center=True, min_periods=1).mean()
+                        else:
+                            source_data = source_data.reset_index().groupby([pseudotime_key]).mean()
+
+                        source_data = source_data[~source_data.index.isna()]
+                        ax2.plot(source_data.index, source_data[gene], label='source', alpha=0.5, color='gray', linestyle='--')
+                        
+                        
+                        # Color the y-axis labels to match the data
+                        ax[i // 2, i % 2].tick_params(axis='y', labelcolor='blue')
+                        ax2.tick_params(axis='y', labelcolor='gray')
+                    else:
+                        print(f' - {pseudotime_key} is not available for source data')
+
+                plt.tight_layout()
+                plt.show()
+
+plot_gene_expression_and_chromatin_accessibility(ld_buddy_hits_df, linked_hits_df, obs, paths)
+
 
 #%% see which are compliant with diffmap geometry
 
