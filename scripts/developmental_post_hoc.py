@@ -1201,6 +1201,15 @@ elif source_dataset == 'PFC_Zhu':
     #source_target_adata = source_target_adata[source_target_adata.obs['SubClusters'].isin(subclusters_filtered)]
 
 
+def cast_object_columns_to_str(adata):
+    """
+    Cast all object dtype columns in adata.obs to str type, if possible.
+    """
+    for col in adata.obs.select_dtypes(include=['object','category']).columns:
+        try:
+            adata.obs[col] = adata.obs[col].astype(str)
+        except Exception as e:
+            print(f"Could not cast column {col} to str: {e}")
 
 #%% Plot distribution of age and ordinal pseudotime
 
@@ -1666,8 +1675,8 @@ paths = [
 '''
 paths = [
     ("MDD_ExN_all", leiden_sorted),
-    ('MDD_ExN_8_9_3_4_2_6_1_11', ['8', '9', '3', '4', '2', '6', '1', '11']),
-    ('MDD_ExN_8_12_10_13_7_5_14', ['8', '12', '10', '13', '7', '5', '14']),
+    ('MDD_ExN_5_8_0_3_13_4_11_2', ['5', '8', '0', '3', '13', '4', '11', '2']),
+    ('MDD_ExN_5_6_10_7_12_9_14', ['5', '6', '10', '7', '12', '9', '14']),
 ]
 
 
@@ -1752,20 +1761,86 @@ mdd_atac_full_sub.obs['modality'] = 'ATAC'
 pfc_zhu_rna_full_sub.obs['modality'] = 'RNA'
 pfc_zhu_atac_full_sub.obs['modality'] = 'ATAC'
 
-#%% run pyDESeq2
-from eclare.post_hoc_utils import run_pyDESeq2
+#%% import information from Zhu et al. Supplementary Tables S12 and S7
+zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
+gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
+peak_gene_links = pd.read_excel(zhu_supp_tables, sheet_name='Table S7', header=2)
+
+## filter for MDD hits and get gene-peak links
+mdd_hits = gwas_hits[gwas_hits['Trait'].eq('MDD')]
+mdd_hits_gene_peaks = peak_gene_links[peak_gene_links['gene'].isin(mdd_hits['Target gene name'].unique())]
+mdd_hits = mdd_hits.merge(mdd_hits_gene_peaks, left_on='Target gene name', right_on='gene', how='left')
+mdd_hits.rename(columns={'gene': 'gene_linked', 'peak': 'peak_linked', 'Peak coordinates (hg38)': 'peak_ld_buddy'}, inplace=True)
+
+## group by gene and get list of peaks
+genes_peaks_ld_buddy_dict   = mdd_hits.dropna(subset='peak_ld_buddy').groupby('Target gene name')['peak_ld_buddy'].apply(list).to_dict()
+genes_peaks_linked_dict     = mdd_hits.dropna(subset='peak_linked').groupby('Target gene name')['peak_linked'].apply(list).to_dict()
+print('Number of genes with LD buddies: ', len(genes_peaks_ld_buddy_dict))
+print('Number of genes with linked peaks: ', len(genes_peaks_linked_dict))
+
+genes_km_clusters_dict = gwas_hits.dropna(subset='km').groupby('Target gene name')['km'].unique().to_dict()
+
+
+#%% run pyDESeq2 with SEACells preprocessing
+from eclare.post_hoc_utils import run_pyDESeq2, get_pseudo_replicates_counts
+
+# Load data
 mdd_rna_scaled = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled.h5ad'), backed='r')
 mdd_rna_scaled_sub = mdd_rna_scaled[mdd_rna_scaled.obs_names.isin(student_rna_sub.obs_names)].to_memory()
 
-mdd_rna_counts = mdd_rna_scaled_sub.raw.X.toarray()
-genes_overlap = set(mdd_rna_scaled_sub.var_names).intersection(set(mdd_hits['Target gene name'].tolist()))
-mdd_rna_counts_overlap = mdd_rna_counts[:, mdd_rna_scaled_sub.raw.var['_index'].isin(genes_overlap).values]
+mdd_rna_scaled_sub.obs = mdd_rna_scaled_sub.obs.merge(source_target_adata.obs, left_index=True, right_index=True, suffixes=('', '_right'))
+mdd_rna_scaled_sub.obs = mdd_rna_scaled_sub.obs.loc[:, ~mdd_rna_scaled_sub.obs.columns.str.endswith('_right')]
 
-metadata = pd.DataFrame(
-    index=mdd_rna_scaled_sub.obs_names,
-    data={'Condition': mdd_rna_scaled_sub.obs['Condition'], 'Batch': mdd_rna_scaled_sub.obs['Batch']}
-)
-mdd_rna_scaled_sub, results, significant_genes = run_pyDESeq2(mdd_rna_scaled_sub, mdd_rna_counts, metadata, 'Condition')
+## find genes in full data
+mdd_rna_scaled_sub.raw.var.set_index('_index', inplace=True)
+genes_in_full_data_bool = mdd_rna_scaled_sub.raw.var.index.isin(mdd_rna_full.var_names)
+
+## filter raw data to only include genes in full data
+filtered_raw_X = mdd_rna_scaled_sub.raw.X[:, genes_in_full_data_bool]
+filtered_raw_var = mdd_rna_scaled_sub.raw.var.loc[genes_in_full_data_bool].copy()
+raw_adata = anndata.AnnData(X=filtered_raw_X, var=filtered_raw_var)
+
+mdd_rna_scaled_sub.raw = raw_adata
+
+## save mdd_rna_scaled_sub to mdd_data directory
+cast_object_columns_to_str(mdd_rna_scaled_sub)
+mdd_rna_scaled_sub.write_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub.h5ad'))
+
+## pyDESeq2
+for sex in ['female', 'male']:
+    sex = sex.lower()
+    
+    all_mdd_subjects_counts_adata = []
+    all_counts = []
+    all_metadata = []
+
+    ## loop through celltypes and get pseudo-replicates counts
+    for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
+
+        #results = process_celltype(sex, celltype, mdd_rna_scaled_sub, mdd_rna_scaled_sub.raw.var.set_index('_index').copy(), 'most_common_cluster', 'Condition', 'Sex', 'OriginalSub')
+
+        mdd_subjects_counts_adata, counts, metadata = get_pseudo_replicates_counts(
+            sex, celltype, mdd_rna_scaled_sub, mdd_rna_scaled_sub.raw.var.copy(), 
+            'most_common_cluster', 'Condition', 'Sex', 'OriginalSub',
+            pseudo_replicates='Subjects', overlapping_only=False
+        )
+
+        all_mdd_subjects_counts_adata.append(mdd_subjects_counts_adata)
+        all_counts.append(counts)
+        all_metadata.append(metadata)
+
+    ## concatenate
+    mdd_subjects_counts_adata = anndata.concat(all_mdd_subjects_counts_adata, axis=0)
+    counts = np.concatenate(all_counts, axis=0)
+    metadata = pd.concat(all_metadata, axis=0)
+
+    ## run pyDESeq2
+    results = run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, 'Condition')
+
+    if results[0].var['signif_padj'].any():
+        print(f" - {celltype} {sex} with significant genes")
+        #pydeseq2_results_dict[sex][celltype] = results[1]
+        #significant_genes_dict[sex][celltype] = results[2]
 
 
 #%% get gene expression gene expression of select genes
@@ -2122,24 +2197,7 @@ def plot_gene_expression_and_chromatin_accessibility(ld_buddy_hits_df, linked_hi
                 plt.tight_layout()
                 plt.show()
 
-## import information from Zhu et al. Supplementary Tables S12 and S7
-zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
-gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
-peak_gene_links = pd.read_excel(zhu_supp_tables, sheet_name='Table S7', header=2)
 
-## filter for MDD hits and get gene-peak links
-mdd_hits = gwas_hits[gwas_hits['Trait'].eq('MDD')]
-mdd_hits_gene_peaks = peak_gene_links[peak_gene_links['gene'].isin(mdd_hits['Target gene name'].unique())]
-mdd_hits = mdd_hits.merge(mdd_hits_gene_peaks, left_on='Target gene name', right_on='gene', how='left')
-mdd_hits.rename(columns={'gene': 'gene_linked', 'peak': 'peak_linked', 'Peak coordinates (hg38)': 'peak_ld_buddy'}, inplace=True)
-
-## group by gene and get list of peaks
-genes_peaks_ld_buddy_dict   = mdd_hits.dropna(subset='peak_ld_buddy').groupby('Target gene name')['peak_ld_buddy'].apply(list).to_dict()
-genes_peaks_linked_dict     = mdd_hits.dropna(subset='peak_linked').groupby('Target gene name')['peak_linked'].apply(list).to_dict()
-print('Number of genes with LD buddies: ', len(genes_peaks_ld_buddy_dict))
-print('Number of genes with linked peaks: ', len(genes_peaks_linked_dict))
-
-genes_km_clusters_dict = mdd_hits.dropna(subset='km').groupby('Target gene name')['km'].unique().to_dict()
 
 data_type = 'leiden_filtered'
 assert data_type in ['aligned','full','leiden_filtered']
@@ -3138,35 +3196,25 @@ for source_dataset in source_datasets:
     subsampled_kd_clip_adatas[source_dataset].uns['metrics'] = kd_clip_metrics[source_dataset]
     subsampled_clip_adatas[source_dataset].uns['metrics'] = clip_metrics[source_dataset]
 
-def cast_object_columns_to_str(adata):
-    """
-    Cast all object dtype columns in adata.obs to str type, if possible.
-    """
-    for col in adata.obs.select_dtypes(include=['object','category']).columns:
-        try:
-            adata.obs[col] = adata.obs[col].astype(str)
-        except Exception as e:
-            print(f"Could not cast column {col} to str: {e}")
-
 ## save adatas
 os.makedirs(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results'), exist_ok=True)
 
 # Cast object columns to str before saving
 cast_object_columns_to_str(subsampled_eclare_adata)
-subsampled_eclare_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_eclare_adata_{target_dataset}.h5ad'))
+subsampled_eclare_adata.write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_eclare_adata_{target_dataset}.h5ad'))
 
 cast_object_columns_to_str(scJoint_adata)
-scJoint_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'scJoint_adata_{target_dataset}.h5ad'))
+scJoint_adata.write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'scJoint_adata_{target_dataset}.h5ad'))
 
 cast_object_columns_to_str(glue_adata)
-glue_adata.write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'glue_adata_{target_dataset}.h5ad'))
+glue_adata.write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'glue_adata_{target_dataset}.h5ad'))
 
 for source_dataset in source_datasets:
     cast_object_columns_to_str(subsampled_kd_clip_adatas[source_dataset])
-    subsampled_kd_clip_adatas[source_dataset].write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_kd_clip_adatas_{source_dataset}_{target_dataset}.h5ad'))
+    subsampled_kd_clip_adatas[source_dataset].write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_kd_clip_adatas_{source_dataset}_{target_dataset}.h5ad'))
 
     cast_object_columns_to_str(subsampled_clip_adatas[source_dataset])
-    subsampled_clip_adatas[source_dataset].write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_clip_adatas_{source_dataset}_{target_dataset}.h5ad'))
+    subsampled_clip_adatas[source_dataset].write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_clip_adatas_{source_dataset}_{target_dataset}.h5ad'))
 
 #%% load adatas
 
