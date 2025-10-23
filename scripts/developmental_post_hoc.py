@@ -1752,6 +1752,22 @@ mdd_atac_full_sub.obs['modality'] = 'ATAC'
 pfc_zhu_rna_full_sub.obs['modality'] = 'RNA'
 pfc_zhu_atac_full_sub.obs['modality'] = 'ATAC'
 
+#%% run pyDESeq2
+from eclare.post_hoc_utils import run_pyDESeq2
+mdd_rna_scaled = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled.h5ad'), backed='r')
+mdd_rna_scaled_sub = mdd_rna_scaled[mdd_rna_scaled.obs_names.isin(student_rna_sub.obs_names)].to_memory()
+
+mdd_rna_counts = mdd_rna_scaled_sub.raw.X.toarray()
+genes_overlap = set(mdd_rna_scaled_sub.var_names).intersection(set(mdd_hits['Target gene name'].tolist()))
+mdd_rna_counts_overlap = mdd_rna_counts[:, mdd_rna_scaled_sub.raw.var['_index'].isin(genes_overlap).values]
+
+metadata = pd.DataFrame(
+    index=mdd_rna_scaled_sub.obs_names,
+    data={'Condition': mdd_rna_scaled_sub.obs['Condition'], 'Batch': mdd_rna_scaled_sub.obs['Batch']}
+)
+mdd_rna_scaled_sub, results, significant_genes = run_pyDESeq2(mdd_rna_scaled_sub, mdd_rna_counts, metadata, 'Condition')
+
+
 #%% get gene expression gene expression of select genes
 
 # Find overlap between student_atac_sub.var_names and peaks_list using BedTool
