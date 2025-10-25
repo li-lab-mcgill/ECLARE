@@ -10,65 +10,134 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 import sys
+from tqdm import tqdm
 
 sys.path.append("/home/mcb/users/dmannk/scMultiCLIP/ECLARE/src")
 from eclare import set_env_variables
 set_env_variables(config_path='/home/mcb/users/dmannk/scMultiCLIP/ECLARE/config')
 
-def main():
+def main(subset_type=None):
 
     ## load data
     mdd_rna_scaled_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub.h5ad'))
+    mdd_atac_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub.h5ad'))
 
     ## load GWAS hits
     zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
     gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
 
-    ## pyDESeq2
-    for sex in ['female', 'male']:
-        sex = sex.lower()
-        
-        all_mdd_subjects_counts_adata = []
-        all_counts = []
-        all_metadata = []
+    ## subset data
+    #subset_type = 'gwas_and_hvgs'
+    subset_type = 'gwas'
+    mdd_rna_scaled_sub = subset_data(mdd_rna_scaled_sub, gwas_hits, subset_type)
+    mdd_atac_sub = subset_data(mdd_atac_sub, gwas_hits, subset_type, hvg_genes=mdd_rna_scaled_sub.var_names.tolist())
 
-        ## loop through celltypes and get pseudo-replicates counts
-        for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
+    for sex in ['male', 'female']:
 
-            #results = process_celltype(sex, celltype, mdd_rna_scaled_sub, mdd_rna_scaled_sub.raw.var.set_index('_index').copy(), 'most_common_cluster', 'Condition', 'Sex', 'OriginalSub')
-
-            mdd_subjects_counts_adata, counts, metadata = get_pseudo_replicates_counts(
-                sex, celltype, mdd_rna_scaled_sub, mdd_rna_scaled_sub.raw.var.copy(), 
-                'most_common_cluster', 'Condition', 'Sex', 'OriginalSub',
-                pseudo_replicates='Subjects', overlapping_only=False
-            )
-
-            all_mdd_subjects_counts_adata.append(mdd_subjects_counts_adata)
-            all_counts.append(counts)
-            all_metadata.append(metadata)
-
-        ## concatenate
-        mdd_subjects_counts_adata = anndata.concat(all_mdd_subjects_counts_adata, axis=0)
-        counts = np.concatenate(all_counts, axis=0)
-        metadata = pd.concat(all_metadata, axis=0)
-
-        ## run pyDESeq2
-        per_celltype = run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, 'Condition')
-
-        ## concatenate results
-        genes = mdd_subjects_counts_adata.var_names
-        results = pd.concat([
-            df.assign(celltype=celltype, gene=genes).assign(
-                km=genes.map(gwas_hits.set_index('Target gene name')['km'].to_dict()),
-                traits=genes.map(gwas_hits.groupby('Target gene name')['Trait'].unique().str.join('_').to_dict())
-                ).set_index('celltype') 
-            for celltype, df in per_celltype.items() if df is not None
-        ])
-        significant_results = results[results['pvalue'] < 0.05]
-        mdd_significant_results = significant_results.loc[significant_results.traits.str.contains('MDD').fillna(False)]
-        sig_genes_per_celltype = significant_results.groupby('celltype')['gene'].apply(np.sort).to_dict()
+        rna_per_celltype = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex)
+        atac_per_celltype = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex)
 
 
+
+        def get_significant_results(per_celltype, genes, p_metric='pvalue'):
+            results = pd.concat([
+                df.assign(celltype=celltype, gene=genes).assign(
+                    km=genes.map(gwas_hits.set_index('Target gene name')['km'].to_dict()),
+                    traits=genes.map(gwas_hits.groupby('Target gene name')['Trait'].unique().str.join('_').to_dict())
+                    ).set_index('celltype') 
+                for celltype, df in per_celltype.items() if df is not None
+            ])
+
+            significant_results = results[results[p_metric] < 0.05]
+
+            return significant_results
+
+        def extract_results(significant_results):
+            mdd_significant_results = significant_results.loc[significant_results.traits.str.contains('MDD').fillna(False)]
+            sig_genes_per_celltype = significant_results.groupby('celltype')['gene'].apply(np.sort).to_dict()
+            sig_km_per_celltype = significant_results.dropna(subset=['km']).groupby('celltype')['km'].unique().to_dict()
+            return mdd_significant_results, sig_genes_per_celltype, sig_km_per_celltype
+
+        rna_significant_results = get_significant_results(rna_per_celltype, mdd_rna_scaled_sub.raw.var_names, p_metric='pvalue')
+        atac_significant_results = get_significant_results(atac_per_celltype, mdd_atac_sub.raw.var_names, p_metric='pvalue')
+
+        rna_mdd_significant_results, rna_sig_genes_per_celltype, rna_sig_km_per_celltype = extract_results(rna_significant_results)
+        atac_mdd_significant_results, atac_sig_genes_per_celltype, atac_sig_km_per_celltype = extract_results(atac_significant_results)
+
+
+def subset_data(adata, gwas_hits, subset_type, hvg_genes=None):
+
+    if subset_type == 'gwas':
+
+        ## subset genes to those in GWAS hits
+        genes_in_gwas_hits_bool = adata.var_names.isin(gwas_hits['Target gene name'].unique())
+        adata = adata[:, genes_in_gwas_hits_bool]
+
+        ## filter raw data to only include genes in full data
+        raw_genes_in_gwas_hits_bool = adata.raw.var_names.isin(gwas_hits['Target gene name'].unique())
+        filtered_raw_X = adata.raw.X[:, raw_genes_in_gwas_hits_bool]
+        filtered_raw_var = adata.raw.var.loc[raw_genes_in_gwas_hits_bool].copy()
+        raw_adata = anndata.AnnData(X=filtered_raw_X, var=filtered_raw_var)
+        adata.raw = raw_adata
+
+    elif subset_type == 'gwas_and_hvgs':
+
+        ## get list of genes in GWAS hits and highly variable genes
+        hvg_genes = adata.var_names.tolist() if hvg_genes is None else hvg_genes
+        gwas_and_hvgs_genes = gwas_hits['Target gene name'].unique().tolist() + hvg_genes
+
+        ## subset data to only include genes in GWAS hits and highly variable genes
+        gwas_and_hvgs_genes_bool = adata.var_names.isin(gwas_and_hvgs_genes)
+        adata = adata[:, gwas_and_hvgs_genes_bool]
+
+        ## filter raw data to only include genes in GWAS hits and highly variable genes
+        raw_genes_in_gwas_and_hvgs_bool = adata.raw.var_names.isin(gwas_and_hvgs_genes)
+        filtered_raw_X = adata.raw.X[:, raw_genes_in_gwas_and_hvgs_bool]
+        filtered_raw_var = adata.raw.var.loc[raw_genes_in_gwas_and_hvgs_bool].copy()
+        raw_adata = anndata.AnnData(X=filtered_raw_X, var=filtered_raw_var)
+        adata.raw = raw_adata
+
+    elif subset_type is None:
+        pass
+
+    return adata
+
+
+
+def run_pyDESeq2_on_celltypes(adata, sex, test_type='split'):
+    
+    all_mdd_subjects_counts_adata = []
+    all_counts = []
+    all_metadata = []
+
+    ## loop through celltypes and get pseudo-replicates counts
+    for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
+
+        #results = process_celltype(sex, celltype, mdd_rna_scaled_sub, mdd_rna_scaled_sub.raw.var.set_index('_index').copy(), 'most_common_cluster', 'Condition', 'Sex', 'OriginalSub')
+
+        mdd_subjects_counts_adata, counts, metadata = get_pseudo_replicates_counts(
+            sex, celltype, adata, adata.raw.var.copy(), 
+            'most_common_cluster', 'Condition', 'Sex', 'OriginalSub',
+            pseudo_replicates='Subjects', overlapping_only=False
+        )
+
+        all_mdd_subjects_counts_adata.append(mdd_subjects_counts_adata)
+        all_counts.append(counts)
+        all_metadata.append(metadata)
+
+    ## concatenate
+    mdd_subjects_counts_adata = anndata.concat(all_mdd_subjects_counts_adata, axis=0)
+    counts = np.concatenate(all_counts, axis=0)
+    metadata = pd.concat(all_metadata, axis=0)
+
+    ## run pyDESeq2
+    #per_celltype = run_pyDESeq2_per_celltype(counts, metadata, 'most_common_cluster')
+    if test_type == 'split':
+        per_celltype = run_pyDESeq2_contrasts(counts, metadata, 'Condition')
+    elif test_type == 'all':
+        per_celltype = run_pyDESeq2_all_celltypes(counts, metadata)
+
+    return per_celltype
 
 ## functions for pyDESeq2 on counts data
 def get_pseudo_replicates_counts(sex, celltype, rna_scaled_with_counts, mdd_rna_var, rna_celltype_key, rna_condition_key, rna_sex_key, rna_subject_key, pseudo_replicates='Subjects', overlapping_only=False):
@@ -182,7 +251,36 @@ def get_pseudo_replicates_counts(sex, celltype, rna_scaled_with_counts, mdd_rna_
 
     return mdd_counts_adata, counts, metadata
 
-def run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key, save_dir=None):
+def run_pyDESeq2_per_celltype(counts, metadata, rna_celltype_key, save_dir=None):
+
+    inference = DefaultInference(n_cpus=8)
+
+    per_celltype = {}
+    for celltype in tqdm(metadata[rna_celltype_key].unique(), desc='Running pyDESeq2 per celltype'):
+
+        is_celltype = metadata[rna_celltype_key].eq(celltype)
+        metadata_celltype = metadata[is_celltype]
+        counts_celltype = counts[is_celltype]
+
+        dds = DeseqDataSet(
+            counts=counts_celltype,
+            metadata=metadata_celltype,
+            design="~ Batch + Condition",
+            refit_cooks=True,
+            inference=inference
+        )
+        dds.deseq2()
+
+        stat = DeseqStats(dds, contrast=("Condition", "Case", "Control"))
+        stat.run_wald_test()
+        stat.summary()
+        results_celltype = stat.results_df
+
+        per_celltype[celltype] = results_celltype
+
+    return per_celltype
+
+def run_pyDESeq2_contrasts(counts, metadata, rna_condition_key, save_dir=None):
 
     inference = DefaultInference(n_cpus=8)
 
@@ -262,3 +360,22 @@ def run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, rna_condition_key,
     return mdd_subjects_counts_adata, results, significant_genes
     '''
     return per_celltype
+
+def run_pyDESeq2_all_celltypes(counts, metadata):
+
+    inference = DefaultInference(n_cpus=8)
+    dds = DeseqDataSet(
+        counts=counts,
+        metadata=metadata,
+        design="~ Batch + Condition",
+        refit_cooks=True,
+        inference=inference,
+    )
+    dds.deseq2()
+
+    stat = DeseqStats(dds, contrast=("Condition", "Case", "Control"))
+    stat.run_wald_test()
+    stat.summary()
+    results = stat.results_df
+
+    return results

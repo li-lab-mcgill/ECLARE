@@ -1675,8 +1675,8 @@ paths = [
 '''
 paths = [
     ("MDD_ExN_all", leiden_sorted),
-    ('MDD_ExN_5_8_0_3_13_4_11_2', ['5', '8', '0', '3', '13', '4', '11', '2']),
-    ('MDD_ExN_5_6_10_7_12_9_14', ['5', '6', '10', '7', '12', '9', '14']),
+    ('MDD_ExN_5_13_0_12_3_6_9_1_7', ['5', '13', '0', '12', '3', '6', '9', '1', '7']),
+    ('MDD_ExN_5_10_11_2_8_16_15_14', ['5', '10', '11', '2', '8', '16', '15', '14']),
 ]
 
 
@@ -1738,6 +1738,7 @@ sc.pl.paga_compare(target_adata, color="ordinal_pseudotime", node_size_scale=5, 
 #devmdd_fig2(target_adata, source_adata)
 
 #%% load full datasets
+from eclare.data_utils import gene_activity_score_glue
 
 ## MDD data
 rna_filename = f"rna_16448_by_169411_aligned_source_PFC_Zhu.h5ad"
@@ -1761,6 +1762,7 @@ mdd_atac_full_sub.obs['modality'] = 'ATAC'
 pfc_zhu_rna_full_sub.obs['modality'] = 'RNA'
 pfc_zhu_atac_full_sub.obs['modality'] = 'ATAC'
 
+
 #%% import information from Zhu et al. Supplementary Tables S12 and S7
 zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
 gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
@@ -1781,8 +1783,7 @@ print('Number of genes with linked peaks: ', len(genes_peaks_linked_dict))
 genes_km_clusters_dict = gwas_hits.dropna(subset='km').groupby('Target gene name')['km'].unique().to_dict()
 
 
-#%% run pyDESeq2 with SEACells preprocessing
-from eclare.post_hoc_utils import run_pyDESeq2, get_pseudo_replicates_counts
+#%% save data in preparation for pyDESeq2
 
 # Load data
 mdd_rna_scaled = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled.h5ad'), backed='r')
@@ -1806,41 +1807,65 @@ mdd_rna_scaled_sub.raw = raw_adata
 cast_object_columns_to_str(mdd_rna_scaled_sub)
 mdd_rna_scaled_sub.write_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub.h5ad'))
 
-## pyDESeq2
-for sex in ['female', 'male']:
-    sex = sex.lower()
-    
-    all_mdd_subjects_counts_adata = []
-    all_counts = []
-    all_metadata = []
+## ATAC
+def rename_obs_columns(adata):
+    mapping = {
+        'sex': 'Sex',
+        'Subject': 'OriginalSub',
+        'condition': 'Condition',
+        'batch': 'Batch',
+    }
+    mapping = {key: val for key, val in mapping.items() if val not in adata.obs.columns}
+    adata.obs.rename(columns=mapping, inplace=True)
+    return adata
 
-    ## loop through celltypes and get pseudo-replicates counts
-    for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
+## add gene activity score to ATAC
+mdd_atac_broad = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_broad.h5ad'), backed='r')
+mdd_atac_broad = rename_obs_columns(mdd_atac_broad)
+mdd_atac_broad.var_names = mdd_atac_broad.var_names.str.split(':|-', expand=True).to_frame().apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
 
-        #results = process_celltype(sex, celltype, mdd_rna_scaled_sub, mdd_rna_scaled_sub.raw.var.set_index('_index').copy(), 'most_common_cluster', 'Condition', 'Sex', 'OriginalSub')
+mdd_atac_broad_sub = mdd_atac_broad[
+    mdd_atac_broad.obs_names.isin(student_atac_sub.obs_names),
+    mdd_atac_broad.var_names.isin(mdd_atac_full.var_names)
+].to_memory()
 
-        mdd_subjects_counts_adata, counts, metadata = get_pseudo_replicates_counts(
-            sex, celltype, mdd_rna_scaled_sub, mdd_rna_scaled_sub.raw.var.copy(), 
-            'most_common_cluster', 'Condition', 'Sex', 'OriginalSub',
-            pseudo_replicates='Subjects', overlapping_only=False
-        )
+mdd_atac_broad_sub.obs = mdd_atac_broad_sub.obs.merge(source_target_adata.obs, left_index=True, right_index=True, suffixes=('', '_right'))
+mdd_atac_broad_sub.obs = mdd_atac_broad_sub.obs.loc[:, ~mdd_atac_broad_sub.obs.columns.str.endswith('_right')]
 
-        all_mdd_subjects_counts_adata.append(mdd_subjects_counts_adata)
-        all_counts.append(counts)
-        all_metadata.append(metadata)
+## compute gene activity score on processed data
+mdd_atac_broad_sub.var['interval'] = mdd_atac_broad_sub.var_names
+mdd_atac_gas_broad_sub, _ = gene_activity_score_glue(mdd_atac_broad_sub, mdd_rna_full_sub)
 
-    ## concatenate
-    mdd_subjects_counts_adata = anndata.concat(all_mdd_subjects_counts_adata, axis=0)
-    counts = np.concatenate(all_counts, axis=0)
-    metadata = pd.concat(all_metadata, axis=0)
+## create raw data object
+mdd_atac_broad_raw = anndata.AnnData(
+    X=mdd_atac_broad.raw.X,
+    var=mdd_atac_broad.raw.var,
+    obs=mdd_atac_broad.obs
+)
+mdd_atac_broad_raw.var_names = mdd_atac_broad_raw.var_names.str.split(':|-', expand=True).to_frame().apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
 
-    ## run pyDESeq2
-    results = run_pyDESeq2(mdd_subjects_counts_adata, counts, metadata, 'Condition')
+## subset to student data
+mdd_atac_broad_raw_sub = mdd_atac_broad_raw[
+    mdd_atac_broad_raw.obs_names.isin(student_atac_sub.obs_names),
+    mdd_atac_broad_raw.var_names.isin(mdd_atac_full.var_names)
+].to_memory()
 
-    if results[0].var['signif_padj'].any():
-        print(f" - {celltype} {sex} with significant genes")
-        #pydeseq2_results_dict[sex][celltype] = results[1]
-        #significant_genes_dict[sex][celltype] = results[2]
+## compute gene activity score on raw data
+mdd_atac_broad_raw_sub.var['interval'] = mdd_atac_broad_raw_sub.var_names
+mdd_atac_gas_broad_raw_sub, _ = gene_activity_score_glue(mdd_atac_broad_raw_sub, mdd_rna_full_sub)
+
+## check for gene activity score with zero expression in all cells
+mdd_atac_gas_broad_sub = mdd_atac_gas_broad_sub[:, mdd_atac_gas_broad_sub.X.toarray().sum(axis=0) > 0].copy()
+mdd_atac_gas_broad_raw_sub = mdd_atac_gas_broad_raw_sub[:, mdd_atac_gas_broad_raw_sub.X.toarray().sum(axis=0) > 0].copy()
+
+## rename obs columns
+mdd_atac_gas_broad_sub = rename_obs_columns(mdd_atac_gas_broad_sub)
+mdd_atac_gas_broad_raw_sub = rename_obs_columns(mdd_atac_gas_broad_raw_sub)
+
+## set raw data and save
+mdd_atac_gas_broad_sub.raw = mdd_atac_gas_broad_raw_sub
+cast_object_columns_to_str(mdd_atac_gas_broad_sub)
+mdd_atac_gas_broad_sub.write_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub.h5ad'))
 
 
 #%% get gene expression gene expression of select genes
