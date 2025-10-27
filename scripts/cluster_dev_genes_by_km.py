@@ -50,12 +50,10 @@ def compute_moran_for_gene(g, gene, X, W_dense, permutations=0):
     return moran_series
 
 # Put data in Ray's object store so all workers can access it efficiently
-# This avoids copying the data to each worker
 X_ref = ray.put(gene_expr)
 W_ref = ray.put(W_dense)
 
 # Parallel computation with Ray
-# Each gene computation is a separate task
 print(f"Computing Moran's I for {len(pfc_zhu_rna_EN.var_names)} genes with Ray...")
 futures = [
     compute_moran_for_gene.remote(g, gene, X_ref, W_ref, permutations=1000)
@@ -83,7 +81,6 @@ print(f"Found {len(km_genes)} significant genes (q < 0.01) for trajectory analys
 gene_expr_sig = gene_expr[:, pfc_zhu_rna_EN.var_names.isin(km_genes)]
 
 ## smooth gene expression by ordinal pseudotime using NB-GAM (similar to tradeSeq)
-
 @ray.remote
 def fit_gam_smoother_for_gene(g, gene_name, X, pseudotime, n_knots=9, n_grid=200, 
                                distribution='gamma', link='log'):
@@ -164,10 +161,8 @@ def fit_gam_smoother_for_gene(g, gene_name, X, pseudotime, n_knots=9, n_grid=200
     
     return gene_name, smooth_pseudotime, smooth_expr
 
-# Get pseudotime and prepare for smoothing
+# Get pseudotime and prepare for smoothing and put data in Ray's object store for efficient parallel access
 pseudotime = pfc_zhu_rna_EN.obs['ordinal_pseudotime'].values
-
-# Put data in Ray's object store for efficient parallel access
 pseudotime_ref = ray.put(pseudotime)
 X_ref_sig = ray.put(gene_expr_sig)
 
@@ -192,14 +187,14 @@ for future in tqdm(gam_futures, desc="Smoothing genes"):
 smooth_gene_expr_df = pd.DataFrame(smooth_results, index=smooth_pseudotime_grid)
 smooth_gene_expr_df.index.name = 'pseudotime'
 
-print("Performing K-means clustering on smoothed trajectories...")
+# Shutdown Ray to free resources
+ray.shutdown()
 
 # Apply z-score normalization to smoothed trajectories
-# This ensures clustering is based on trajectory SHAPE, not absolute expression level
 smooth_gene_expr_zscore = smooth_gene_expr_df.apply(zscore, axis=0)
 
 # Perform K-means clustering on z-scored smooth trajectories
-# Each gene (column) is a sample, each pseudotime point (row) is a feature
+print("Performing K-means clustering on smoothed trajectories...")
 n_clusters = 4
 km = KMeans(n_clusters=n_clusters, n_init=50, random_state=0)
 km.fit(smooth_gene_expr_zscore.T.values)
@@ -211,12 +206,11 @@ km_labels_named = km_labels.map(km_map)
 
 print(f"Genes per cluster: {km_labels.value_counts().sort_index().to_dict()}")
 
-# Visualize mean trajectory per cluster
+# Compute mean trajectory per cluster
 smooth_gene_expr_by_cluster = smooth_gene_expr_zscore.copy()
 smooth_gene_expr_by_cluster.rename(columns=km_labels.to_dict(), inplace=True)
 smooth_gene_expr_by_cluster.columns.name = 'cluster'
 mean_trajectories = smooth_gene_expr_by_cluster.groupby(level=0, axis=1).mean()
-std_trajectories = smooth_gene_expr_by_cluster.groupby(level=0, axis=1).std()
 
 # Plot mean trajectories
 max_idx_dict = {}
@@ -227,20 +221,22 @@ for cluster, trajectory in mean_trajectories.items():
     ax.annotate('*', xy=(max_idx, max_val), fontsize=12, color=f'C{cluster}')
     max_idx_dict[cluster] = max_idx
 
+## Relabel clusters based on location of maximum expression along pseudotime
 new_labels_mapper = 'km' + pd.Series(max_idx_dict).rank().astype(int).astype(str)
 mean_trajectories_relabelled = mean_trajectories.rename(columns=new_labels_mapper).sort_index(axis=1)
 km_labels_relabelled = km_labels.replace(new_labels_mapper).rename('clusters')
 genes_per_cluster = km_labels_relabelled.groupby(km_labels_relabelled).apply(lambda x: x.index.unique().tolist())
 
-## load GWAS hits
+## Compare learned clusters with clusters of GWAS hits
 zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
 gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
 gwas_kms = gwas_hits.drop_duplicates(subset='Target gene name').set_index('Target gene name').dropna(subset=['km']).get('km')
 
-## make categorical
+## Make gene-cluster mappings categorical
 km_labels_relabelled = km_labels_relabelled.astype(pd.CategoricalDtype(categories=new_labels_mapper.sort_values().values, ordered=True))
 gwas_kms = gwas_kms.astype(pd.CategoricalDtype(categories=new_labels_mapper.sort_values().values, ordered=True))
 
+## Compare gene-cluster mappings and compute MAE
 mae_dict = {}
 for gene in gwas_kms.index:
     try:
@@ -254,7 +250,8 @@ mae_value = np.nanmean(mae_df)
 print(f"MAE value: {mae_value:.2f}")
 
 matches_df = mae_df.value_counts(dropna=False)
+print(matches_df)
 
-
-# Shutdown Ray to free resources
-ray.shutdown()
+## write gene-clusters mapping to file to use as gene-sets
+genes_per_cluster.to_csv(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv'))
+print(f"Written gene-clusters mapping to {os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv')}")

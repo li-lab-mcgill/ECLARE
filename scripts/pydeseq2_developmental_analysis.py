@@ -1,8 +1,9 @@
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.default_inference import DefaultInference
 from pydeseq2.ds import DeseqStats
-from collections import defaultdict
 
+from collections import defaultdict
+import ast
 import pandas as pd
 import numpy as np
 import anndata
@@ -11,6 +12,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import sys
 from tqdm import tqdm
+
+from esda.moran import Moran
+from libpysal.weights import WSP
 
 sys.path.append("/home/mcb/users/dmannk/scMultiCLIP/ECLARE/src")
 from eclare import set_env_variables
@@ -27,8 +31,7 @@ def main(subset_type=None):
     gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
 
     ## subset data
-    #subset_type = 'gwas_and_hvgs'
-    subset_type = 'gwas'
+    subset_type = None
     mdd_rna_scaled_sub = subset_data(mdd_rna_scaled_sub, gwas_hits, subset_type)
     mdd_atac_sub = subset_data(mdd_atac_sub, gwas_hits, subset_type, hvg_genes=mdd_rna_scaled_sub.var_names.tolist())
 
@@ -37,9 +40,7 @@ def main(subset_type=None):
         rna_per_celltype = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex)
         atac_per_celltype = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex)
 
-
-
-        def get_significant_results(per_celltype, genes, p_metric='pvalue'):
+        def concat_results(per_celltype, genes):
             results = pd.concat([
                 df.assign(celltype=celltype, gene=genes).assign(
                     km=genes.map(gwas_hits.set_index('Target gene name')['km'].to_dict()),
@@ -48,21 +49,64 @@ def main(subset_type=None):
                 for celltype, df in per_celltype.items() if df is not None
             ])
 
+            return results
+
+        def extract_results(results, p_metric='pvalue'):
             significant_results = results[results[p_metric] < 0.05]
-
-            return significant_results
-
-        def extract_results(significant_results):
             mdd_significant_results = significant_results.loc[significant_results.traits.str.contains('MDD').fillna(False)]
             sig_genes_per_celltype = significant_results.groupby('celltype')['gene'].apply(np.sort).to_dict()
             sig_km_per_celltype = significant_results.dropna(subset=['km']).groupby('celltype')['km'].unique().to_dict()
-            return mdd_significant_results, sig_genes_per_celltype, sig_km_per_celltype
+            return significant_results, mdd_significant_results, sig_genes_per_celltype, sig_km_per_celltype
 
-        rna_significant_results = get_significant_results(rna_per_celltype, mdd_rna_scaled_sub.raw.var_names, p_metric='pvalue')
-        atac_significant_results = get_significant_results(atac_per_celltype, mdd_atac_sub.raw.var_names, p_metric='pvalue')
+        rna_results = concat_results(rna_per_celltype, mdd_rna_scaled_sub.raw.var_names)
+        atac_results = concat_results(atac_per_celltype, mdd_atac_sub.raw.var_names)
 
-        rna_mdd_significant_results, rna_sig_genes_per_celltype, rna_sig_km_per_celltype = extract_results(rna_significant_results)
-        atac_mdd_significant_results, atac_sig_genes_per_celltype, atac_sig_km_per_celltype = extract_results(atac_significant_results)
+        rna_sig_results, rna_mdd_sig_results, rna_sig_genes_per_celltype, rna_sig_km_per_celltype = extract_results(rna_results, p_metric='pvalue')
+        atac_sig_results, atac_mdd_sig_results, atac_sig_genes_per_celltype, atac_sig_km_per_celltype = extract_results(atac_results, p_metric='pvalue')
+
+        def do_enrichr(sig_results, celltype):
+            from gseapy import enrichr
+
+            km_gene_sets = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv'), index_col=0, header=0)
+            km_gene_sets = km_gene_sets['clusters.1'].to_dict()
+            km_gene_sets = {k: ast.literal_eval(v) for k, v in km_gene_sets.items()} # or else, just a single string that looks like a list of genes
+
+            universe = list(mdd_rna_scaled_sub.raw.var_names)
+            hits = sig_results[sig_results.index==celltype]['gene'].unique()
+
+            enr = enrichr(
+                gene_list=list(hits),
+                gene_sets=km_gene_sets,
+                background=list(universe),
+                cutoff=1.0,
+            )
+            enr_res = enr.results
+            return enr_res
+
+        def do_gsea(results, celltype):
+            from gseapy import prerank
+
+            km_gene_sets = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv'), index_col=0, header=0)
+            km_gene_sets = km_gene_sets['clusters.1'].to_dict()
+            km_gene_sets = {k: ast.literal_eval(v) for k, v in km_gene_sets.items()} # or else, just a single string that looks like a list of genes
+
+            ranks = results[results.index==celltype].set_index('gene').get('log2FoldChange').sort_values(ascending=False).dropna()
+
+            res = prerank(
+                ranks,
+                gene_sets=km_gene_sets,
+                min_size=10,
+                max_size=5000
+            )
+            gsea_res = res.res2d
+
+            return gsea_res
+
+        rna_enrichr_res = {celltype: do_enrichr(rna_sig_results, celltype) for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc='Running EnrichR on RNA')}
+        atac_enrichr_res = {celltype: do_enrichr(atac_sig_results, celltype) for celltype in tqdm(atac_sig_genes_per_celltype.keys(), desc='Running EnrichR on ATAC')}
+        rna_gsea_res = {celltype: do_gsea(rna_sig_results, celltype) for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc='Running GSEA on RNA')}
+        atac_gsea_res = {celltype: do_gsea(atac_sig_results, celltype) for celltype in tqdm(atac_sig_genes_per_celltype.keys(), desc='Running GSEA on ATAC')}
+
 
 
 def subset_data(adata, gwas_hits, subset_type, hvg_genes=None):
