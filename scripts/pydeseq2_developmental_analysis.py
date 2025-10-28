@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import anndata
 import os
+import glob
 import matplotlib.pyplot as plt
 import seaborn as sns
 import sys
@@ -19,6 +20,380 @@ from libpysal.weights import WSP
 sys.path.append("/home/mcb/users/dmannk/scMultiCLIP/ECLARE/src")
 from eclare import set_env_variables
 set_env_variables(config_path='/home/mcb/users/dmannk/scMultiCLIP/ECLARE/config')
+
+def create_comprehensive_plot(output_dir, modality_filter):
+    """
+    Create a comprehensive plot showing -log10(p) results for:
+    - enrichr vs gsea
+    - male vs female
+    - individual cell-types
+    """
+    # Load all saved results (only enrichr and gsea result files, not summary stats)
+    all_results = []
+    for csv_file in glob.glob(os.path.join(output_dir, '*.csv')):
+        # Skip summary statistics files
+        if 'summary_stats' in csv_file or 'comparison' in csv_file:
+            continue
+        
+        df = pd.read_csv(csv_file)
+        
+        # Extract metadata from filename if not present in dataframe
+        # Filename format: {method}_{modality}_{celltype}_{sex}.csv
+        basename = os.path.basename(csv_file).replace('.csv', '')
+        
+        # Parse filename to extract metadata
+        # Handle both underscore and hyphen separators in celltype names
+        if basename.startswith('enrichr_') or basename.startswith('gsea_'):
+            method = basename.split('_')[0]
+            remainder = basename[len(method)+1:]  # Remove method and underscore
+            
+            # Next should be modality (RNA or ATAC)
+            if remainder.startswith('RNA_'):
+                modality = 'RNA'
+                remainder = remainder[4:]
+            elif remainder.startswith('ATAC_'):
+                modality = 'ATAC'
+                remainder = remainder[5:]
+            else:
+                print(f"Warning: Could not parse modality from {basename}")
+                continue
+            
+            # Last part is sex (male or female)
+            if remainder.endswith('_male'):
+                sex = 'male'
+                celltype = remainder[:-5]
+            elif remainder.endswith('_female'):
+                sex = 'female'
+                celltype = remainder[:-7]
+            else:
+                print(f"Warning: Could not parse sex from {basename}")
+                continue
+            
+            # Add metadata columns if they don't exist
+            if 'method' not in df.columns:
+                df['method'] = method
+            if 'modality' not in df.columns:
+                df['modality'] = modality
+            if 'sex' not in df.columns:
+                df['sex'] = sex
+            if 'celltype' not in df.columns:
+                df['celltype'] = celltype
+        
+        all_results.append(df)
+    
+    if not all_results:
+        print("No results found to plot")
+        return
+    
+    # Concatenate all results
+    combined_results = pd.concat(all_results, ignore_index=True)
+
+    ## Filter by modality
+    combined_results = combined_results[combined_results['modality'] == modality_filter]
+    
+    # Verify required columns are present
+    required_cols = ['modality', 'method', 'sex', 'celltype']
+    missing_cols = [col for col in required_cols if col not in combined_results.columns]
+    if missing_cols:
+        print(f"Error: Missing required columns: {missing_cols}")
+        print(f"Available columns: {combined_results.columns.tolist()}")
+        return
+    
+    # Extract p-values based on method
+    # For enrichr, typically use 'Adjusted P-value' or 'P-value'
+    # For gsea, typically use 'FDR q-val' or 'NOM p-val'
+    
+    def get_pvalue(row):
+        if row['method'] == 'enrichr':
+            # EnrichR typically has 'Adjusted P-value' or 'P-value'
+            if 'Adjusted P-value' in row:
+                return row['Adjusted P-value']
+            elif 'P-value' in row:
+                return row['P-value']
+        elif row['method'] == 'gsea':
+            # GSEA typically has 'FDR q-val' or 'NOM p-val'
+            if 'FDR q-val' in row:
+                return row['FDR q-val']
+            elif 'NOM p-val' in row:
+                return row['NOM p-val']
+        return np.nan
+    
+    # Determine which p-value column to use
+    if 'Adjusted P-value' in combined_results.columns:
+        pval_col = 'Adjusted P-value'
+    elif 'P-value' in combined_results.columns:
+        pval_col = 'P-value'
+    elif 'FDR q-val' in combined_results.columns:
+        pval_col = 'FDR q-val'
+    elif 'NOM p-val' in combined_results.columns:
+        pval_col = 'NOM p-val'
+    else:
+        # Try to find any column with 'p' or 'P' in it
+        pval_cols = [col for col in combined_results.columns if 'p-val' in col.lower() or 'p_val' in col.lower() or 'pval' in col.lower()]
+        if pval_cols:
+            pval_col = pval_cols[0]
+        else:
+            print("No p-value column found in results")
+            print("Available columns:", combined_results.columns.tolist())
+            return
+    
+    # Calculate -log10(p)
+    combined_results['-log10_p'] = -np.log10(combined_results[pval_col].clip(lower=1e-300))
+    
+    # Get term/pathway name (different naming in enrichr vs gsea)
+    if 'Term' in combined_results.columns:
+        combined_results['pathway'] = combined_results['Term']
+    elif 'Term name' in combined_results.columns:
+        combined_results['pathway'] = combined_results['Term name']
+    elif 'Name' in combined_results.columns:
+        combined_results['pathway'] = combined_results['Name']
+    else:
+        combined_results['pathway'] = combined_results.index.astype(str)
+
+    # Filter out non-significant results and prepare summary
+    summary_results = combined_results.groupby(['modality', 'method', 'sex', 'celltype', 'pathway']).agg({
+        '-log10_p': 'max'  # Take maximum -log10(p) if there are duplicates
+    }).reset_index()
+    
+    # Create a pivot for heatmap: rows=pathway, columns=method_sex_celltype
+    summary_results['method_sex_celltype'] = (summary_results['method'] + '_' + 
+                                              summary_results['sex'] + '_' + 
+                                              summary_results['celltype'] + '_' +
+                                              summary_results['modality'])
+    
+    # For a cleaner plot, let's take the top pathways by average significance
+    pathway_avg_sig = summary_results.groupby('pathway')['-log10_p'].mean().sort_values(ascending=False)
+    top_pathways = pathway_avg_sig.head(20).index.tolist()
+    
+    plot_data = summary_results[summary_results['pathway'].isin(top_pathways)]
+
+    ## code as ordered categorical
+    celltype_order = ['RG', 'IPC', 'EN-fetal-early', 'EN-fetal-late', 'EN']
+    available_celltypes = [ct for ct in celltype_order if ct in plot_data['celltype'].unique()]
+    plot_data['celltype'] = pd.Categorical(plot_data['celltype'], categories=available_celltypes, ordered=True)
+    plot_data['pathway'] = pd.Categorical(plot_data['pathway'], categories=plot_data['pathway'].sort_values().unique(), ordered=True)
+    
+    # Create figure with subplots - 2x3 grid for single modality
+    fig = plt.figure(figsize=(20, 12))
+    gs = fig.add_gridspec(2, 3, hspace=0.35, wspace=0.35)
+    fig.suptitle(f'{modality_filter} Enrichment Analysis: -log10(p) Comparison', fontsize=20, fontweight='bold', y=0.995)
+    
+    # Define color schemes
+    method_colors = ['#2E86AB', '#A23B72']  # Blue for enrichr, Purple for gsea
+    sex_colors = ['#4ECDC4', '#FF6B6B']  # Teal for female, Coral for male
+    celltype_palette = sns.color_palette("Set2", n_colors=len(available_celltypes))
+    
+    # Plot 1: EnrichR vs GSEA (averaged across sex and celltype)
+    ax1 = fig.add_subplot(gs[0, 0])
+    method_comparison = plot_data.groupby(['method', 'pathway'])['-log10_p'].mean().unstack(level=0)
+    if not method_comparison.empty and method_comparison.shape[1] >= 2:
+        method_comparison_top = method_comparison.loc[pathway_avg_sig[pathway_avg_sig.index.isin(method_comparison.index)].head(10).index]
+        method_comparison_top.plot(kind='barh', ax=ax1, color=method_colors, width=0.75)
+        ax1.set_xlabel('-log10(p-value)', fontsize=13, fontweight='bold')
+        ax1.set_ylabel('Pathway', fontsize=13, fontweight='bold')
+        ax1.set_title('EnrichR vs GSEA', fontsize=15, fontweight='bold', pad=15)
+        ax1.legend(title='Method', fontsize=11, title_fontsize=12, frameon=True, shadow=True)
+        ax1.grid(axis='x', alpha=0.3, linestyle='--')
+        ax1.tick_params(axis='both', labelsize=11)
+    
+    # Plot 2: Male vs Female (averaged across method and celltype)
+    ax2 = fig.add_subplot(gs[0, 1])
+    sex_comparison = plot_data.groupby(['sex', 'pathway'])['-log10_p'].mean().unstack(level=0)
+    if not sex_comparison.empty and sex_comparison.shape[1] >= 2:
+        sex_comparison_top = sex_comparison.loc[pathway_avg_sig[pathway_avg_sig.index.isin(sex_comparison.index)].head(10).index]
+        # Ensure consistent ordering: female, male
+        if 'female' in sex_comparison_top.columns and 'male' in sex_comparison_top.columns:
+            sex_comparison_top = sex_comparison_top[['female', 'male']]
+        sex_comparison_top.plot(kind='barh', ax=ax2, color=sex_colors, width=0.75)
+        ax2.set_xlabel('-log10(p-value)', fontsize=13, fontweight='bold')
+        ax2.set_ylabel('Pathway', fontsize=13, fontweight='bold')
+        ax2.set_title('Male vs Female', fontsize=15, fontweight='bold', pad=15)
+        ax2.legend(title='Sex', fontsize=11, title_fontsize=12, frameon=True, shadow=True)
+        ax2.grid(axis='x', alpha=0.3, linestyle='--')
+        ax2.tick_params(axis='both', labelsize=11)
+    
+    # Plot 3: Cell-types (averaged across method and sex)
+    ax3 = fig.add_subplot(gs[0, 2])
+    celltype_comparison = plot_data.groupby(['celltype', 'pathway'])['-log10_p'].mean().unstack(level=0)
+    if not celltype_comparison.empty:
+        # Reorder columns by celltype order
+        celltype_comparison = celltype_comparison[[ct for ct in available_celltypes if ct in celltype_comparison.columns]]
+        celltype_comparison_top = celltype_comparison.loc[pathway_avg_sig[pathway_avg_sig.index.isin(celltype_comparison.index)].head(10).index]
+        celltype_comparison_top.plot(kind='barh', ax=ax3, color=celltype_palette, width=0.75)
+        ax3.set_xlabel('-log10(p-value)', fontsize=13, fontweight='bold')
+        ax3.set_ylabel('Pathway', fontsize=13, fontweight='bold')
+        ax3.set_title('Cell-type Comparison', fontsize=15, fontweight='bold', pad=15)
+        ax3.legend(title='Cell Type', fontsize=10, title_fontsize=11, frameon=True, shadow=True, 
+                  bbox_to_anchor=(1.02, 1), loc='upper left')
+        ax3.grid(axis='x', alpha=0.3, linestyle='--')
+        ax3.tick_params(axis='both', labelsize=11)
+    
+    # Plot 4: Heatmap showing all combinations (method × sex × celltype)
+    ax4 = fig.add_subplot(gs[1, :2])  # Span first two columns
+    heatmap_data = plot_data.pivot_table(
+        values='-log10_p', 
+        index='pathway', 
+        columns=['method', 'sex', 'celltype'],
+        aggfunc='mean'
+    )
+    if not heatmap_data.empty:
+        heatmap_top = heatmap_data.loc[pathway_avg_sig[pathway_avg_sig.index.isin(heatmap_data.index)].head(15).index]
+        heatmap_top.columns = [f"{m[:3].upper()}_{s[0].upper()}_{c}" for m, s, c in heatmap_top.columns]
+        
+        sns.heatmap(heatmap_top, cmap='YlOrRd', annot=False, 
+                   cbar_kws={'label': '-log10(p-value)', 'shrink': 0.8}, ax=ax4,
+                   xticklabels=True, yticklabels=True, linewidths=0.5, linecolor='lightgray')
+        ax4.set_xlabel('Method_Sex_CellType', fontsize=13, fontweight='bold')
+        ax4.set_ylabel('Pathway', fontsize=13, fontweight='bold')
+        ax4.set_title('Comprehensive Heatmap: All Combinations', fontsize=15, fontweight='bold', pad=15)
+        plt.setp(ax4.get_xticklabels(), rotation=45, ha='right', fontsize=9)
+        plt.setp(ax4.get_yticklabels(), fontsize=10)
+    
+    # Plot 5: Top significant pathways by average -log10(p)
+    ax5 = fig.add_subplot(gs[1, 2])
+    top_pathways_plot = pathway_avg_sig.head(15)
+    top_pathways_plot.plot(kind='barh', ax=ax5, color='#06A77D', width=0.75)
+    ax5.set_xlabel('Average -log10(p-value)', fontsize=13, fontweight='bold')
+    ax5.set_ylabel('Pathway', fontsize=13, fontweight='bold')
+    ax5.set_title('Top 15 Pathways\n(averaged across all)', fontsize=15, fontweight='bold', pad=15)
+    ax5.grid(axis='x', alpha=0.3, linestyle='--')
+    ax5.tick_params(axis='both', labelsize=10)
+    
+    # Save the plot with modality-specific filename
+    output_file = os.path.join(output_dir, f'comprehensive_enrichment_plot_{modality_filter}.png')
+    fig.savefig(output_file, dpi=300, bbox_inches='tight')
+    print(f"\n{modality_filter} comprehensive plot saved to: {output_file}")
+    plt.close(fig)
+    
+    # Also create a summary statistics table for this modality
+    summary_stats = plot_data.groupby(['method', 'sex', 'celltype']).agg({
+        'pathway': 'count',
+        '-log10_p': ['mean', 'max', 'min']
+    }).round(3)
+    summary_stats.columns = ['_'.join(col).strip() for col in summary_stats.columns.values]
+    summary_stats_file = os.path.join(output_dir, f'enrichment_summary_stats_{modality_filter}.csv')
+    summary_stats.to_csv(summary_stats_file)
+    print(f"{modality_filter} summary statistics saved to: {summary_stats_file}")
+
+def create_rna_atac_comparison(output_dir):
+    """
+    Create a comparison plot between RNA and ATAC modalities
+    """
+    import glob
+    
+    # Load all saved results
+    all_results = []
+    for csv_file in glob.glob(os.path.join(output_dir, '*.csv')):
+        # Skip summary statistics files
+        if 'summary_stats' in csv_file or 'comparison' in csv_file:
+            continue
+        
+        df = pd.read_csv(csv_file)
+        basename = os.path.basename(csv_file).replace('.csv', '')
+        
+        # Parse filename to extract metadata
+        if basename.startswith('enrichr_') or basename.startswith('gsea_'):
+            method = basename.split('_')[0]
+            remainder = basename[len(method)+1:]
+            
+            if remainder.startswith('RNA_'):
+                modality = 'RNA'
+                remainder = remainder[4:]
+            elif remainder.startswith('ATAC_'):
+                modality = 'ATAC'
+                remainder = remainder[5:]
+            else:
+                continue
+            
+            if remainder.endswith('_male'):
+                sex = 'male'
+                celltype = remainder[:-5]
+            elif remainder.endswith('_female'):
+                sex = 'female'
+                celltype = remainder[:-7]
+            else:
+                continue
+            
+            if 'method' not in df.columns:
+                df['method'] = method
+            if 'modality' not in df.columns:
+                df['modality'] = modality
+            if 'sex' not in df.columns:
+                df['sex'] = sex
+            if 'celltype' not in df.columns:
+                df['celltype'] = celltype
+        
+        all_results.append(df)
+    
+    if len(all_results) < 2:
+        print("Not enough results to create RNA vs ATAC comparison")
+        return
+    
+    combined_results = pd.concat(all_results, ignore_index=True)
+    
+    # Determine p-value column
+    if 'Adjusted P-value' in combined_results.columns:
+        pval_col = 'Adjusted P-value'
+    elif 'P-value' in combined_results.columns:
+        pval_col = 'P-value'
+    elif 'FDR q-val' in combined_results.columns:
+        pval_col = 'FDR q-val'
+    elif 'NOM p-val' in combined_results.columns:
+        pval_col = 'NOM p-val'
+    else:
+        pval_cols = [col for col in combined_results.columns if 'p-val' in col.lower() or 'p_val' in col.lower() or 'pval' in col.lower()]
+        if pval_cols:
+            pval_col = pval_cols[0]
+        else:
+            return
+    
+    combined_results['-log10_p'] = -np.log10(combined_results[pval_col].clip(lower=1e-300))
+    
+    # Get pathway name
+    if 'Term' in combined_results.columns:
+        combined_results['pathway'] = combined_results['Term']
+    elif 'Term name' in combined_results.columns:
+        combined_results['pathway'] = combined_results['Term name']
+    elif 'Name' in combined_results.columns:
+        combined_results['pathway'] = combined_results['Name']
+    else:
+        combined_results['pathway'] = combined_results.index.astype(str)
+    
+    # Create comparison table
+    modality_comparison = combined_results.groupby(['modality', 'pathway'])['-log10_p'].mean().unstack(level=0)
+    
+    if 'RNA' in modality_comparison.columns and 'ATAC' in modality_comparison.columns:
+        # Save comparison table
+        modality_comparison.to_csv(os.path.join(output_dir, 'rna_vs_atac_comparison.csv'))
+        print(f"\nRNA vs ATAC comparison table saved to: {os.path.join(output_dir, 'rna_vs_atac_comparison.csv')}")
+        
+        # Create scatter plot
+        fig, ax = plt.subplots(figsize=(10, 10))
+        
+        scatter_data = modality_comparison.dropna()
+        ax.scatter(scatter_data['RNA'], scatter_data['ATAC'], alpha=0.6, s=100, c='#2E86AB', edgecolors='black')
+        
+        # Add diagonal line
+        max_val = max(scatter_data['RNA'].max(), scatter_data['ATAC'].max())
+        ax.plot([0, max_val], [0, max_val], 'r--', alpha=0.5, linewidth=2, label='y=x')
+        
+        # Add labels for top pathways
+        top_n = 10
+        for idx in scatter_data.nlargest(top_n, 'RNA').index[:5]:
+            ax.annotate(idx[:30], (scatter_data.loc[idx, 'RNA'], scatter_data.loc[idx, 'ATAC']),
+                       fontsize=8, alpha=0.7, xytext=(5, 5), textcoords='offset points')
+        
+        ax.set_xlabel('RNA -log10(p-value)', fontsize=14, fontweight='bold')
+        ax.set_ylabel('ATAC -log10(p-value)', fontsize=14, fontweight='bold')
+        ax.set_title('RNA vs ATAC Enrichment Comparison', fontsize=16, fontweight='bold', pad=20)
+        ax.legend(fontsize=12)
+        ax.grid(alpha=0.3, linestyle='--')
+        
+        plt.tight_layout()
+        comparison_plot_file = os.path.join(output_dir, 'rna_vs_atac_scatter.png')
+        fig.savefig(comparison_plot_file, dpi=300, bbox_inches='tight')
+        print(f"RNA vs ATAC scatter plot saved to: {comparison_plot_file}")
+        plt.close(fig)
 
 def main(subset_type=None):
 
@@ -104,8 +479,55 @@ def main(subset_type=None):
 
         rna_enrichr_res = {celltype: do_enrichr(rna_sig_results, celltype) for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc='Running EnrichR on RNA')}
         atac_enrichr_res = {celltype: do_enrichr(atac_sig_results, celltype) for celltype in tqdm(atac_sig_genes_per_celltype.keys(), desc='Running EnrichR on ATAC')}
-        rna_gsea_res = {celltype: do_gsea(rna_sig_results, celltype) for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc='Running GSEA on RNA')}
-        atac_gsea_res = {celltype: do_gsea(atac_sig_results, celltype) for celltype in tqdm(atac_sig_genes_per_celltype.keys(), desc='Running GSEA on ATAC')}
+        rna_gsea_res = {celltype: do_gsea(rna_results, celltype) for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc='Running GSEA on RNA')}
+        atac_gsea_res = {celltype: do_gsea(atac_results, celltype) for celltype in tqdm(atac_sig_genes_per_celltype.keys(), desc='Running GSEA on ATAC')}
+
+        ## Save results on a celltype & sex basis
+        output_dir = os.path.join(os.environ['DATAPATH'], 'mdd_data', 'developmental_analysis')
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Save enrichr results
+        for celltype, res in rna_enrichr_res.items():
+            res['sex'] = sex
+            res['celltype'] = celltype
+            res['modality'] = 'RNA'
+            res['method'] = 'enrichr'
+            res.to_csv(os.path.join(output_dir, f'enrichr_RNA_{celltype}_{sex}.csv'), index=False)
+        
+        for celltype, res in atac_enrichr_res.items():
+            res['sex'] = sex
+            res['celltype'] = celltype
+            res['modality'] = 'ATAC'
+            res['method'] = 'enrichr'
+            res.to_csv(os.path.join(output_dir, f'enrichr_ATAC_{celltype}_{sex}.csv'), index=False)
+        
+        # Save gsea results
+        for celltype, res in rna_gsea_res.items():
+            res['sex'] = sex
+            res['celltype'] = celltype
+            res['modality'] = 'RNA'
+            res['method'] = 'gsea'
+            res.to_csv(os.path.join(output_dir, f'gsea_RNA_{celltype}_{sex}.csv'), index=False)
+        
+        for celltype, res in atac_gsea_res.items():
+            res['sex'] = sex
+            res['celltype'] = celltype
+            res['modality'] = 'ATAC'
+            res['method'] = 'gsea'
+            res.to_csv(os.path.join(output_dir, f'gsea_ATAC_{celltype}_{sex}.csv'), index=False)
+
+    # After both sexes are processed, load all results and create comprehensive plots
+    print("\n" + "="*80)
+    print("Creating comprehensive enrichment plots...")
+    print("="*80)
+    
+    create_comprehensive_plot(output_dir, 'RNA')
+    create_comprehensive_plot(output_dir, 'ATAC')
+    create_rna_atac_comparison(output_dir)
+    
+    print("\n" + "="*80)
+    print("All plots and analyses complete!")
+    print("="*80)
 
 
 
@@ -423,3 +845,6 @@ def run_pyDESeq2_all_celltypes(counts, metadata):
     results = stat.results_df
 
     return results
+
+if __name__ == '__main__':
+    main(subset_type=None)

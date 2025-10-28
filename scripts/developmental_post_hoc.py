@@ -1675,8 +1675,8 @@ paths = [
 '''
 paths = [
     ("MDD_ExN_all", leiden_sorted),
-    ('MDD_ExN_5_13_0_12_3_6_9_1_7', ['5', '13', '0', '12', '3', '6', '9', '1', '7']),
-    ('MDD_ExN_5_10_11_2_8_16_15_14', ['5', '10', '11', '2', '8', '16', '15', '14']),
+    ('MDD_ExN_0_10_3_4_1_7_6_9', ['0', '10', '3', '4', '1', '7', '6', '9']),
+    ('MDD_ExN_0_2_12_11_13_8_14', ['0', '2', '12', '11', '13', '8', '14']),
 ]
 
 
@@ -1737,6 +1737,87 @@ sc.pl.paga_compare(target_adata, color="ordinal_pseudotime", node_size_scale=5, 
 
 #devmdd_fig2(target_adata, source_adata)
 
+#%% cluster genes by temporal pattern
+
+from scanpy.metrics import morans_i
+
+sc.pp.normalize_total(source_rna_sub, target_sum=1e4)
+sc.pp.log1p(source_rna_sub)
+
+sc.tl.pca(source_rna_sub, n_comps=50)
+sc.pp.neighbors(source_rna_sub, n_neighbors=30, n_pcs=10)
+sc.tl.umap(source_rna_sub)
+sc.pl.umap(source_rna_sub, color='Cell type')
+sc.tl.diffmap(source_rna_sub, n_comps=30)
+
+source_rna_sub.uns['iroot'] = np.argmax(source_rna_sub.obs['Cell type'].eq('RG'))
+sc.tl.dpt(source_rna_sub)
+sc.pl.umap(source_rna_sub, color=['Cell type', 'ordinal_pseudotime', 'dpt_pseudotime'], wspace=0.7, ncols=3)
+
+## get ordinal pseudotime from ordinal latents
+gene_expr = source_rna_sub.X.toarray()
+ordinal_rna_logits, ordinal_rna_probas, ordinal_rna_latents = ordinal_model(torch.tensor(gene_expr, dtype=torch.float32), modality=0, normalize=0)
+ordinal_rna_prebias = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents)
+ordinal_rna_pt = torch.sigmoid(ordinal_rna_prebias).flatten().detach().cpu().numpy()
+source_rna_sub.obs['ordinal_pseudotime'] = ordinal_rna_pt
+
+## create graph from ordinal latents
+source_rna_sub.obsm['X_ordinal_latents'] = ordinal_rna_latents.detach().cpu().numpy()
+sc.pp.neighbors(source_rna_sub, use_rep='X_ordinal_latents', key_added='X_ordinal_latents_neighbors', n_neighbors=30, n_pcs=10)
+sc.tl.leiden(source_rna_sub, resolution=0.6, random_state=0, neighbors_key='X_ordinal_latents_neighbors')
+sc.tl.umap(source_rna_sub, neighbors_key='X_ordinal_latents_neighbors')
+sc.pl.umap(source_rna_sub, color=['Cell type', 'leiden'], wspace=0.7, ncols=3)
+
+
+moran_per_gene = morans_i(source_rna_sub)
+min_moran, median_moran, max_moran = np.nanargmin(moran_per_gene), np.where(moran_per_gene == np.nanmedian(moran_per_gene))[0][0], np.nanargmax(moran_per_gene)
+topk_moran = pd.Series(moran_per_gene).nlargest(10).index.tolist()
+ordinal_sort = source_rna_sub.obs['ordinal_pseudotime'].argsort()
+dpt_sort = source_rna_sub.obs['dpt_pseudotime'].argsort()
+assert dpt_sort.iloc[0] == source_rna_sub.uns['iroot']
+
+
+all_moran_per_gene = np.hstack(all_moran_per_gene)
+
+gene_expr_sorted = gene_expr[ordinal_sort]
+smooth_gene_expr_df = pd.DataFrame(gene_expr_sorted, columns=source_rna_sub.var_names).rolling(window=100, win_type='hamming', center=True, min_periods=1).mean()
+smooth_gene_expr_df.index = source_rna_sub.obs['ordinal_pseudotime'].sort_values().values
+smooth_gene_expr_df.iloc[:, [min_moran, median_moran, max_moran]].plot(figsize=[5, 5])
+smooth_gene_expr_df.iloc[:, topk_moran].plot(figsize=[5, 5])
+
+# Significant “trajectory-variant” genes:
+sig = source_rna_sub.var.query('morans_i_qval < 0.01').copy()
+sig_genes = sig.index.tolist()
+
+# Order cells by DPT for visualization & smoothing
+order = np.argsort(source_adata.obs['dpt_pseudotime'].values)
+X = source_adata[:, sig_genes].X[order]
+
+# Simple rolling smoothing along DPT
+def rolling_mean(mat, w):
+    c, g = mat.shape
+    out = np.zeros((c, g))
+    half = w//2
+    for i in range(c):
+        lo = max(0, i-half); hi = min(c, i+half+1)
+        out[i] = mat[lo:hi].mean(axis=0)
+    return out
+
+win = max(15, int(0.03 * line.n_obs))
+smooth = rolling_mean(np.asarray(X.todense() if hasattr(X,'todense') else X), win)
+
+# Min–max per gene (cluster by shape)
+sm_min = smooth.min(axis=0); sm_max = smooth.max(axis=0)
+smooth_norm = (smooth - sm_min) / np.maximum(1e-9, (sm_max - sm_min))
+
+# k-means -> km1..km4
+from sklearn.cluster import KMeans
+km = KMeans(n_clusters=4, n_init=50, random_state=0).fit(smooth_norm.T)
+km_labels = pd.Series(km.labels_, index=sig_genes)
+km_map = {0:'km1',1:'km2',2:'km3',3:'km4'}
+km_labels_named = km_labels.map(km_map)
+
+
 #%% load full datasets
 from eclare.data_utils import gene_activity_score_glue
 
@@ -1763,27 +1844,16 @@ pfc_zhu_rna_full_sub.obs['modality'] = 'RNA'
 pfc_zhu_atac_full_sub.obs['modality'] = 'ATAC'
 
 
-#%% import information from Zhu et al. Supplementary Tables S12 and S7
-zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
-gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
-peak_gene_links = pd.read_excel(zhu_supp_tables, sheet_name='Table S7', header=2)
-
-## filter for MDD hits and get gene-peak links
-mdd_hits = gwas_hits[gwas_hits['Trait'].eq('MDD')]
-mdd_hits_gene_peaks = peak_gene_links[peak_gene_links['gene'].isin(mdd_hits['Target gene name'].unique())]
-mdd_hits = mdd_hits.merge(mdd_hits_gene_peaks, left_on='Target gene name', right_on='gene', how='left')
-mdd_hits.rename(columns={'gene': 'gene_linked', 'peak': 'peak_linked', 'Peak coordinates (hg38)': 'peak_ld_buddy'}, inplace=True)
-
-## group by gene and get list of peaks
-genes_peaks_ld_buddy_dict   = mdd_hits.dropna(subset='peak_ld_buddy').groupby('Target gene name')['peak_ld_buddy'].apply(list).to_dict()
-genes_peaks_linked_dict     = mdd_hits.dropna(subset='peak_linked').groupby('Target gene name')['peak_linked'].apply(list).to_dict()
-print('Number of genes with LD buddies: ', len(genes_peaks_ld_buddy_dict))
-print('Number of genes with linked peaks: ', len(genes_peaks_linked_dict))
-
-genes_km_clusters_dict = gwas_hits.dropna(subset='km').groupby('Target gene name')['km'].unique().to_dict()
-
-
 #%% save data in preparation for pyDESeq2
+
+## add ordinal latents and pseudotime to PFC Zhu data
+pfc_zhu_rna_EN = pfc_zhu_rna_full[pfc_zhu_rna_full.obs['Cell type'].isin(source_clusters)].to_memory()
+ordinal_rna_logits, ordinal_rna_probas, ordinal_rna_latents = ordinal_model(torch.tensor(source_rna.X.toarray(), dtype=torch.float32), modality=0, normalize=0)
+ordinal_rna_prebias = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents)
+ordinal_rna_pt = torch.sigmoid(ordinal_rna_prebias).flatten().detach().cpu().numpy()
+pfc_zhu_rna_EN.obs['ordinal_pseudotime'] = ordinal_rna_pt
+pfc_zhu_rna_EN.obsm['X_ordinal_latents'] = ordinal_rna_latents.detach().cpu().numpy()
+pfc_zhu_rna_EN.write_h5ad(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'rna', 'pfc_zhu_rna_EN_ordinal.h5ad'))
 
 # Load data
 mdd_rna_scaled = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled.h5ad'), backed='r')
@@ -1791,6 +1861,10 @@ mdd_rna_scaled_sub = mdd_rna_scaled[mdd_rna_scaled.obs_names.isin(student_rna_su
 
 mdd_rna_scaled_sub.obs = mdd_rna_scaled_sub.obs.merge(source_target_adata.obs, left_index=True, right_index=True, suffixes=('', '_right'))
 mdd_rna_scaled_sub.obs = mdd_rna_scaled_sub.obs.loc[:, ~mdd_rna_scaled_sub.obs.columns.str.endswith('_right')]
+
+## add ordinal latents to mdd_rna_scaled_sub
+mdd_rna_scaled_sub.obsm['X_ordinal_latents'] = ordinal_rna_latents.detach().cpu().numpy()
+sc.pp.neighbors(mdd_rna_scaled_sub, use_rep='X_ordinal_latents', key_added='X_ordinal_latents_neighbors', n_neighbors=30, n_pcs=10)
 
 ## find genes in full data
 mdd_rna_scaled_sub.raw.var.set_index('_index', inplace=True)
@@ -1867,6 +1941,25 @@ mdd_atac_gas_broad_sub.raw = mdd_atac_gas_broad_raw_sub
 cast_object_columns_to_str(mdd_atac_gas_broad_sub)
 mdd_atac_gas_broad_sub.write_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub.h5ad'))
 
+
+#%% import information from Zhu et al. Supplementary Tables S12 and S7
+zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
+gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
+peak_gene_links = pd.read_excel(zhu_supp_tables, sheet_name='Table S7', header=2)
+
+## filter for MDD hits and get gene-peak links
+mdd_hits = gwas_hits[gwas_hits['Trait'].eq('MDD')]
+mdd_hits_gene_peaks = peak_gene_links[peak_gene_links['gene'].isin(mdd_hits['Target gene name'].unique())]
+mdd_hits = mdd_hits.merge(mdd_hits_gene_peaks, left_on='Target gene name', right_on='gene', how='left')
+mdd_hits.rename(columns={'gene': 'gene_linked', 'peak': 'peak_linked', 'Peak coordinates (hg38)': 'peak_ld_buddy'}, inplace=True)
+
+## group by gene and get list of peaks
+genes_peaks_ld_buddy_dict   = mdd_hits.dropna(subset='peak_ld_buddy').groupby('Target gene name')['peak_ld_buddy'].apply(list).to_dict()
+genes_peaks_linked_dict     = mdd_hits.dropna(subset='peak_linked').groupby('Target gene name')['peak_linked'].apply(list).to_dict()
+print('Number of genes with LD buddies: ', len(genes_peaks_ld_buddy_dict))
+print('Number of genes with linked peaks: ', len(genes_peaks_linked_dict))
+
+genes_km_clusters_dict = gwas_hits.dropna(subset='km').groupby('Target gene name')['km'].unique().to_dict()
 
 #%% get gene expression gene expression of select genes
 
@@ -2228,16 +2321,18 @@ data_type = 'leiden_filtered'
 assert data_type in ['aligned','full','leiden_filtered']
 
 if data_type == 'aligned':
-    ld_buddy_hits, linked_hits, modalities = get_gene_expression_and_chromatin_accessibility_full(student_rna_sub, source_rna_sub, student_atac_sub, source_atac_sub, genes_peaks_ld_buddy_dict, genes_peaks_linked_dict)
+    ld_buddy_hits, linked_hits, modalities = \
+        get_gene_expression_and_chromatin_accessibility_full(student_rna_sub, source_rna_sub, student_atac_sub, source_atac_sub, genes_peaks_ld_buddy_dict, genes_peaks_linked_dict)
 
 elif data_type == 'leiden_filtered':
     keep_nuclei = source_target_adata[source_target_adata.obs['leiden'].isin(dict(paths)['L46'])].obs_names.tolist()
-    ld_buddy_hits, linked_hits, modalities = get_gene_expression_and_chromatin_accessibility_full(
-        student_rna_sub[student_rna_sub.obs_names.isin(keep_nuclei)], source_rna_sub[source_rna_sub.obs_names.isin(keep_nuclei)], student_atac_sub[student_atac_sub.obs_names.isin(keep_nuclei)], source_atac_sub[source_atac_sub.obs_names.isin(keep_nuclei)],
+    ld_buddy_hits, linked_hits, modalities = \
+        get_gene_expression_and_chromatin_accessibility_full(student_rna_sub[student_rna_sub.obs_names.isin(keep_nuclei)], source_rna_sub[source_rna_sub.obs_names.isin(keep_nuclei)], student_atac_sub[student_atac_sub.obs_names.isin(keep_nuclei)], source_atac_sub[source_atac_sub.obs_names.isin(keep_nuclei)],
         genes_peaks_ld_buddy_dict, genes_peaks_linked_dict)
 
 elif data_type == 'full':
-    ld_buddy_hits, linked_hits, modalities = get_gene_expression_and_chromatin_accessibility_full(mdd_rna_full_sub, pfc_zhu_rna_full_sub, mdd_atac_full_sub, pfc_zhu_atac_full_sub, genes_peaks_ld_buddy_dict, genes_peaks_linked_dict)
+    ld_buddy_hits, linked_hits, modalities = \
+        get_gene_expression_and_chromatin_accessibility_full(mdd_rna_full_sub, pfc_zhu_rna_full_sub, mdd_atac_full_sub, pfc_zhu_atac_full_sub, genes_peaks_ld_buddy_dict, genes_peaks_linked_dict)
 
 
 ## concat hits dataframes
