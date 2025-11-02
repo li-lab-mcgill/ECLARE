@@ -12,6 +12,7 @@ from scipy.stats import zscore
 from sklearn.cluster import KMeans
 from pygam import GAM
 from pygam.terms import s
+import ast
 
 from esda.moran import Moran
 from libpysal.weights import WSP
@@ -22,6 +23,9 @@ set_env_variables(config_path='/home/mcb/users/dmannk/scMultiCLIP/ECLARE/config'
 
 ## load EN-only data from PFC Zhu
 pfc_zhu_rna_EN = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'rna', 'pfc_zhu_rna_EN_ordinal.h5ad'))
+
+pfc_zhu_atac_full = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'atac', 'PFC_Zhu_atac_raw.h5ad'), backed='r')
+pfc_zhu_atac_EN = pfc_zhu_atac_full[pfc_zhu_atac_full.obs['Cell type'].isin(pfc_zhu_rna_EN.obs['Cell type'].unique())].to_memory()
 
 ## create graph from ordinal latents
 sc.pp.neighbors(pfc_zhu_rna_EN, use_rep='X_ordinal_latents', key_added='X_ordinal_latents_neighbors', n_neighbors=30, n_pcs=10)
@@ -255,3 +259,307 @@ print(matches_df)
 ## write gene-clusters mapping to file to use as gene-sets
 genes_per_cluster.to_csv(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv'))
 print(f"Written gene-clusters mapping to {os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv')}")
+
+from scipy.sparse import csr_matrix
+def build_mask_from_intervals(var_names, intervals_np):
+    """
+    Returns: (mask_bool, n_provided, n_matched)
+    """
+    idx = {p: i for i, p in enumerate(var_names)}
+    hits = [idx[s] for s in map(str, intervals_np) if s in idx]
+    mask = np.zeros(len(var_names), dtype=bool)
+    if hits:
+        mask[np.asarray(hits, dtype=int)] = True
+    return mask, len(intervals_np), len(hits)
+
+def make_peakset_annotation(var_names, sets_dict):
+    """
+    sets_dict: {"setname": np.array([...interval strings...]), ...}
+    Returns: (CSR n_peaks × n_sets, kept_names[list])
+    """
+    cols = []
+    names = []
+    for name, ivals in sets_dict.items():
+        mask, n_in, n_hit = build_mask_from_intervals(var_names, ivals)
+        if n_hit == 0:
+            print(f"[warn] {name}: 0/{n_in} intervals matched var_names — skipping")
+            continue
+        cols.append(mask.astype(np.uint8)[:, None])
+        names.append(name)
+    if not cols:
+        raise ValueError("No intervals matched var_names for any set.")
+    M = np.hstack(cols)  # small dense then CSR
+    return csr_matrix(M), names
+
+def deviations_to_df(dev_adata, row_name="sample", col_name="annotation"):
+    """
+    Convert the AnnData returned by compute_deviations into a tidy DataFrame (samples × annotations).
+    """
+    df = pd.DataFrame(
+        dev_adata.X,
+        index=getattr(dev_adata, "obs_names", None),
+        columns=getattr(dev_adata, "var_names", None),
+    )
+    df.index.name = row_name
+    df.columns.name = col_name
+    return df
+
+def km_cluster_enrichments(output_dir = os.path.join(os.environ['OUTPATH'], 'km_cluster_enrichments')):
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    from pyjaspar import jaspardb
+    import pychromvar as pc
+    from gseapy import enrichr
+    from scipy.stats import norm
+    from statsmodels.stats.multitest import multipletests
+
+    zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
+    peak_gene_links = pd.read_excel(zhu_supp_tables, sheet_name='Table S7', header=2)
+    peak_gene_links['peak'] = peak_gene_links['peak'].str.split(':|-').apply(lambda x: f"{x[0]}:{x[1]}-{x[2]}")
+
+    ## get gene-cluster mappings
+    km_gene_sets = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv'), index_col=0, header=0)
+    km_gene_sets = km_gene_sets['clusters.1'].to_dict()
+    km_gene_sets = {k: ast.literal_eval(v) for k, v in km_gene_sets.items()} # or else, just a single string that looks like a list of genes
+
+    km_gene_sets_df = pd.DataFrame.from_dict(km_gene_sets, orient='index').unstack().reset_index().set_index(0).drop(columns=['level_0']).rename(columns={'level_1': 'km'})
+    peak_gene_links = peak_gene_links.merge(km_gene_sets_df, left_on='gene', right_index=True, how='left')
+    linked_peaks_in_km = peak_gene_links.groupby('km')['peak'].unique().to_dict()
+
+
+    ## pseudobulk ATAC data
+    celltype_donor = pfc_zhu_atac_EN.obs[['Cell type','Donor ID']].apply(lambda x: f"{x[0]}_{x[1]}", axis=1)
+    pseudobulk_groups = pd.get_dummies(celltype_donor, sparse=False).astype(int)
+    pseudobulk_weights = pseudobulk_groups.sum(axis=0) / pseudobulk_groups.sum().sum()
+    pseudobulk_matrix = pfc_zhu_atac_EN.X.T.dot(pseudobulk_groups.values)
+    pseudobulk_matrix = pseudobulk_matrix.T
+    pfc_zhu_atac_pseudobulked = anndata.AnnData(X=pseudobulk_matrix, obs=pseudobulk_groups.columns.to_frame(), var=pfc_zhu_atac_EN.var)
+    pfc_zhu_atac_pseudobulked.obs['n_cells'] = pseudobulk_groups.sum(axis=0)
+    pfc_zhu_atac_pseudobulked = pfc_zhu_atac_pseudobulked[pfc_zhu_atac_pseudobulked.obs['n_cells'] > 50]
+
+    ## subset peaks to reduce memory usage (if enabled)
+    subset_peaks = False
+
+    if subset_peaks:
+        peaks = peak_gene_links['peak'].unique()
+        keep_peaks = \
+            pfc_zhu_atac_pseudobulked.var_names[pfc_zhu_atac_pseudobulked.var_names.isin(peaks)].tolist() + \
+            pfc_zhu_atac_pseudobulked.var_names.to_series().sample(120000).tolist()
+        keep_peaks = np.unique(keep_peaks)
+
+        pfc_zhu_atac_pseudobulked_sub = pfc_zhu_atac_pseudobulked[:,pfc_zhu_atac_pseudobulked.var_names.isin(keep_peaks)]
+        adata = pfc_zhu_atac_pseudobulked_sub.copy()
+    else:
+        adata = pfc_zhu_atac_pseudobulked.copy()
+
+    #pc.get_genome("hg38", output_dir="./")
+    pc.add_peak_seq(adata, genome_file=os.path.join(os.environ['DATAPATH'], 'hg38.fa'), delimiter=':|-')
+    pc.add_gc_bias(adata)
+    pc.get_bg_peaks(adata) # ~2.5 minutes
+
+    ## get motifs
+    jdb_obj = jaspardb(release='JASPAR2020')
+    motifs = jdb_obj.fetch_motifs(
+        collection = 'CORE',
+        tax_group = ['vertebrates'])
+
+    pc.match_motif(adata, motifs=motifs)
+
+    #orig_M = csr_matrix(adata.varm["motif_match"])
+    orig_M = adata.varm["motif_match"]
+    orig_names = np.asarray(adata.uns["motif_name"]).copy()
+
+    motif_backup = orig_M.copy()
+    name_backup  = orig_names.copy()
+
+    dfs_per_set = []
+    n_matching_peaks_per_set = {}
+    for set_name, ivals in linked_peaks_in_km.items():
+
+        print(f"Processing {set_name} (n={len(ivals)})")
+
+        # 1) build mask for this set
+        mask, n_in, n_hit = build_mask_from_intervals(adata.var_names, ivals)
+        if n_hit == 0:
+            print(f"[warn] {set_name}: 0/{n_in} intervals matched var_names — skipping")
+            continue
+
+        # 2) intersect motif annotations with this set
+        #M_subset = csr_matrix(orig_M.multiply(mask[:, None]))      # zero peaks outside the set
+        M_subset = orig_M * mask[:, None]
+
+        # drop motifs with no peaks in this set
+        keep = np.asarray(M_subset.sum(axis=0)).ravel() > 0
+        if keep.sum() == 0:
+            print(f"[warn] {set_name}: no motifs overlap the set — skipping")
+            continue
+        M_subset = M_subset[:, keep]
+        names_subset = orig_names[keep].astype(object)
+
+        # 3) swap in, compute, restore
+        adata.varm["motif_match"] = M_subset
+        adata.uns["motif_name"]   = names_subset
+
+        dev_this = pc.compute_deviations(adata, n_jobs=10)
+
+        # tidy DF; tag columns with the set name to keep them distinct
+        df_this = deviations_to_df(dev_this, col_name="motif")
+        df_this.columns = [f"{m}__in__{set_name}" for m in df_this.columns]
+        dfs_per_set.append(df_this)
+
+        overlap = pd.Series(M_subset.sum(axis=0), index=df_this.columns, name='Overlap').astype(str) + f"/{len(M_subset)}"
+        n_matching_peaks_per_set[set_name] = overlap
+
+    # restore original motif table
+    adata.varm["motif_match"] = motif_backup
+    adata.uns["motif_name"]   = name_backup
+
+    # Join across sets (samples × (motif×set))
+    df_dev_motif_in_sets = pd.concat(dfs_per_set, axis=1).sort_index(axis=1)
+    w = pseudobulk_weights.values[:,None]
+    #assert df_dev_motif_in_sets.index.equals(pseudobulk_weights.index)
+
+    km_devs_dict = {}
+    all_motif_names = []
+    for km in km_gene_sets.keys():
+
+        km_dev = df_dev_motif_in_sets.loc[:, df_dev_motif_in_sets.columns.str.contains(f"__in__{km}")]
+        km_dev.columns = km_dev.columns.str.split('__in__').str[0]
+        all_motif_names.extend(km_dev.columns.tolist())
+
+        Z = km_dev.values
+        #stouffer_Z = np.sum(Z * w, axis=0) / np.sqrt(np.sum(w**2))
+        stouffer_Z = np.sum(Z, axis=0) / np.sqrt(len(Z))
+        p = norm.sf(abs(stouffer_Z)) * 2  # Two-tailed p-value
+        reject, q, _, _ = multipletests(p, method='fdr_bh')
+
+        km_dev_adata = anndata.AnnData(X=km_dev.values, var=km_dev.columns.to_frame(), obs=km_dev.index.to_frame())
+        km_dev_adata.var['q_value'] = q
+        km_dev_adata.var['p_value'] = p
+        km_dev_adata.var['stouffer_Z'] = stouffer_Z
+        km_dev_adata.var['reject'] = reject
+
+        km_devs_dict[km] = km_dev_adata
+
+    ## get motif information
+    all_motif_names = pd.Series(all_motif_names).unique().tolist()
+    all_motifs = [jdb_obj.fetch_motif_by_id('.'.join(m.split('.')[:2])) for m in all_motif_names]
+    all_motif_df = pd.DataFrame({
+        "motif_id": [m.matrix_id for m in all_motifs],
+        "name": [m.name for m in all_motifs],
+        "tf_class": [m.tf_class for m in all_motifs],
+        "species": [m.species for m in all_motifs],
+    }, index=all_motif_names)
+    motifs_name_mapper = all_motif_df['name'].to_dict()
+
+    ## concatenate all km devs
+    km_devs_df_list = []
+    for km, km_dev_adata in km_devs_dict.items():
+
+        if (km_dev_adata.var['q_value']<0.05).any():
+            plot_motif_deviations(km_dev_adata, km, n_matching_peaks_per_set[km], outdir=output_dir)
+        else:
+            print(f"No significant motifs found for {km}")
+
+        df = km_dev_adata.var['reject']
+        df.index = pd.MultiIndex.from_product([[km], df.index], names=['km', 'motif'])
+        km_devs_df_list.append(df)
+
+    ## concatenate all km devs
+    km_devs_df = pd.concat(km_devs_df_list)
+    km_devs_df.fillna(False, inplace=True)
+    km_devs_df = km_devs_df.unstack()
+    km_devs_df.columns = km_devs_df.columns.map(motifs_name_mapper)
+    hits_per_km_atac = km_devs_df.apply(lambda x: x.index[x.fillna(False).values].tolist(), axis=1).to_dict()
+
+    ## EnrichR analysis
+    motifs_overlap_dict = {}
+    hits_per_km_rna = {}
+    for km, km_genes in km_gene_sets.items():
+
+        enr = enrichr(
+            gene_list=list(km_genes),
+            gene_sets="ChEA_2022",
+            cutoff=1.0,
+        )
+        enr_res = enr.results
+        enr_sig = enr_res[enr_res['Adjusted P-value'] < 0.05]
+
+        plot_enrichr_dotplot(enr_sig, km, outdir=output_dir)
+
+        tfs_sig = enr_sig['Term'].str.split(' ').str[0].unique()
+        hits_per_km_rna[km] = tfs_sig.tolist()
+
+        motifs_overlap = set(hits_per_km_atac[km]) & set(tfs_sig)
+        motifs_overlap_dict[km] = list(motifs_overlap)
+
+
+    ## save results to csv
+    pd.DataFrame.from_dict(hits_per_km_rna, orient='index').to_csv(os.path.join(output_dir, 'hits_per_km_rna.csv'))
+    pd.DataFrame.from_dict(hits_per_km_atac, orient='index').to_csv(os.path.join(output_dir, 'hits_per_km_atac.csv'))
+    pd.DataFrame.from_dict(motifs_overlap_dict, orient='index').to_csv(os.path.join(output_dir, 'motifs_overlap.csv'))
+
+    ## enrichment plots
+    from gseapy import dotplot as gp_dotplot
+
+    def plot_enrichr_dotplot(enr_res, km, outdir=None):
+
+        # dotplot
+        ofname = None if outdir is None else os.path.join(outdir, f'enrichr_dotplot_{km}.svg')
+
+        fig, ax = plt.subplots(figsize=(2,6))
+        fig = gp_dotplot(enr_res,
+                column='Combined Score',
+                x='-log10(fdr)',
+                title=f"TF enrichment in {km} (EnrichR)",
+                cmap=plt.cm.winter,
+                size=12,
+                top_term=10,
+                show_ring=False,
+                ax=ax,
+                ofname=ofname)
+
+        # Remove plt.show() - it's not thread-safe
+        if ofname is not None:
+            plt.close(fig)  # Close the figure to free memory
+        else:
+            plt.show()
+
+    def plot_motif_deviations(km_dev_adata, km, overlap, outdir=None):
+
+        ofname = None if outdir is None else os.path.join(outdir, f'pychromvar_dotplot_{km}.svg')
+
+        if overlap.index.str.contains('__in__').any():
+            overlap.index = overlap.index.str.split('__in__').str[0]
+
+        overlap = overlap.str.split('/').str[0] + '/100'
+        km_dev_adata.var = km_dev_adata.var.merge(overlap, left_index=True, right_index=True)
+
+        df_like_enr_res = km_dev_adata.var.rename(columns={0: 'motif', 'q_value': 'FDR q-val'}).copy()
+        df_like_enr_res['neglog10q'] = -np.log10(np.clip(df_like_enr_res['FDR q-val'].values, 1e-300, 1))
+        df_like_enr_res_sig = df_like_enr_res[df_like_enr_res['FDR q-val'] < 0.05]
+
+        fig, ax = plt.subplots(figsize=(6,6))
+        fig = gp_dotplot(df_like_enr_res_sig,
+                column='FDR q-val',
+                x='Stouffer Z',
+                y='motif',
+                title=f"TF enrichment in {km} (pychromVAR)",
+                top_term=15,
+                cmap=plt.cm.winter,
+                size=20,
+                size_legend="blabla",
+                show_ring=False,
+                ax=ax,
+                ofname=ofname)
+
+        leg = ax.get_legend()
+        if leg is not None:
+            leg.set_title("# matched\npeaks")
+            
+
+        if ofname is not None:
+            plt.close(fig)  # Close the figure to free memory
+        else:
+            plt.show()

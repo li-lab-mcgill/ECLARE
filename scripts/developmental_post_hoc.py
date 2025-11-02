@@ -1737,87 +1737,6 @@ sc.pl.paga_compare(target_adata, color="ordinal_pseudotime", node_size_scale=5, 
 
 #devmdd_fig2(target_adata, source_adata)
 
-#%% cluster genes by temporal pattern
-
-from scanpy.metrics import morans_i
-
-sc.pp.normalize_total(source_rna_sub, target_sum=1e4)
-sc.pp.log1p(source_rna_sub)
-
-sc.tl.pca(source_rna_sub, n_comps=50)
-sc.pp.neighbors(source_rna_sub, n_neighbors=30, n_pcs=10)
-sc.tl.umap(source_rna_sub)
-sc.pl.umap(source_rna_sub, color='Cell type')
-sc.tl.diffmap(source_rna_sub, n_comps=30)
-
-source_rna_sub.uns['iroot'] = np.argmax(source_rna_sub.obs['Cell type'].eq('RG'))
-sc.tl.dpt(source_rna_sub)
-sc.pl.umap(source_rna_sub, color=['Cell type', 'ordinal_pseudotime', 'dpt_pseudotime'], wspace=0.7, ncols=3)
-
-## get ordinal pseudotime from ordinal latents
-gene_expr = source_rna_sub.X.toarray()
-ordinal_rna_logits, ordinal_rna_probas, ordinal_rna_latents = ordinal_model(torch.tensor(gene_expr, dtype=torch.float32), modality=0, normalize=0)
-ordinal_rna_prebias = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents)
-ordinal_rna_pt = torch.sigmoid(ordinal_rna_prebias).flatten().detach().cpu().numpy()
-source_rna_sub.obs['ordinal_pseudotime'] = ordinal_rna_pt
-
-## create graph from ordinal latents
-source_rna_sub.obsm['X_ordinal_latents'] = ordinal_rna_latents.detach().cpu().numpy()
-sc.pp.neighbors(source_rna_sub, use_rep='X_ordinal_latents', key_added='X_ordinal_latents_neighbors', n_neighbors=30, n_pcs=10)
-sc.tl.leiden(source_rna_sub, resolution=0.6, random_state=0, neighbors_key='X_ordinal_latents_neighbors')
-sc.tl.umap(source_rna_sub, neighbors_key='X_ordinal_latents_neighbors')
-sc.pl.umap(source_rna_sub, color=['Cell type', 'leiden'], wspace=0.7, ncols=3)
-
-
-moran_per_gene = morans_i(source_rna_sub)
-min_moran, median_moran, max_moran = np.nanargmin(moran_per_gene), np.where(moran_per_gene == np.nanmedian(moran_per_gene))[0][0], np.nanargmax(moran_per_gene)
-topk_moran = pd.Series(moran_per_gene).nlargest(10).index.tolist()
-ordinal_sort = source_rna_sub.obs['ordinal_pseudotime'].argsort()
-dpt_sort = source_rna_sub.obs['dpt_pseudotime'].argsort()
-assert dpt_sort.iloc[0] == source_rna_sub.uns['iroot']
-
-
-all_moran_per_gene = np.hstack(all_moran_per_gene)
-
-gene_expr_sorted = gene_expr[ordinal_sort]
-smooth_gene_expr_df = pd.DataFrame(gene_expr_sorted, columns=source_rna_sub.var_names).rolling(window=100, win_type='hamming', center=True, min_periods=1).mean()
-smooth_gene_expr_df.index = source_rna_sub.obs['ordinal_pseudotime'].sort_values().values
-smooth_gene_expr_df.iloc[:, [min_moran, median_moran, max_moran]].plot(figsize=[5, 5])
-smooth_gene_expr_df.iloc[:, topk_moran].plot(figsize=[5, 5])
-
-# Significant “trajectory-variant” genes:
-sig = source_rna_sub.var.query('morans_i_qval < 0.01').copy()
-sig_genes = sig.index.tolist()
-
-# Order cells by DPT for visualization & smoothing
-order = np.argsort(source_adata.obs['dpt_pseudotime'].values)
-X = source_adata[:, sig_genes].X[order]
-
-# Simple rolling smoothing along DPT
-def rolling_mean(mat, w):
-    c, g = mat.shape
-    out = np.zeros((c, g))
-    half = w//2
-    for i in range(c):
-        lo = max(0, i-half); hi = min(c, i+half+1)
-        out[i] = mat[lo:hi].mean(axis=0)
-    return out
-
-win = max(15, int(0.03 * line.n_obs))
-smooth = rolling_mean(np.asarray(X.todense() if hasattr(X,'todense') else X), win)
-
-# Min–max per gene (cluster by shape)
-sm_min = smooth.min(axis=0); sm_max = smooth.max(axis=0)
-smooth_norm = (smooth - sm_min) / np.maximum(1e-9, (sm_max - sm_min))
-
-# k-means -> km1..km4
-from sklearn.cluster import KMeans
-km = KMeans(n_clusters=4, n_init=50, random_state=0).fit(smooth_norm.T)
-km_labels = pd.Series(km.labels_, index=sig_genes)
-km_map = {0:'km1',1:'km2',2:'km3',3:'km4'}
-km_labels_named = km_labels.map(km_map)
-
-
 #%% load full datasets
 from eclare.data_utils import gene_activity_score_glue
 
@@ -1940,6 +1859,22 @@ mdd_atac_gas_broad_raw_sub = rename_obs_columns(mdd_atac_gas_broad_raw_sub)
 mdd_atac_gas_broad_sub.raw = mdd_atac_gas_broad_raw_sub
 cast_object_columns_to_str(mdd_atac_gas_broad_sub)
 mdd_atac_gas_broad_sub.write_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub.h5ad'))
+
+## filterered mean GRN from brainSCOPE
+from eclare.post_hoc_utils import tree
+with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
+    all_dicts = pickle.load(f)
+mean_grn_df = all_dicts[-1] # female mean GRN
+
+from eclare.data_utils import filter_mean_grn
+mean_grn_df_filtered, mdd_rna_scaled_sub_filtered, mdd_atac_broad_sub_filtered = filter_mean_grn(mean_grn_df, mdd_rna_scaled_sub, mdd_atac_broad_sub, deg_genes=None)
+peak_names_mapper = mdd_atac_broad_sub_filtered.var['GRN_peak_interval'].to_dict()
+
+## save to OUTPATH
+mean_grn_df_filtered.to_csv(os.path.join(os.environ['OUTPATH'], 'mean_grn_df_filtered.csv'), index=False)
+
+with open(os.path.join(os.environ['OUTPATH'], 'peak_names_mapper.pkl'), 'wb') as file:
+    pickle.dump(peak_names_mapper, file)
 
 
 #%% import information from Zhu et al. Supplementary Tables S12 and S7
