@@ -1862,13 +1862,27 @@ mdd_atac_gas_broad_sub.write_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data
 
 ## filterered mean GRN from brainSCOPE
 from eclare.post_hoc_utils import tree
-with open(os.path.join(os.environ['OUTPATH'], 'all_dicts_female.pkl'), 'rb') as f:
-    all_dicts = pickle.load(f)
-mean_grn_df = all_dicts[-1] # female mean GRN
-
 from eclare.data_utils import filter_mean_grn
-mean_grn_df_filtered, mdd_rna_scaled_sub_filtered, mdd_atac_broad_sub_filtered = filter_mean_grn(mean_grn_df, mdd_rna_scaled_sub, mdd_atac_broad_sub, deg_genes=None)
-peak_names_mapper = mdd_atac_broad_sub_filtered.var['GRN_peak_interval'].to_dict()
+
+## get mean GRN from brainSCOPE (similar to get_unified_grns, but less severe filtering since no need for edgeWeight column)
+grn_path = os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'GRNs')
+grn_files = glob(os.path.join(grn_path,'*GRN.txt'))
+
+## load all GRNs and concatenate
+grns = []
+for grn_file in grn_files:
+    grn_df = pd.read_csv(grn_file, delimiter='\t')
+    grns.append(grn_df)
+
+grn_df_clean = pd.concat(grns)
+
+## clean GRNs
+mean_grn_df = grn_df_clean.groupby(['TF','enhancer','TG'])[['edgeWeight','Correlation']].mean() # take average across all cell types
+mean_grn_df.reset_index(inplace=True)
+
+## filter mean GRN by overlapping peaks in ATAC data
+mean_grn_df_filtered, mdd_rna_tmp, mdd_atac_tmp = filter_mean_grn(mean_grn_df, mdd_rna_scaled_sub, mdd_atac_broad, deg_genes=None)
+peak_names_mapper = mdd_atac_tmp.var['GRN_peak_interval'].to_dict()
 
 ## save to OUTPATH
 mean_grn_df_filtered.to_csv(os.path.join(os.environ['OUTPATH'], 'mean_grn_df_filtered.csv'), index=False)

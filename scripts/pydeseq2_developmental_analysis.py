@@ -212,6 +212,9 @@ def main(subset_type=None):
             ax[0, c].set_title(celltype)
             ax[1, c].set_title(celltype)
         plt.tight_layout()
+
+        ## run pychromVAR
+        run_pychromVAR(term_linked_genes, term_linked_peaks, peak_gene_links, mdd_atac_broad_sub, sex)
         
         ## Save results on a celltype & sex basis
         output_dir = os.path.join(os.environ['DATAPATH'], 'mdd_data', 'developmental_analysis')
@@ -275,7 +278,6 @@ def get_peak_gene_links():
     peak_names_mapper = pd.read_pickle(os.path.join(os.environ['OUTPATH'], 'peak_names_mapper.pkl')) # derived from female data
     peak_names_mapper_reverse = {v: k for k, v in peak_names_mapper.items()}
     mean_grn_df_filtered = pd.read_csv(os.path.join(os.environ['OUTPATH'], 'mean_grn_df_filtered.csv'))
-
     peak_gene_links = mean_grn_df_filtered.copy()
     peak_gene_links['peak'] = peak_gene_links['enhancer'].map(peak_names_mapper_reverse)
     peak_gene_links.rename(columns={'TG': 'gene'}, inplace=True)
@@ -563,13 +565,14 @@ def run_pyDESeq2_all_celltypes(counts, metadata):
     return results
 
 
-def run_pychromVAR(term_linked_genes, term_linked_peaks, peak_gene_links):
+def run_pychromVAR(term_linked_genes, term_linked_peaks, peak_gene_links, mdd_atac_broad_sub, sex):
     from pyjaspar import jaspardb
     import pychromvar as pc
     from gseapy import enrichr
     from scipy.stats import norm
     from statsmodels.stats.multitest import multipletests
     import pickle
+    from collections import defaultdict
     def tree(): return defaultdict(tree)
 
     from scipy.sparse import csr_matrix
@@ -616,126 +619,176 @@ def run_pychromVAR(term_linked_genes, term_linked_peaks, peak_gene_links):
         df.columns.name = col_name
         return df
 
-    ## pseudobulk ATAC data
-    celltype_donor_condition_df = mdd_atac_broad_sub.obs[['ClustersMapped','BrainID','condition']]
-    celltype_donor_condition_df['celltype_donor'] = celltype_donor_condition_df[['ClustersMapped','BrainID']].apply(lambda x: f"{x[0]}_{x[1]}", axis=1)
-    pseudobulk_groups = pd.get_dummies(celltype_donor_condition_df['celltype_donor'], sparse=False).astype(int)
+    ## Filter cells by sex first (before pseudobulking)
+    print(f"\n{'='*80}")
+    print(f"Filtering by sex={sex}")
+    print(f"{'='*80}\n")
+    
+    sex_mask = mdd_atac_broad_sub.obs['sex'].str.lower() == sex.lower()
+    mdd_atac_sex_filtered = mdd_atac_broad_sub[sex_mask].copy()
+    
+    print(f"Filtered to {mdd_atac_sex_filtered.n_obs} cells for sex={sex}")
+    
+    ## Pseudobulk ATAC data ONCE (preserving condition info)
+    print("Creating pseudobulk profiles...")
+    celltype_donor_condition_sex_df = mdd_atac_sex_filtered.obs[['ClustersMapped','BrainID','condition','sex']]
+    celltype_donor_condition_sex_df['celltype_donor'] = celltype_donor_condition_sex_df[['ClustersMapped','BrainID']].apply(lambda x: f"{x[0]}_{x[1]}", axis=1)
+    pseudobulk_groups = pd.get_dummies(celltype_donor_condition_sex_df['celltype_donor'], sparse=False).astype(int)
     pseudobulk_weights = pseudobulk_groups.sum(axis=0) / pseudobulk_groups.sum().sum()
-    pseudobulk_matrix = mdd_atac_broad_sub.X.T.dot(pseudobulk_groups.values)
+    pseudobulk_matrix = mdd_atac_sex_filtered.X.T.dot(pseudobulk_groups.values)
     pseudobulk_matrix = pseudobulk_matrix.T
-    mdd_atac_broad_sub_pseudobulked = anndata.AnnData(X=pseudobulk_matrix, obs=pseudobulk_groups.columns.to_frame(), var=mdd_atac_broad_sub.var)
-    mdd_atac_broad_sub_pseudobulked.obs['n_cells'] = pseudobulk_groups.sum(axis=0)
-    mdd_atac_broad_sub_pseudobulked = mdd_atac_broad_sub_pseudobulked[mdd_atac_broad_sub_pseudobulked.obs['n_cells'] > 50]
+    mdd_atac_pseudobulked = anndata.AnnData(X=pseudobulk_matrix, obs=pseudobulk_groups.columns.to_frame(), var=mdd_atac_sex_filtered.var)
+    mdd_atac_pseudobulked.obs['n_cells'] = pseudobulk_groups.sum(axis=0)
+    mdd_atac_pseudobulked = mdd_atac_pseudobulked[mdd_atac_pseudobulked.obs['n_cells'] > 50]
 
-    celltype_donor_condition_df = celltype_donor_condition_df.drop_duplicates(subset='celltype_donor')
-    mdd_atac_broad_sub_pseudobulked.obs = mdd_atac_broad_sub_pseudobulked.obs.merge(celltype_donor_condition_df, left_index=True, right_on='celltype_donor', how='left').drop(columns=0)
+    ## Remove peaks with zero count
+    mdd_atac_pseudobulked = mdd_atac_pseudobulked[:, mdd_atac_pseudobulked.X.sum(axis=0) > 0]
 
+    celltype_donor_condition_sex_df = celltype_donor_condition_sex_df.drop_duplicates(subset='celltype_donor')
+    mdd_atac_pseudobulked.obs = mdd_atac_pseudobulked.obs.merge(celltype_donor_condition_sex_df, left_index=True, right_on='celltype_donor', how='left').drop(columns=0)
+    
+    print(f"Created {mdd_atac_pseudobulked.n_obs} pseudobulk samples (after filtering n_cells > 50)")
+    
     ## subset peaks to reduce memory usage (if enabled)
     subset_peaks = False
 
     if subset_peaks:
         peaks = peak_gene_links['peak'].unique()
         keep_peaks = \
-            mdd_atac_broad_sub_pseudobulked.var_names[mdd_atac_broad_sub_pseudobulked.var_names.isin(peaks)].tolist() + \
-            mdd_atac_broad_sub_pseudobulked.var_names.to_series().sample(120000).tolist()
+            mdd_atac_pseudobulked.var_names[mdd_atac_pseudobulked.var_names.isin(peaks)].tolist() + \
+            mdd_atac_pseudobulked.var_names.to_series().sample(120000).tolist()
         keep_peaks = np.unique(keep_peaks)
 
-        mdd_atac_broad_sub_pseudobulked = mdd_atac_broad_sub_pseudobulked[:,mdd_atac_broad_sub_pseudobulked.var_names.isin(keep_peaks)]
-        adata = mdd_atac_broad_sub_pseudobulked.copy()
-    else:
-        adata = mdd_atac_broad_sub_pseudobulked.copy()
-
+        mdd_atac_pseudobulked = mdd_atac_pseudobulked[:,mdd_atac_pseudobulked.var_names.isin(keep_peaks)]
+    
+    ## Perform peak sequence, GC bias, and motif matching ONCE (before condition loop)
+    print("Adding peak sequences, GC bias, and background peaks...")
     #pc.get_genome("hg38", output_dir="./")
-    pc.add_peak_seq(adata, genome_file=os.path.join(os.environ['DATAPATH'], 'hg38.fa'), delimiter=':|-')
-    pc.add_gc_bias(adata)
-    pc.get_bg_peaks(adata) # ~5 minutes
+    pc.add_peak_seq(mdd_atac_pseudobulked, genome_file=os.path.join(os.environ['DATAPATH'], 'hg38.fa'), delimiter=':|-')
+    pc.add_gc_bias(mdd_atac_pseudobulked)
+    pc.get_bg_peaks(mdd_atac_pseudobulked) # ~5 minutes
 
-    ## get motifs
+    ## Get motifs and match (only once)
+    print("Fetching and matching motifs...")
     jdb_obj = jaspardb(release='JASPAR2020')
     motifs = jdb_obj.fetch_motifs(
         collection = 'CORE',
         tax_group = ['vertebrates'])
 
-    pc.match_motif(adata, motifs=motifs)
+    pc.match_motif(mdd_atac_pseudobulked, motifs=motifs)
 
-    orig_M = adata.varm["motif_match"]
-    orig_names = np.asarray(adata.uns["motif_name"]).copy()
-
-    motif_backup = orig_M.copy()
-    name_backup  = orig_names.copy()
-
-    dfs_per_set = []
-    n_matching_peaks_per_set = {}
-    for set_name, ivals in term_linked_peaks.items():
-
-        print(f"Processing {set_name} (n={len(ivals)})")
-
-        # 1) build mask for this set
-        mask, n_in, n_hit = build_mask_from_intervals(adata.var_names, ivals)
-        if n_hit == 0:
-            print(f"[warn] {set_name}: 0/{n_in} intervals matched var_names — skipping")
+    ## Store original motif annotations (will be reused in each condition)
+    orig_M = mdd_atac_pseudobulked.varm["motif_match"]
+    orig_names = np.asarray(mdd_atac_pseudobulked.uns["motif_name"]).copy()
+    
+    ## Store results for each condition
+    all_celltype_devs_dict = {}
+    
+    ## Loop through conditions (Case and Control)
+    for condition in ['Case', 'Control']:
+        
+        print(f"\n{'='*80}")
+        print(f"Processing condition={condition} (sex={sex})")
+        print(f"{'='*80}\n")
+        
+        ## Filter pseudobulked data by condition
+        condition_mask = mdd_atac_pseudobulked.obs['condition'] == condition
+        mdd_atac_condition_filtered = mdd_atac_pseudobulked[condition_mask].copy()
+        
+        if mdd_atac_condition_filtered.n_obs == 0:
+            print(f"[warn] No pseudobulk samples found for condition={condition} — skipping")
             continue
+        
+        print(f"Filtered to {mdd_atac_condition_filtered.n_obs} pseudobulk samples for condition={condition}")
+        
+        adata = mdd_atac_condition_filtered.copy()
 
-        # 2) intersect motif annotations with this set
-        #M_subset = csr_matrix(orig_M.multiply(mask[:, None]))      # zero peaks outside the set
-        M_subset = orig_M * mask[:, None]
+        ## Use pre-computed motif annotations
+        motif_backup = orig_M.copy()
+        name_backup  = orig_names.copy()
 
-        # drop motifs with no peaks in this set
-        keep = np.asarray(M_subset.sum(axis=0)).ravel() > 0
-        if keep.sum() == 0:
-            print(f"[warn] {set_name}: no motifs overlap the set — skipping")
-            continue
-        M_subset = M_subset[:, keep]
-        names_subset = orig_names[keep].astype(object)
+        ## loop through term-linked peaks and compute deviations
+        dfs_per_set = []
+        n_matching_peaks_per_set = {}
+        for set_name, ivals in term_linked_peaks.items():
 
-        # 3) swap in, compute, restore
-        adata.varm["motif_match"] = M_subset
-        adata.uns["motif_name"]   = names_subset
+            print(f"Processing {set_name} (n={len(ivals)})")
 
-        dev_this = pc.compute_deviations(adata, n_jobs=10)
+            # 1) build mask for this set
+            mask, n_in, n_hit = build_mask_from_intervals(adata.var_names, ivals)
+            if n_hit == 0:
+                print(f"[warn] {set_name}: 0/{n_in} intervals matched var_names — skipping")
+                continue
 
-        # tidy DF; tag columns with the set name to keep them distinct
-        df_this = deviations_to_df(dev_this, col_name="motif")
-        df_this.columns = [f"{m}__in__{set_name}" for m in df_this.columns]
-        dfs_per_set.append(df_this)
+            # 2) intersect motif annotations with this set
+            M_subset = orig_M * mask[:, None]
 
-        overlap = pd.Series(M_subset.sum(axis=0), index=df_this.columns, name='Overlap').astype(str) + f"/{len(M_subset)}"
-        n_matching_peaks_per_set[set_name] = overlap
+            # drop motifs with no peaks in this set
+            keep = np.asarray(M_subset.sum(axis=0)).ravel() > 0
+            if keep.sum() == 0:
+                print(f"[warn] {set_name}: no motifs overlap the set — skipping")
+                continue
+            M_subset = M_subset[:, keep]
+            names_subset = orig_names[keep].astype(object)
 
-    # restore original motif table
-    adata.varm["motif_match"] = motif_backup
-    adata.uns["motif_name"]   = name_backup
+            # 3) swap in, compute, restore
+            adata.varm["motif_match"] = M_subset
+            adata.uns["motif_name"]   = names_subset
 
-    # Join across sets (samples × (motif×set))
-    df_dev_motif_in_sets = pd.concat(dfs_per_set, axis=1).sort_index(axis=1)
-    #w = pseudobulk_weights.values[:,None]
-    #assert df_dev_motif_in_sets.index.equals(pseudobulk_weights.index)
+            dev_this = pc.compute_deviations(adata, n_jobs=10)
 
-    celltype_devs_dict = {}
-    all_motif_names = []
-    for celltype in term_linked_genes.keys():
+            # tidy DF; tag columns with the set name to keep them distinct
+            df_this = deviations_to_df(dev_this, col_name="motif")
+            df_this.columns = [f"{m}__in__{set_name}" for m in df_this.columns]
+            dfs_per_set.append(df_this)
 
-        celltype_dev = df_dev_motif_in_sets.loc[:, df_dev_motif_in_sets.columns.str.contains(f"__in__{celltype}")]
-        celltype_dev.columns = celltype_dev.columns.str.split('__in__').str[0]
-        all_motif_names.extend(celltype_dev.columns.tolist())
+            overlap = pd.Series(M_subset.sum(axis=0), index=df_this.columns, name='Overlap').astype(str) + f"/{len(M_subset)}"
+            n_matching_peaks_per_set[set_name] = overlap
 
-        Z = celltype_dev.values
-        #stouffer_Z = np.sum(Z * w, axis=0) / np.sqrt(np.sum(w**2))
-        stouffer_Z = np.sum(Z, axis=0) / np.sqrt(len(Z))
-        p = norm.sf(abs(stouffer_Z)) * 2  # Two-tailed p-value
-        reject, q, _, _ = multipletests(p, method='fdr_bh')
+        # restore original motif table
+        adata.varm["motif_match"] = motif_backup
+        adata.uns["motif_name"]   = name_backup
 
-        celltype_dev_adata = anndata.AnnData(X=celltype_dev.values, var=celltype_dev.columns.to_frame(), obs=celltype_dev.index.to_frame())
-        celltype_dev_adata.var['q_value'] = q
-        celltype_dev_adata.var['p_value'] = p
-        celltype_dev_adata.var['stouffer_Z'] = stouffer_Z
-        celltype_dev_adata.var['reject'] = reject
+        # Join across sets (samples × (motif×set))
+        df_dev_motif_in_sets = pd.concat(dfs_per_set, axis=1).sort_index(axis=1)
+        #w = pseudobulk_weights.values[:,None]
+        #assert df_dev_motif_in_sets.index.equals(pseudobulk_weights.index)
 
-        celltype_devs_dict[celltype] = celltype_dev_adata
+        celltype_devs_dict = {}
+        all_motif_names = []
+        for celltype in term_linked_genes.keys():
 
-        print(f"Hits in {celltype}: {celltype_dev_adata.var['reject'].sum()}")
+            celltype_dev = df_dev_motif_in_sets.loc[:, df_dev_motif_in_sets.columns.str.contains(f"__in__{celltype}")]
+            celltype_dev.columns = celltype_dev.columns.str.split('__in__').str[0]
+            all_motif_names.extend(celltype_dev.columns.tolist())
 
-    return adata
+            Z = celltype_dev.values
+            #stouffer_Z = np.sum(Z * w, axis=0) / np.sqrt(np.sum(w**2))
+            stouffer_Z = np.sum(Z, axis=0) / np.sqrt(len(Z))
+            p = norm.sf(abs(stouffer_Z)) * 2  # Two-tailed p-value
+            reject, q, _, _ = multipletests(p, method='fdr_bh')
+
+            celltype_dev_adata = anndata.AnnData(X=celltype_dev.values, var=celltype_dev.columns.to_frame(), obs=celltype_dev.index.to_frame())
+            celltype_dev_adata.var['q_value'] = q
+            celltype_dev_adata.var['p_value'] = p
+            celltype_dev_adata.var['stouffer_Z'] = stouffer_Z
+            celltype_dev_adata.var['reject'] = reject
+
+            celltype_devs_dict[celltype] = celltype_dev_adata
+
+            print(f"Hits in {celltype}: {celltype_dev_adata.var['reject'].sum()}")
+        
+        ## Store results for this condition
+        all_celltype_devs_dict[condition] = celltype_devs_dict
+
+    ## TMP
+    x = all_celltype_devs_dict.get('Case').get('RG').var.get('stouffer_Z').values
+    y = all_celltype_devs_dict.get('Control').get('RG').var.get('stouffer_Z').values
+    xy_df = pd.DataFrame({'x': x, 'y': y})
+    xy_df = xy_df[~(xy_df==0).all(axis=1)]
+    delta = x - y
+
+    return all_celltype_devs_dict
 
 def create_comprehensive_plot(output_dir, modality_filter):
     """
