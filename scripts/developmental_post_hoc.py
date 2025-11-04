@@ -1876,12 +1876,19 @@ for grn_file in grn_files:
 
 grn_df_clean = pd.concat(grns)
 
+## quantify imbalance of correlation signs for given GRN triplet, for ExN cell types
+ExN_celltypes = ['L6.IT.Car3', 'L6.CT', 'L2.3.IT', 'L5.IT', 'L6b', 'L5.6.NP', 'L6.IT', 'L4.IT', 'L5.ET']
+sign_score_grn = grn_df_clean.loc[grn_df_clean['celltype'].isin(ExN_celltypes)].dropna(subset='Correlation').groupby(['enhancer','TG'])['Correlation'].apply(lambda x: np.sign(x).mean())
+abs_sign_score_grn = sign_score_grn.abs().rename('abs_sign_score_grn')
+#grn_df_clean.merge(abs_sign_score_grn, left_on=['TF','enhancer','TG'], right_index=True, how='left')
+
 ## clean GRNs
-mean_grn_df = grn_df_clean.groupby(['TF','enhancer','TG'])[['edgeWeight','Correlation']].mean() # take average across all cell types
+mean_grn_df = grn_df_clean.dropna(subset='Correlation').groupby(['TF','enhancer','TG'])[['edgeWeight','Correlation']].mean() # take average across all cell types
+mean_grn_df = mean_grn_df.merge(abs_sign_score_grn, left_index=True, right_index=True, how='left')
 mean_grn_df.reset_index(inplace=True)
 
 ## filter mean GRN by overlapping peaks in ATAC data
-mean_grn_df_filtered, mdd_rna_tmp, mdd_atac_tmp = filter_mean_grn(mean_grn_df, mdd_rna_scaled_sub, mdd_atac_broad, deg_genes=None)
+mean_grn_df_filtered, mdd_rna_tmp, mdd_atac_tmp = filter_mean_grn(mean_grn_df, mdd_rna_full, mdd_atac_broad, deg_genes=None) # use mdd_rna_full for (almost) full genome, and mdd_atac_broad for all broad peaks in MDD data
 peak_names_mapper = mdd_atac_tmp.var['GRN_peak_interval'].to_dict()
 
 ## save to OUTPATH
