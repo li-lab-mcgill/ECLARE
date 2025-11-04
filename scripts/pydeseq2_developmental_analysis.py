@@ -174,7 +174,7 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
         rna_results = concat_results(rna_per_celltype, rna_var)
         atac_results = concat_results(atac_per_celltype, atac_var)
 
-        ## for ATAC, perform FDR correction for candidate peaks only
+        ## TMP: for ATAC, perform FDR correction for candidate peaks only
         candidate_egr1_peaks = peak_gene_links.loc[peak_gene_links['TF'].eq('EGR1')]
         atac_results['egr1_or_target'] = atac_results['gene'].isin(candidate_egr1_peaks['peak'])
 
@@ -246,18 +246,27 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
         rna_enrichr_res_chea_celltypes = {celltype: do_enrichr(rna_sig_results, [celltype], 'ChEA_2022') for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc='Running EnrichR on RNA - ChEA_2022')}
         atac_enrichr_res_chea_celltypes = {celltype: do_enrichr(atac_sig_results, [celltype], 'ChEA_2022') for celltype in tqdm(atac_sig_genes_per_celltype.keys(), desc='Running EnrichR on ATAC - ChEA_2022')}
 
-        ## search for EGR1 term in enrichr results
+        ## run enrichr for each celltype - test brainSCOPE TF-TG links
+        tf_tg_links = peak_gene_links.groupby('TF')['gene'].unique().to_dict()
+        rna_enrichr_res_brainscope = {celltype: do_enrichr(rna_sig_results, [celltype], tf_tg_links) for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc='Running EnrichR on RNA - brainSCOPE TF-TG links')}
+        best_egr1_term = 'EGR1'
+        best_nr4a2_term = 'NR4A2'
+        best_sox2_term = 'SOX2'
+        best_spi1_term = 'SPI1'
+
+        """ ## search for EGR1 term in enrichr results
         egr1_terms = rna_enrichr_res_chea_all.loc[rna_enrichr_res_chea_all['Term'].str.contains('EGR1'), 'Term'].unique()
         best_egr1_term = egr1_terms[0]
 
         ## searchr for NR4A2 term in enrichr results
         nr4a2_terms = rna_enrichr_res_chea_all.loc[rna_enrichr_res_chea_all['Term'].str.contains('NR4A2'), 'Term'].unique()
-        best_nr4a2_term = nr4a2_terms[0]
+        best_nr4a2_term = nr4a2_terms[0] """
 
-        terms_dict = {'EGR1': best_egr1_term, 'NR4A2': best_nr4a2_term}
+
+        terms_dict = {'EGR1': best_egr1_term, 'NR4A2': best_nr4a2_term, 'SOX2': best_sox2_term, 'SPI1': best_spi1_term}
 
         ## volcano plots - best EGR1 term
-        def find_term_linked_genes_and_peaks(TF_name):
+        def find_term_linked_genes_and_peaks(TF_name, rna_results, rna_enrichr_res_celltypes, peak_gene_links):
 
             fig, ax = plt.subplots(2, 4, figsize=(20, 11), sharex=True, sharey=True)
             plt.suptitle(terms_dict[TF_name])
@@ -269,8 +278,12 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
                 results['km'] = results['gene'].map(km_gene_sets_mapper)
 
                 ## extract linked genes and peaks for genes overlapping with EGR1 term (EnrichR)
-                term_genes = rna_enrichr_res_chea_celltypes[celltype].loc[rna_enrichr_res_chea_celltypes[celltype]['Term'].eq(terms_dict[TF_name]), 'Genes'].str.split(';').iloc[0]
-                peak_gene_link_in_term = (peak_gene_links['TF'].eq(TF_name) & peak_gene_links['gene'].isin(term_genes))
+                try:
+                    term_genes = rna_enrichr_res_celltypes[celltype].loc[rna_enrichr_res_celltypes[celltype]['Term'].eq(terms_dict[TF_name]), 'Genes'].str.split(';').iloc[0]
+                    peak_gene_link_in_term = (peak_gene_links['TF'].eq(TF_name) & peak_gene_links['gene'].isin(term_genes))
+                except:
+                    print(f"No term-linked genes found for {celltype} and {terms_dict[TF_name]}")
+                    term_genes = []
 
                 term_linked_genes[celltype] = peak_gene_links.loc[peak_gene_link_in_term, 'gene'].unique()
                 term_linked_peaks[celltype] = peak_gene_links.loc[peak_gene_link_in_term, 'peak'].unique()
@@ -284,63 +297,84 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
             plt.savefig(os.path.join(os.environ['OUTPATH'], 'pychromVAR', TF_name, sex, f'volcano_plot_{sex}.png'))
             plt.close()
 
+            print('Volcano plot saved to', os.path.join(os.environ['OUTPATH'], 'pychromVAR', TF_name, sex, f'volcano_plot_{sex}.png'))
+
             return term_linked_genes, term_linked_peaks
 
         ## find term linked genes and peaks for EGR1
-        term_linked_genes, term_linked_peaks = find_term_linked_genes_and_peaks('EGR1')
 
-        if gene_activity_score_type is not None:
-            
-            res = run_pychromVAR_case_control(
-                term_linked_genes,
-                term_linked_peaks,
-                peak_gene_links,
-                mdd_atac_broad_sub,
-                sex,
-                genome_fasta_path=os.path.join(os.environ['DATAPATH'], 'hg38.fa'))
+        def atac_enrichment_analysis(TF_name, rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type):
 
-            per_pb = res["per_pseudobulk_z"]
-            per_pb['set'] = pd.Categorical(per_pb['set'], categories=per_pb['set'].unique(), ordered=True)
+            term_linked_genes, term_linked_peaks = find_term_linked_genes_and_peaks(TF_name, rna_results, rna_enrichr_res_brainscope, peak_gene_links)
 
-        else:
+            if gene_activity_score_type is not None:
+                
+                res = run_pychromVAR_case_control(
+                    term_linked_genes,
+                    term_linked_peaks,
+                    peak_gene_links,
+                    mdd_atac_broad_sub,
+                    sex,
+                    genome_fasta_path=os.path.join(os.environ['DATAPATH'], 'hg38.fa'))
 
-            all_terms_genes = np.unique(np.hstack(list(term_linked_genes.values())))
-            all_terms_peaks = np.unique(np.hstack(list(term_linked_peaks.values())))
-            results_in_term = atac_results.loc[atac_results['gene'].isin(all_terms_peaks)]
+                per_pb = res["per_pseudobulk_z"]
+                per_pb['set'] = pd.Categorical(per_pb['set'], categories=per_pb['set'].unique(), ordered=True)
 
-            ## filter results by logFC
-            results_in_term_filtered = results_in_term.loc[results_in_term['log2FoldChange'].abs().ge(1.0)]
+            else:
 
-            ## FDR correction on filtered results
-            padj_term = multipletests(results_in_term_filtered['pvalue'], method='fdr_bh')[1]
+                ## extract results in term
+                all_terms_genes = np.unique(np.hstack(list(term_linked_genes.values())))
+                all_terms_peaks = np.unique(np.hstack(list(term_linked_peaks.values())))
+                results_in_term = atac_results.loc[atac_results['gene'].isin(all_terms_peaks)]
 
-            ## assign FDR corrected p-values and significant results
-            results_in_term_filtered = results_in_term_filtered.assign(
-                padj_term=padj_term,
-                signif_term=padj_term<0.05,
-                mlog10_pvalue=-np.log10(results_in_term_filtered['pvalue'])
-            )
-            print(f"{np.sum(results_in_term_filtered['signif_term'])}/{len(results_in_term_filtered)}")
+                ## filter results by logFC
+                results_in_term_filtered = results_in_term.loc[results_in_term['log2FoldChange'].abs().ge(1.5)]
 
-            ## extract significant results and peaks
-            sig_results_in_term = results_in_term_filtered.loc[results_in_term_filtered['signif_term']]
-            sig_peaks = sig_results_in_term.rename(columns={'gene':'peak'}).get('peak').to_frame()
+                ## FDR correction on filtered results
+                padj_term = multipletests(results_in_term_filtered['pvalue'], method='fdr_bh')[1]
 
-            ## extract genes linked to significant peaks
-            sig_genes_linked_to_peaks = sig_peaks.reset_index().merge(
-                peak_gene_links.loc[
-                    peak_gene_links['TF'].eq('EGR1') & \
-                    peak_gene_links['gene'].isin(all_terms_genes) & \
-                    peak_gene_links['peak'].isin(sig_peaks['peak'])
-                    ],
-                left_on='peak', right_on='peak', how='left').set_index('celltype')
+                ## assign FDR corrected p-values and significant results
+                results_in_term_filtered = results_in_term_filtered.assign(
+                    padj_term=padj_term,
+                    signif_term=padj_term<0.05,
+                    mlog10_pvalue=-np.log10(results_in_term_filtered['pvalue'])
+                )
+                print(f"{np.sum(results_in_term_filtered['signif_term'])}/{len(results_in_term_filtered)}")
 
-            ## ensure that the genes linked to significant peaks are also linked to the term-linked genes for each celltype/term
-            filtered_sig_genes_linked_to_peaks = sig_genes_linked_to_peaks[sig_genes_linked_to_peaks.apply(
-                lambda row: row['peak'] in term_linked_peaks.get(row.name, []) and 
-                            row['gene'] in term_linked_genes.get(row.name, []), axis=1
-            )]
+                ## extract significant results and peaks
+                sig_results_in_term = results_in_term_filtered.loc[results_in_term_filtered['signif_term']]
+                sig_peaks = sig_results_in_term.rename(columns={'gene':'peak'}).get('peak').to_frame()
 
+                ## extract genes linked to significant peaks
+                sig_genes_linked_to_peaks = sig_peaks.reset_index().merge(
+                    peak_gene_links.loc[
+                        peak_gene_links['TF'].eq(TF_name) & \
+                        peak_gene_links['gene'].isin(all_terms_genes) & \
+                        peak_gene_links['peak'].isin(sig_peaks['peak'])
+                        ],
+                    left_on='peak', right_on='peak', how='left').set_index('celltype')
+
+                ## ensure that the genes linked to significant peaks are also linked to the term-linked genes for each celltype
+                filtered_sig_genes_linked_to_peaks = sig_genes_linked_to_peaks[sig_genes_linked_to_peaks.apply(
+                    lambda row: row['peak'] in term_linked_peaks.get(row.name, []) and 
+                                row['gene'] in term_linked_genes.get(row.name, []), axis=1
+                )]
+
+            ## compare with sc-compReg results for female ExN
+            female_ExN = pd.read_csv(os.path.join(os.environ['OUTPATH'], 'enrichment_analyses_16103846_41', 'mean_grn_df_filtered_female_ExN.csv'))
+            female_ExN_TF = female_ExN.loc[female_ExN['TF'].eq(TF_name)]
+
+            ## check overlap between filtered sig genes linked to peaks and sc-compReg results for female ExN EGR1
+            #set(sig_genes_linked_to_peaks['gene']) & set(female_ExN_TF['TG'])
+            rna_overlap_with_scCompReg = set(filtered_sig_genes_linked_to_peaks['gene']) & set(female_ExN_EGR1['TG'])
+            atac_overlap_with_scCompReg = set(all_terms_genes) & set(female_ExN_TF['TG'])
+
+            return filtered_sig_genes_linked_to_peaks, rna_overlap_with_scCompReg, atac_overlap_with_scCompReg
+
+        egr1_sig_genes_linked_to_peaks, egr1_rna_overlap_with_scCompReg, egr1_atac_overlap_with_scCompReg = atac_enrichment_analysis('EGR1', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
+        nr4a2_sig_genes_linked_to_peaks, nr4a2_rna_overlap_with_scCompReg, nr4a2_atac_overlap_with_scCompReg = atac_enrichment_analysis('NR4A2', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
+        sox2_sig_genes_linked_to_peaks, sox2_rna_overlap_with_scCompReg, sox2_atac_overlap_with_scCompReg = atac_enrichment_analysis('SOX2', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
+        spi1_sig_genes_linked_to_peaks, spi1_rna_overlap_with_scCompReg, spi1_atac_overlap_with_scCompReg = atac_enrichment_analysis('SPI1', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
 
 
         def ttest_case_control(per_pb, condition_col="condition", value_col="z", set_col="set",
@@ -493,7 +527,7 @@ def subset_data(adata, gwas_hits, subset_type, hvg_genes=None):
     return adata
 
 
-def run_pyDESeq2_on_celltypes(adata, sex, test_type='split'):
+def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', min_n_cells=10):
     
     all_mdd_subjects_counts_adata = []
     all_counts = []
@@ -509,6 +543,12 @@ def run_pyDESeq2_on_celltypes(adata, sex, test_type='split'):
             'most_common_cluster', 'Condition', 'Sex', 'OriginalSub',
             pseudo_replicates='Subjects', overlapping_only=False
         )
+
+        ## filter by minimum number of cells
+        keep_pseudobulk = metadata['n_cells'].astype(int).ge(min_n_cells)
+        mdd_subjects_counts_adata = mdd_subjects_counts_adata[keep_pseudobulk]
+        counts = counts[keep_pseudobulk.values]
+        metadata = metadata[keep_pseudobulk.values]
 
         all_mdd_subjects_counts_adata.append(mdd_subjects_counts_adata)
         all_counts.append(counts)
@@ -526,22 +566,18 @@ def run_pyDESeq2_on_celltypes(adata, sex, test_type='split'):
 
     ## check if all genes have at least one zero-count (used in pyDESeq2 to switch to iterative fitting)
     if (counts==0).any(0).all():
-        print("All genes have at least one zero-count, filtering pseudobulks with zeros")
-        peak_with_minimum_zeros = (counts==0).sum(0).argmin()
-        pseudobulks_where_zeros = (counts[:, peak_with_minimum_zeros] == 0).astype(bool)
-        counts = counts[~pseudobulks_where_zeros]
-        metadata = metadata[~pseudobulks_where_zeros]
-        mdd_subjects_counts_adata = mdd_subjects_counts_adata[~pseudobulks_where_zeros]
-
+        print("All genes have at least one zero-count, setting size factors fit type to 'poscounts'")
+        sf_type = 'poscounts'
     else:
-        print("Not all genes have at least one zero-count")
+        print("Not all genes have at least one zero-count, keeping size factors fit type as 'ratio'")
+        sf_type = 'ratio'
 
     ## run pyDESeq2
     #per_celltype = run_pyDESeq2_per_celltype(counts, metadata, 'most_common_cluster')
     if test_type == 'split':
-        per_celltype = run_pyDESeq2_contrasts(counts, metadata, 'Condition')
+        per_celltype = run_pyDESeq2_contrasts(counts, metadata, 'Condition', sf_type=sf_type)
     elif test_type == 'all':
-        per_celltype = run_pyDESeq2_all_celltypes(counts, metadata)
+        per_celltype = run_pyDESeq2_all_celltypes(counts, metadata, sf_type=sf_type)
 
     return per_celltype, mdd_subjects_counts_adata.var
 
@@ -633,10 +669,11 @@ def get_pseudo_replicates_counts(sex, celltype, rna_scaled_with_counts, mdd_rna_
 
             subject_condition = rna_scaled_with_counts.obs[rna_condition_key][rna_scaled_with_counts.obs[rna_subject_key] == subject].iloc[0]
             batch = rna_scaled_with_counts.obs['Batch'][rna_scaled_with_counts.obs[rna_subject_key] == subject].iloc[0]
+            n_cells = len(rna_indices)
 
             rna_subject_obs = pd.DataFrame(
-                np.hstack([batch, subject_condition, sex, celltype]).reshape(1, -1),
-                columns=['Batch', rna_condition_key, rna_sex_key, rna_celltype_key],
+                np.hstack([batch, subject_condition, sex, celltype, n_cells]).reshape(1, -1),
+                columns=['Batch', rna_condition_key, rna_sex_key, rna_celltype_key, 'n_cells'],
                 index=[subject],
             )
 
@@ -686,7 +723,7 @@ def run_pyDESeq2_per_celltype(counts, metadata, rna_celltype_key, save_dir=None)
 
     return per_celltype
 
-def run_pyDESeq2_contrasts(counts, metadata, rna_condition_key, save_dir=None):
+def run_pyDESeq2_contrasts(counts, metadata, rna_condition_key, sf_type='ratio', save_dir=None):
 
     inference = DefaultInference(n_cpus=8)
 
@@ -710,6 +747,7 @@ def run_pyDESeq2_contrasts(counts, metadata, rna_condition_key, save_dir=None):
         design="~ Batch + group",
         refit_cooks=True,
         inference=inference,
+        size_factors_fit_type=sf_type
     )
     dds.deseq2()
 
