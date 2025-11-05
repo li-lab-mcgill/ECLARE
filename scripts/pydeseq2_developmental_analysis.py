@@ -141,7 +141,7 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
     gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
 
     ## load peak-gene links and km gene sets
-    peak_gene_links = get_peak_gene_links()
+    peak_gene_links, female_ExN = get_peak_gene_links()
     km_gene_sets, km_gene_sets_mapper = load_km_gene_sets()
 
     ## restrict peak-enhancer-gene triplets for which all correlation signs agree (all positive or all negative)
@@ -230,9 +230,10 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
         rna_all.index.name = 'gene'
         rna_all.reset_index(inplace=True)
 
-        ## per celltype
-        rna_per_celltype, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, max_min_n_cells=10)
-        atac_per_celltype, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, max_min_n_cells=10)
+        ## per celltype with power-tilted approach
+        # Defaults: max_min_n_cells=20, max_imbalance_ratio=2.0, N_max_cells_per_donor=200
+        rna_per_celltype, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, N_max_cells_per_donor=100)
+        atac_per_celltype, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, N_max_cells_per_donor=100)
 
         ## ensure that atac_var in proper format (and that rna_var an index)
         atac_var = atac_var.reset_index().loc[:,'index'].str.split(':|-', expand=True).apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
@@ -351,47 +352,111 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
         terms_dict = {'EGR1': best_egr1_term, 'NR4A2': best_nr4a2_term, 'SOX2': best_sox2_term, 'SPI1': best_spi1_term} """
 
 
-        ## volcano plots - best EGR1 term
-        def find_term_linked_genes_and_peaks(TF_name, rna_results, rna_enrichr_res_celltypes, peak_gene_links):
+        ## volcano plots - plot term linked genes for RNA or ATAC results
+        def plot_term_linked_volcano_plots(TF_name, results_data, term_linked_genes_dict, celltypes, 
+                                           output_dir, sex, data_type='RNA', km_gene_sets_mapper=None):
+            """
+            Create volcano plots for term-linked genes across cell types.
+            
+            Parameters:
+            -----------
+            TF_name : str
+                Name of the transcription factor
+            results_data : DataFrame
+                Results data indexed by celltype (RNA or ATAC results)
+            term_linked_genes_dict : dict or DataFrame
+                Either a dictionary mapping celltypes to term-linked genes/peaks,
+                or a DataFrame with celltype index and 'gene'/'peak' columns (enrichment results)
+            celltypes : list
+                List of celltypes to plot
+            output_dir : str
+                Base output directory path
+            sex : str
+                Sex identifier for output filename
+            data_type : str, optional
+                Type of data being plotted ('RNA' or 'ATAC'), default 'RNA'
+            km_gene_sets_mapper : dict, optional
+                Mapping of genes to km clusters, if None will skip km annotation
+            """
+            # Convert enrichment results DataFrame to dict if needed
+            if isinstance(term_linked_genes_dict, pd.DataFrame):
+                # Extract genes/peaks per celltype from DataFrame
+                term_genes_dict = {}
+                # For ATAC data, use 'peak' column; for RNA data, use 'gene' column
+                feature_col = 'peak' if data_type == 'ATAC' else 'gene'
+                
+                for celltype in celltypes:
+                    if celltype in term_linked_genes_dict.index:
+                        celltype_data = term_linked_genes_dict.loc[celltype]
+                        # Handle both single row and multiple rows per celltype
+                        if isinstance(celltype_data, pd.Series):
+                            feature_value = celltype_data.get(feature_col)
+                            term_genes_dict[celltype] = [feature_value] if pd.notna(feature_value) else []
+                        else:
+                            if feature_col in celltype_data.columns:
+                                term_genes_dict[celltype] = celltype_data[feature_col].dropna().unique()
+                            else:
+                                term_genes_dict[celltype] = []
+                    else:
+                        term_genes_dict[celltype] = []
+            else:
+                term_genes_dict = term_linked_genes_dict
 
             fig, ax = plt.subplots(2, 4, figsize=(20, 11), sharex=True, sharey=True)
-            plt.suptitle(terms_dict[TF_name])
+            plt.suptitle(f"{terms_dict[TF_name]} - {data_type}")
 
-            term_linked_genes = {}
-            term_linked_peaks = {}
-            for c, celltype in enumerate(['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']):
-                results = rna_results.loc[celltype].copy()
-                results['km'] = results['gene'].map(km_gene_sets_mapper)
+            for c, celltype in enumerate(celltypes):
+                results = results_data.loc[celltype].copy()
 
-                ## extract linked genes and peaks for genes overlapping with EGR1 term (EnrichR)
-                try:
-                    term_genes = rna_enrichr_res_celltypes[celltype].loc[rna_enrichr_res_celltypes[celltype]['Term'].eq(terms_dict[TF_name]), 'Genes'].str.split(';').iloc[0]
-                    peak_gene_link_in_term = (peak_gene_links['TF'].eq(TF_name) & peak_gene_links['gene'].isin(term_genes))
-                except:
-                    print(f"No term-linked genes found for {celltype} and {terms_dict[TF_name]}")
-                    term_genes = []
+                if (km_gene_sets_mapper is not None) and (data_type == 'RNA'):
+                    results['km'] = results['gene'].map(km_gene_sets_mapper)
+                elif (km_gene_sets_mapper is not None) and (data_type == 'ATAC'):
+                    results['km'] = results['gene_linked_to_peak'].map(km_gene_sets_mapper)
 
-                term_linked_genes[celltype] = peak_gene_links.loc[peak_gene_link_in_term, 'gene'].unique()
-                term_linked_peaks[celltype] = peak_gene_links.loc[peak_gene_link_in_term, 'peak'].unique()
+                term_genes = term_genes_dict.get(celltype, [])
 
                 volcano_plot(results, term_genes, (ax[0, c], ax[1, c]))
                 ax[0, c].set_title(celltype)
                 ax[1, c].set_title(celltype)
 
             plt.tight_layout()
-            os.makedirs(os.path.join(os.environ['OUTPATH'], 'pychromVAR', TF_name, sex), exist_ok=True)
-            plt.savefig(os.path.join(os.environ['OUTPATH'], 'pychromVAR', TF_name, sex, f'volcano_plot_{sex}.png'))
+            os.makedirs(os.path.join(output_dir, 'pychromVAR', TF_name, sex), exist_ok=True)
+            save_path = os.path.join(output_dir, 'pychromVAR', TF_name, sex, f'volcano_plot_{data_type.lower()}_{sex}.png')
+            plt.savefig(save_path)
             plt.close()
 
-            print('Volcano plot saved to', os.path.join(os.environ['OUTPATH'], 'pychromVAR', TF_name, sex, f'volcano_plot_{sex}.png'))
+            print(f'Volcano plot saved to {save_path}')
+
+
+        ## find term linked genes and peaks
+        def find_term_linked_genes_and_peaks(TF_name, rna_results, rna_enrichr_res_celltypes, peak_gene_links):
+
+            term_linked_genes = {}
+            term_linked_peaks = {}
+            for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
+
+                ## extract linked genes and peaks for genes overlapping with term (EnrichR)
+                try:
+                    term_genes = rna_enrichr_res_celltypes[celltype].loc[rna_enrichr_res_celltypes[celltype]['Term'].eq(terms_dict[TF_name]), 'Genes'].str.split(';').iloc[0]
+                    peak_gene_link_in_term = (peak_gene_links['TF'].eq(TF_name) & peak_gene_links['gene'].isin(term_genes))
+                except:
+                    print(f"No term-linked genes found for {celltype} and {terms_dict[TF_name]}")
+                    term_genes = []
+                    peak_gene_link_in_term = pd.Series([False] * len(peak_gene_links))
+
+                term_linked_genes[celltype] = peak_gene_links.loc[peak_gene_link_in_term, 'gene'].unique()
+                term_linked_peaks[celltype] = peak_gene_links.loc[peak_gene_link_in_term, 'peak'].unique()
 
             return term_linked_genes, term_linked_peaks
 
-        ## find term linked genes and peaks for EGR1
 
+        ## find term linked genes and peaks for EGR1
         def atac_enrichment_analysis(TF_name, rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type):
 
             term_linked_genes, term_linked_peaks = find_term_linked_genes_and_peaks(TF_name, rna_results, rna_enrichr_res_brainscope, peak_gene_links)
+
+            ## get female ExN sc-compReg results for TF
+            female_ExN_TF = female_ExN.loc[female_ExN['TF'].eq(TF_name)]
 
             if gene_activity_score_type is not None:
                 
@@ -415,6 +480,7 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
 
                 ## filter results by logFC
                 results_in_term_filtered = results_in_term.loc[results_in_term['log2FoldChange'].abs().ge(1.5)]
+                results_in_term_filtered = results_in_term_filtered.loc[results_in_term_filtered['gene'].isin(female_ExN_TF['enhancer'])] # remember, 'gene' in this context refers to peaks
 
                 ## FDR correction on filtered results
                 padj_term = multipletests(results_in_term_filtered['pvalue'], method='fdr_bh')[1]
@@ -446,22 +512,68 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
                                 row['gene'] in term_linked_genes.get(row.name, []), axis=1
                 )]
 
-            ## compare with sc-compReg results for female ExN
-            female_ExN = pd.read_csv(os.path.join(os.environ['OUTPATH'], 'enrichment_analyses_16103846_41', 'mean_grn_df_filtered_female_ExN.csv'))
-            female_ExN_TF = female_ExN.loc[female_ExN['TF'].eq(TF_name)]
-
             ## check overlap between filtered sig genes linked to peaks and sc-compReg results for female ExN EGR1
             #set(sig_genes_linked_to_peaks['gene']) & set(female_ExN_TF['TG'])
             rna_overlap_with_scCompReg = set(all_terms_genes) & set(female_ExN_TF['TG'])
             atac_overlap_with_scCompReg = set(filtered_sig_genes_linked_to_peaks['gene']) & set(female_ExN_TF['TG'])
 
-            return filtered_sig_genes_linked_to_peaks, rna_overlap_with_scCompReg, atac_overlap_with_scCompReg
+            outputs_dict = {
+                'sig_genes_linked_to_peaks': filtered_sig_genes_linked_to_peaks,
+                'rna_overlap_with_scCompReg': rna_overlap_with_scCompReg,
+                'atac_overlap_with_scCompReg': atac_overlap_with_scCompReg,
+                'term_linked_genes': term_linked_genes,
+                'term_linked_peaks': term_linked_peaks
+            }
+
+            return outputs_dict
 
         ## find enriched peaks per candidate TF
-        egr1_sig_genes_linked_to_peaks, egr1_rna_overlap_with_scCompReg, egr1_atac_overlap_with_scCompReg = atac_enrichment_analysis('EGR1', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
-        nr4a2_sig_genes_linked_to_peaks, nr4a2_rna_overlap_with_scCompReg, nr4a2_atac_overlap_with_scCompReg = atac_enrichment_analysis('NR4A2', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
-        sox2_sig_genes_linked_to_peaks, sox2_rna_overlap_with_scCompReg, sox2_atac_overlap_with_scCompReg = atac_enrichment_analysis('SOX2', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
-        spi1_sig_genes_linked_to_peaks, spi1_rna_overlap_with_scCompReg, spi1_atac_overlap_with_scCompReg = atac_enrichment_analysis('SPI1', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
+        egr1_outputs_dict = atac_enrichment_analysis('EGR1', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
+        nr4a2_outputs_dict = atac_enrichment_analysis('NR4A2', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
+        sox2_outputs_dict = atac_enrichment_analysis('SOX2', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
+        spi1_outputs_dict = atac_enrichment_analysis('SPI1', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
+
+        ## Plot volcano plots for RNA results with enrichment-derived genes
+        for TF_name, outputs_dict in [
+            ('EGR1', egr1_outputs_dict),
+            ('NR4A2', nr4a2_outputs_dict),
+            ('SOX2', sox2_outputs_dict),
+            ('SPI1', spi1_outputs_dict)
+        ]:
+            plot_term_linked_volcano_plots(
+                TF_name=TF_name,
+                results_data=rna_results,
+                term_linked_genes_dict=outputs_dict['term_linked_genes'],
+                celltypes=['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN'],
+                output_dir=os.path.join(os.environ['DATAPATH'], 'mdd_data', 'developmental_analysis'),
+                sex=sex,
+                data_type='RNA',
+                km_gene_sets_mapper=km_gene_sets_mapper
+            )
+
+        ## Plot volcano plots for ATAC results with enrichment-derived genes
+        for TF_name, outputs_dict in [
+            ('EGR1', egr1_outputs_dict),
+            ('NR4A2', nr4a2_outputs_dict),
+            ('SOX2', sox2_outputs_dict),
+            ('SPI1', spi1_outputs_dict)
+        ]:
+
+            ## add genes linked to peaks to ATAC results
+            all_term_linked_peaks = np.unique(np.hstack(list(outputs_dict['term_linked_peaks'].values())))
+            peaks_linked_to_term = peak_gene_links.loc[peak_gene_links['TF'].eq(TF_name) & peak_gene_links['peak'].isin(all_term_linked_peaks)]
+            atac_results.loc[:, 'gene_linked_to_peak'] = atac_results['gene'].map(dict(zip(peaks_linked_to_term['peak'], peaks_linked_to_term['gene'])))
+
+            plot_term_linked_volcano_plots(
+                TF_name=TF_name,
+                results_data=atac_results,
+                term_linked_genes_dict=outputs_dict['term_linked_peaks'],
+                celltypes=['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN'],
+                output_dir=os.path.join(os.environ['DATAPATH'], 'mdd_data', 'developmental_analysis'),
+                sex=sex,
+                data_type='ATAC',
+                km_gene_sets_mapper=km_gene_sets_mapper
+            )
 
 
         def ttest_case_control(per_pb, condition_col="condition", value_col="z", set_col="set",
@@ -567,14 +679,22 @@ def load_km_gene_sets():
     return km_gene_sets, km_gene_sets_mapper
 
 def get_peak_gene_links():
+
+    ## get peak names mapper and reverse mapper
     peak_names_mapper = pd.read_pickle(os.path.join(os.environ['OUTPATH'], 'peak_names_mapper.pkl')) # derived from female data
     peak_names_mapper_reverse = {v: k for k, v in peak_names_mapper.items()}
+
+    ## get peak-gene links
     mean_grn_df_filtered = pd.read_csv(os.path.join(os.environ['OUTPATH'], 'mean_grn_df_filtered.csv'))
     peak_gene_links = mean_grn_df_filtered.copy()
     peak_gene_links['peak'] = peak_gene_links['enhancer'].map(peak_names_mapper_reverse)
     peak_gene_links.rename(columns={'TG': 'gene'}, inplace=True)
 
-    return peak_gene_links
+    ## get sc-compReg results for female ExN
+    female_ExN = pd.read_csv(os.path.join(os.environ['OUTPATH'], 'enrichment_analyses_16103846_41', 'mean_grn_df_filtered_female_ExN.csv'))
+    female_ExN['enhancer'] = female_ExN['enhancer'].map(peak_names_mapper_reverse)
+
+    return peak_gene_links, female_ExN
 
 def subset_data(adata, gwas_hits, subset_type, hvg_genes=None):
 
@@ -614,10 +734,15 @@ def subset_data(adata, gwas_hits, subset_type, hvg_genes=None):
     return adata
 
 
-def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', max_min_n_cells=10, 
-                              K_max_donors=8, N_max_cells_per_donor=100, random_state=42):
+def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', max_min_n_cells=20, 
+                              max_imbalance_ratio=2.0, N_max_cells_per_donor=300, random_state=42):
     """
-    Run pyDESeq2 on cell types with balanced donor-level replicates.
+    Run pyDESeq2 on cell types with donor-level replicates, prioritizing power.
+    
+    This implementation uses a "power-tilted" approach:
+    - Uses as many donors as possible per cell type (after quality filtering)
+    - Only trims donors when imbalance between conditions is extreme (ratio > max_imbalance_ratio)
+    - Allows richer cell types to contribute more signal via higher N_max
     
     Parameters
     ----------
@@ -628,11 +753,11 @@ def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', max_min_n_cells=10,
     test_type : str
         Type of test ('split' or 'all')
     max_min_n_cells : int
-        Minimum cells per donor to include
-    K_max_donors : int
-        Maximum donors per condition per cell type
-    N_max_cells_per_donor : int
-        Maximum cells to sample per donor (for depth balancing)
+        Minimum cells per donor to include (default: 20 for quality)
+    max_imbalance_ratio : float
+        Maximum allowed ratio between conditions before trimming (default: 2.0)
+    N_max_cells_per_donor : int or None
+        Maximum cells to sample per donor (default: 200). Set to None for no cap.
     random_state : int
         Random seed for reproducibility
     """
@@ -669,34 +794,52 @@ def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', max_min_n_cells=10,
         
         print(f"  After: {len(metadata)} donors")
         
-        ## STEP 2: Balance number of donors per condition
+        ## STEP 2: Use as many donors as possible, with mild balancing
         n_ctrl = (metadata['Condition'] == 'Control').sum()
         n_case = (metadata['Condition'] == 'Case').sum()
         
-        print(f"\nStep 2 - Balancing donor counts:")
-        print(f"  Control donors: {n_ctrl}")
-        print(f"  Case donors: {n_case}")
+        print(f"\nStep 2 - Determining donor counts (power-tilted approach):")
+        print(f"  Available donors - Control: {n_ctrl}, Case: {n_case}")
         
-        # Determine K (balanced number of donors per condition)
-        K = min(n_ctrl, n_case, K_max_donors)
-        print(f"  Using K = {K} donors per condition")
-        
-        if K < 2:
+        # Check for minimum donors
+        if n_ctrl < 2 or n_case < 2:
             print(f"  WARNING: Insufficient donors for {celltype}. Skipping.")
             continue
         
-        # Select K donors from each condition
+        # Calculate imbalance ratio
+        imbalance_ratio = max(n_ctrl, n_case) / min(n_ctrl, n_case)
+        print(f"  Imbalance ratio: {imbalance_ratio:.2f}")
+        
+        # Decide whether to trim based on imbalance
+        if imbalance_ratio <= max_imbalance_ratio:
+            # Mild imbalance is OK - use all donors
+            K_ctrl = n_ctrl
+            K_case = n_case
+            print(f"  Imbalance is acceptable (≤ {max_imbalance_ratio:.1f}) - using all donors")
+        else:
+            # Extreme imbalance - trim majority to at most 2x minority
+            K_min = min(n_ctrl, n_case)
+            K_max = int(max_imbalance_ratio * K_min)
+            
+            if n_ctrl > n_case:
+                K_ctrl = K_max
+                K_case = n_case
+                print(f"  Trimming Control donors from {n_ctrl} to {K_ctrl} (max {max_imbalance_ratio:.1f}× minority)")
+            else:
+                K_ctrl = n_ctrl
+                K_case = K_max
+                print(f"  Trimming Case donors from {n_case} to {K_case} (max {max_imbalance_ratio:.1f}× minority)")
+        
+        # Select donors from each condition
         ctrl_indices = np.where(metadata['Condition'] == 'Control')[0]
         case_indices = np.where(metadata['Condition'] == 'Case')[0]
         
-        # Select donors with most cells (or randomly if you prefer)
-        # Here we'll select the K donors with highest cell counts per condition
+        # Select top K donors by cell count from each condition
         ctrl_n_cells = metadata.iloc[ctrl_indices]['n_cells'].astype(int).values
         case_n_cells = metadata.iloc[case_indices]['n_cells'].astype(int).values
         
-        # Get indices of top K donors by cell count
-        selected_ctrl_idx = ctrl_indices[np.argsort(ctrl_n_cells)[-K:]]
-        selected_case_idx = case_indices[np.argsort(case_n_cells)[-K:]]
+        selected_ctrl_idx = ctrl_indices[np.argsort(ctrl_n_cells)[-K_ctrl:]]
+        selected_case_idx = case_indices[np.argsort(case_n_cells)[-K_case:]]
         
         selected_idx = np.concatenate([selected_ctrl_idx, selected_case_idx])
         
@@ -704,16 +847,24 @@ def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', max_min_n_cells=10,
         counts = counts[selected_idx]
         metadata = metadata.iloc[selected_idx]
         
-        print(f"  After balancing: {len(metadata)} donors total ({K} Control + {K} Case)")
+        print(f"  Final: {len(metadata)} donors total ({K_ctrl} Control + {K_case} Case)")
         
-        ## STEP 3: Downsample donors with too many cells
-        print(f"\nStep 3 - Downsampling donors with > {N_max_cells_per_donor} cells:")
-        print(f"  Cell counts per donor before downsampling:")
-        print(f"    Median: {metadata['n_cells'].astype(int).median()}")
-        print(f"    Range: [{metadata['n_cells'].astype(int).min()}, {metadata['n_cells'].astype(int).max()}]")
+        ## STEP 3: Optionally downsample very deep donors
+        if N_max_cells_per_donor is not None:
+            print(f"\nStep 3 - Downsampling donors with > {N_max_cells_per_donor} cells:")
+            print(f"  Cell counts per donor before downsampling:")
+            print(f"    Median: {metadata['n_cells'].astype(int).median()}")
+            print(f"    Range: [{metadata['n_cells'].astype(int).min()}, {metadata['n_cells'].astype(int).max()}]")
+            
+            n_downsampled = (metadata['n_cells'].astype(int) > N_max_cells_per_donor).sum()
+            print(f"  Donors to downsample: {n_downsampled}/{len(metadata)}")
+        else:
+            print(f"\nStep 3 - No downsampling (N_max=None):")
+            print(f"  Cell counts per donor:")
+            print(f"    Median: {metadata['n_cells'].astype(int).median()}")
+            print(f"    Range: [{metadata['n_cells'].astype(int).min()}, {metadata['n_cells'].astype(int).max()}]")
         
-        # This requires going back to the original data to resample cells
-        # We'll need to reconstruct pseudobulks with downsampled cells
+        # This requires going back to the original data to resample cells (if needed)
         downsampled_counts_list = []
         downsampled_metadata_list = []
         
@@ -726,8 +877,8 @@ def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', max_min_n_cells=10,
                          (adata.obs['Sex'].str.lower() == sex.lower())
             donor_cell_indices = np.where(donor_mask)[0]
             
-            # Downsample if necessary
-            if n_cells_donor > N_max_cells_per_donor:
+            # Downsample only if N_max is set and donor exceeds it
+            if N_max_cells_per_donor is not None and n_cells_donor > N_max_cells_per_donor:
                 sampled_cell_indices = np.random.choice(
                     donor_cell_indices, 
                     size=N_max_cells_per_donor, 
@@ -758,9 +909,10 @@ def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', max_min_n_cells=10,
             obs=metadata
         )
         
-        print(f"  Cell counts per donor after downsampling:")
-        print(f"    Median: {metadata['n_cells'].astype(int).median()}")
-        print(f"    Range: [{metadata['n_cells'].astype(int).min()}, {metadata['n_cells'].astype(int).max()}]")
+        if N_max_cells_per_donor is not None:
+            print(f"  Cell counts per donor after downsampling:")
+            print(f"    Median: {metadata['n_cells'].astype(int).median()}")
+            print(f"    Range: [{metadata['n_cells'].astype(int).min()}, {metadata['n_cells'].astype(int).max()}]")
 
         all_mdd_subjects_counts_adata.append(mdd_subjects_counts_adata)
         all_counts.append(counts)
@@ -768,18 +920,21 @@ def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', max_min_n_cells=10,
 
     ## Print summary statistics across all cell types
     print(f"\n{'='*80}")
-    print(f"SUMMARY - Donor-level balance across cell types ({sex})")
+    print(f"SUMMARY - Power-tilted donor counts across cell types ({sex})")
     print(f"{'='*80}")
-    print(f"{'Cell Type':<20} {'K (donors/cond)':<20} {'Median cells/donor':<25} {'Range':<20}")
+    print(f"{'Cell Type':<20} {'Ctrl donors':<15} {'Case donors':<15} {'Median cells':<15} {'Range':<20}")
     print(f"{'-'*80}")
     
     for celltype_data in all_metadata:
         ct_name = celltype_data['most_common_cluster'].iloc[0]
-        k_per_cond = (celltype_data['Condition'] == 'Control').sum()
+        n_ctrl = (celltype_data['Condition'] == 'Control').sum()
+        n_case = (celltype_data['Condition'] == 'Case').sum()
         median_cells = celltype_data['n_cells'].astype(int).median()
         min_cells = celltype_data['n_cells'].astype(int).min()
         max_cells = celltype_data['n_cells'].astype(int).max()
-        print(f"{ct_name:<20} {k_per_cond:<20} {median_cells:<25.0f} [{min_cells}-{max_cells}]")
+        print(f"{ct_name:<20} {n_ctrl:<15} {n_case:<15} {median_cells:<15.0f} [{min_cells}-{max_cells}]")
+    print(f"{'='*80}")
+    print(f"Note: Imbalance ratio capped at {max_imbalance_ratio}×, N_min={max_min_n_cells}, N_max={N_max_cells_per_donor}")
     print(f"{'='*80}\n")
 
     ## concatenate
@@ -1254,18 +1409,25 @@ def run_pychromVAR_case_control(
         "tests": results,             # stats per (set,motif): Welch and (optional) OLS p/q
     }
 
-def volcano_plot(results, term_genes, axes):
+def volcano_plot(results, term_genes, axes, p_metric='padj'):
+
     results['term_genes'] = results['gene'].isin(term_genes)
-    results['-log10(padj)'] = -np.log10(results['padj'])
-    results['signif_padj'] = results['padj'] < 0.05
+    results['-log10(padj)'] = -np.log10(results[p_metric])
+    results['signif_padj'] = results[p_metric] < 0.05
     results.loc[~results['signif_padj'], 'km'] = 'Not significant'
     results['km'] = pd.Categorical(results['km'], categories=['km1', 'km2', 'km3', 'km4', 'Not significant'], ordered=True)
 
     # Define default colors and add grey for 'Not significant'
     default_colors = sns.color_palette()[:4]  # Get the first four default colors
     custom_colors = default_colors + [(0.6, 0.6, 0.6)]  # Add grey
-    sns.scatterplot(data=results.reset_index(), x='log2FoldChange', y='-log10(padj)', hue='km', marker='o', alpha=0.5, palette=custom_colors, ax=axes[1])
-    sns.scatterplot(data=results.reset_index(), x='log2FoldChange', y='-log10(padj)', hue='term_genes', marker='o', alpha=0.5, ax=axes[0])
+    sns.scatterplot(data=results.reset_index(), x='log2FoldChange', y='-log10(padj)', hue='km', marker='o', alpha=0.5, palette=custom_colors, ax=axes[1], legend='auto')
+    sns.scatterplot(data=results.reset_index(), x='log2FoldChange', y='-log10(padj)', hue='term_genes', marker='o', alpha=0.5, ax=axes[0], legend='auto')
+
+    # Explicitly set legend locations to avoid slow "best" calculation
+    if axes[0].get_legend() is not None:
+        axes[0].legend(loc='upper right', frameon=True, fontsize='small')
+    if axes[1].get_legend() is not None:
+        axes[1].legend(loc='upper right', frameon=True, fontsize='small')
 
     # Add vertical and horizontal lines for reference
     axes[0].axhline(y=-np.log10(0.05), color='grey', linestyle='--', linewidth=0.8)  # Horizontal line at significance threshold
