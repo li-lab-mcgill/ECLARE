@@ -37,11 +37,97 @@ def compute_gene_activity_score(gene, peak_gene_links_subset, var_names, raw_X):
     return gene, gene_activity_scores
 
 
+def balance_cell_types(adata, cell_type_col='most_common_cluster', cell_types=None, random_state=None):
+    """
+    Balance cell type composition by sampling equal numbers from each cell type.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        Input AnnData object with cell type annotations
+    cell_type_col : str
+        Column name in adata.obs containing cell type labels
+    cell_types : list or None
+        List of cell types to include. If None, uses all unique cell types.
+    random_state : int or None
+        Random seed for reproducibility
+        
+    Returns
+    -------
+    AnnData
+        Balanced AnnData object with equal cells per type
+    """
+    if random_state is not None:
+        np.random.seed(random_state)
+    
+    # Filter to specified cell types if provided
+    if cell_types is not None:
+        adata = adata[adata.obs[cell_type_col].isin(cell_types)].copy()
+    else:
+        cell_types = adata.obs[cell_type_col].unique().tolist()
+    
+    # Get cell type counts
+    cell_type_counts = adata.obs[cell_type_col].value_counts()
+    print(f"\nCell type counts before balancing ({cell_type_col}):")
+    print(cell_type_counts)
+    
+    # Find minimum number of cells across cell types
+    min_cells = cell_type_counts.min()
+    print(f"\nSampling {min_cells} cells per cell type for balanced analysis...")
+    
+    # Sample equal number of cells from each cell type
+    balanced_indices = []
+    for cell_type in cell_types:
+        cell_type_mask = adata.obs[cell_type_col] == cell_type
+        cell_type_indices = np.where(cell_type_mask)[0]
+        
+        if len(cell_type_indices) >= min_cells:
+            sampled_indices = np.random.choice(cell_type_indices, size=min_cells, replace=False)
+            balanced_indices.extend(sampled_indices)
+        else:
+            print(f"Warning: {cell_type} has fewer cells ({len(cell_type_indices)}) than min_cells ({min_cells})")
+    
+    # Subset to balanced samples
+    adata_balanced = adata[balanced_indices].copy()
+    
+    # Verify balanced composition
+    balanced_counts = adata_balanced.obs[cell_type_col].value_counts()
+    print(f"\nCell type counts after balancing:")
+    print(balanced_counts)
+    print(f"Total cells: {adata_balanced.n_obs}\n")
+    
+    return adata_balanced
+
+
 def main(subset_type=None, gene_activity_score_type='promoter'):
 
     ## load data (RNA and ATAC gene activity score)
-    mdd_rna_scaled_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub.h5ad'))
-    mdd_atac_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub.h5ad'))
+    mdd_rna_scaled_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub_15582.h5ad'))
+    mdd_atac_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub_14814.h5ad'))
+    
+    ## balance cell-type composition for both RNA and ATAC
+    '''
+    target_cell_types = ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']
+    print("=" * 80)
+    print("Balancing RNA data:")
+    print("=" * 80)
+    mdd_rna_scaled_sub = balance_cell_types(
+        mdd_rna_scaled_sub, 
+        cell_type_col='most_common_cluster',
+        cell_types=target_cell_types,
+        random_state=42
+    )
+    
+    print("=" * 80)
+    print("Balancing ATAC data:")
+    print("=" * 80)
+    mdd_atac_sub = balance_cell_types(
+        mdd_atac_sub,
+        cell_type_col='most_common_cluster',
+        cell_types=target_cell_types,
+        random_state=42
+    )
+    '''
     
     ## load data (ATAC broad peaks)
     mdd_atac_broad = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_broad.h5ad'), backed='r')
@@ -59,8 +145,8 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
     km_gene_sets, km_gene_sets_mapper = load_km_gene_sets()
 
     ## restrict peak-enhancer-gene triplets for which all correlation signs agree (all positive or all negative)
-    peak_gene_links = peak_gene_links.loc[peak_gene_links['abs_sign_score_grn'].ge(0.5)]
-    peak_gene_links = peak_gene_links.loc[peak_gene_links['Correlation'].ge(0)]
+    #peak_gene_links = peak_gene_links.loc[peak_gene_links['abs_sign_score_grn'].ge(0.5)]
+    #peak_gene_links = peak_gene_links.loc[peak_gene_links['Correlation'].ge(0)]
 
     ## subset data
     mdd_rna_scaled_sub = subset_data(mdd_rna_scaled_sub, gwas_hits, subset_type)
@@ -135,6 +221,7 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
         mdd_atac_sub = mdd_atac_broad_sub[:, peak_counts > 100].copy()
         mdd_atac_sub.obs = obs
 
+
     for sex in ['male', 'female']:
 
         ## across all celltypes
@@ -144,8 +231,8 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
         rna_all.reset_index(inplace=True)
 
         ## per celltype
-        rna_per_celltype, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex)
-        atac_per_celltype, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex)
+        rna_per_celltype, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, max_min_n_cells=10)
+        atac_per_celltype, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, max_min_n_cells=10)
 
         ## ensure that atac_var in proper format (and that rna_var an index)
         atac_var = atac_var.reset_index().loc[:,'index'].str.split(':|-', expand=True).apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
@@ -177,7 +264,6 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
         ## TMP: for ATAC, perform FDR correction for candidate peaks only
         candidate_egr1_peaks = peak_gene_links.loc[peak_gene_links['TF'].eq('EGR1')]
         atac_results['egr1_or_target'] = atac_results['gene'].isin(candidate_egr1_peaks['peak'])
-
         for celltype in atac_per_celltype.keys():
             padj_egr1_or_target = multipletests(atac_results.loc[atac_results.index.isin([celltype]) & atac_results['egr1_or_target'], 'pvalue'], method='fdr_bh')[1]
             atac_results.loc[atac_results.index.isin([celltype]) & atac_results['egr1_or_target'], 'padj_egr1_or_target'] = padj_egr1_or_target
@@ -225,7 +311,7 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
             return gsea_res
 
 
-        ## run enrichr and gsea, celltypes combined - test all gene sets
+        ## run enrichr and gsea, celltypes combined - test all km_gene_sets
         rna_enrichr_res_all = do_enrichr(rna_sig_results, rna_sig_results.index.unique().tolist(), km_gene_sets)
 
         ## run enrichr and gsea for each celltype - test km_gene_sets
@@ -253,6 +339,7 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
         best_nr4a2_term = 'NR4A2'
         best_sox2_term = 'SOX2'
         best_spi1_term = 'SPI1'
+        terms_dict = {'EGR1': best_egr1_term, 'NR4A2': best_nr4a2_term, 'SOX2': best_sox2_term, 'SPI1': best_spi1_term}
 
         """ ## search for EGR1 term in enrichr results
         egr1_terms = rna_enrichr_res_chea_all.loc[rna_enrichr_res_chea_all['Term'].str.contains('EGR1'), 'Term'].unique()
@@ -260,10 +347,9 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
 
         ## searchr for NR4A2 term in enrichr results
         nr4a2_terms = rna_enrichr_res_chea_all.loc[rna_enrichr_res_chea_all['Term'].str.contains('NR4A2'), 'Term'].unique()
-        best_nr4a2_term = nr4a2_terms[0] """
+        best_nr4a2_term = nr4a2_terms[0]
+        terms_dict = {'EGR1': best_egr1_term, 'NR4A2': best_nr4a2_term, 'SOX2': best_sox2_term, 'SPI1': best_spi1_term} """
 
-
-        terms_dict = {'EGR1': best_egr1_term, 'NR4A2': best_nr4a2_term, 'SOX2': best_sox2_term, 'SPI1': best_spi1_term}
 
         ## volcano plots - best EGR1 term
         def find_term_linked_genes_and_peaks(TF_name, rna_results, rna_enrichr_res_celltypes, peak_gene_links):
@@ -366,11 +452,12 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
 
             ## check overlap between filtered sig genes linked to peaks and sc-compReg results for female ExN EGR1
             #set(sig_genes_linked_to_peaks['gene']) & set(female_ExN_TF['TG'])
-            rna_overlap_with_scCompReg = set(filtered_sig_genes_linked_to_peaks['gene']) & set(female_ExN_EGR1['TG'])
-            atac_overlap_with_scCompReg = set(all_terms_genes) & set(female_ExN_TF['TG'])
+            rna_overlap_with_scCompReg = set(all_terms_genes) & set(female_ExN_TF['TG'])
+            atac_overlap_with_scCompReg = set(filtered_sig_genes_linked_to_peaks['gene']) & set(female_ExN_TF['TG'])
 
             return filtered_sig_genes_linked_to_peaks, rna_overlap_with_scCompReg, atac_overlap_with_scCompReg
 
+        ## find enriched peaks per candidate TF
         egr1_sig_genes_linked_to_peaks, egr1_rna_overlap_with_scCompReg, egr1_atac_overlap_with_scCompReg = atac_enrichment_analysis('EGR1', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
         nr4a2_sig_genes_linked_to_peaks, nr4a2_rna_overlap_with_scCompReg, nr4a2_atac_overlap_with_scCompReg = atac_enrichment_analysis('NR4A2', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
         sox2_sig_genes_linked_to_peaks, sox2_rna_overlap_with_scCompReg, sox2_atac_overlap_with_scCompReg = atac_enrichment_analysis('SOX2', rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type)
@@ -527,7 +614,30 @@ def subset_data(adata, gwas_hits, subset_type, hvg_genes=None):
     return adata
 
 
-def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', min_n_cells=10):
+def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', max_min_n_cells=10, 
+                              K_max_donors=8, N_max_cells_per_donor=100, random_state=42):
+    """
+    Run pyDESeq2 on cell types with balanced donor-level replicates.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        Input data
+    sex : str
+        Sex to analyze
+    test_type : str
+        Type of test ('split' or 'all')
+    max_min_n_cells : int
+        Minimum cells per donor to include
+    K_max_donors : int
+        Maximum donors per condition per cell type
+    N_max_cells_per_donor : int
+        Maximum cells to sample per donor (for depth balancing)
+    random_state : int
+        Random seed for reproducibility
+    """
+    
+    np.random.seed(random_state)
     
     all_mdd_subjects_counts_adata = []
     all_counts = []
@@ -536,7 +646,9 @@ def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', min_n_cells=10):
     ## loop through celltypes and get pseudo-replicates counts
     for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
 
-        #results = process_celltype(sex, celltype, mdd_rna_scaled_sub, mdd_rna_scaled_sub.raw.var.set_index('_index').copy(), 'most_common_cluster', 'Condition', 'Sex', 'OriginalSub')
+        print(f"\n{'='*80}")
+        print(f"Processing {celltype} - {sex}")
+        print(f"{'='*80}")
 
         mdd_subjects_counts_adata, counts, metadata = get_pseudo_replicates_counts(
             sex, celltype, adata, adata.raw.var.copy(), 
@@ -544,17 +656,136 @@ def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', min_n_cells=10):
             pseudo_replicates='Subjects', overlapping_only=False
         )
 
-        ## filter by minimum number of cells
+        ## STEP 1: Drop donors with < N_min cells
+        min_n_cells = max_min_n_cells
         keep_pseudobulk = metadata['n_cells'].astype(int).ge(min_n_cells)
+        
+        print(f"\nStep 1 - Filtering donors with < {min_n_cells} cells:")
+        print(f"  Before: {len(metadata)} donors")
+        
         mdd_subjects_counts_adata = mdd_subjects_counts_adata[keep_pseudobulk]
         counts = counts[keep_pseudobulk.values]
         metadata = metadata[keep_pseudobulk.values]
+        
+        print(f"  After: {len(metadata)} donors")
+        
+        ## STEP 2: Balance number of donors per condition
+        n_ctrl = (metadata['Condition'] == 'Control').sum()
+        n_case = (metadata['Condition'] == 'Case').sum()
+        
+        print(f"\nStep 2 - Balancing donor counts:")
+        print(f"  Control donors: {n_ctrl}")
+        print(f"  Case donors: {n_case}")
+        
+        # Determine K (balanced number of donors per condition)
+        K = min(n_ctrl, n_case, K_max_donors)
+        print(f"  Using K = {K} donors per condition")
+        
+        if K < 2:
+            print(f"  WARNING: Insufficient donors for {celltype}. Skipping.")
+            continue
+        
+        # Select K donors from each condition
+        ctrl_indices = np.where(metadata['Condition'] == 'Control')[0]
+        case_indices = np.where(metadata['Condition'] == 'Case')[0]
+        
+        # Select donors with most cells (or randomly if you prefer)
+        # Here we'll select the K donors with highest cell counts per condition
+        ctrl_n_cells = metadata.iloc[ctrl_indices]['n_cells'].astype(int).values
+        case_n_cells = metadata.iloc[case_indices]['n_cells'].astype(int).values
+        
+        # Get indices of top K donors by cell count
+        selected_ctrl_idx = ctrl_indices[np.argsort(ctrl_n_cells)[-K:]]
+        selected_case_idx = case_indices[np.argsort(case_n_cells)[-K:]]
+        
+        selected_idx = np.concatenate([selected_ctrl_idx, selected_case_idx])
+        
+        mdd_subjects_counts_adata = mdd_subjects_counts_adata[selected_idx]
+        counts = counts[selected_idx]
+        metadata = metadata.iloc[selected_idx]
+        
+        print(f"  After balancing: {len(metadata)} donors total ({K} Control + {K} Case)")
+        
+        ## STEP 3: Downsample donors with too many cells
+        print(f"\nStep 3 - Downsampling donors with > {N_max_cells_per_donor} cells:")
+        print(f"  Cell counts per donor before downsampling:")
+        print(f"    Median: {metadata['n_cells'].astype(int).median()}")
+        print(f"    Range: [{metadata['n_cells'].astype(int).min()}, {metadata['n_cells'].astype(int).max()}]")
+        
+        # This requires going back to the original data to resample cells
+        # We'll need to reconstruct pseudobulks with downsampled cells
+        downsampled_counts_list = []
+        downsampled_metadata_list = []
+        
+        for idx, (subject, row) in enumerate(metadata.iterrows()):
+            n_cells_donor = int(row['n_cells'])
+            
+            # Get cells for this donor
+            donor_mask = (adata.obs['OriginalSub'] == subject) & \
+                         (adata.obs['most_common_cluster'].str.startswith(celltype)) & \
+                         (adata.obs['Sex'].str.lower() == sex.lower())
+            donor_cell_indices = np.where(donor_mask)[0]
+            
+            # Downsample if necessary
+            if n_cells_donor > N_max_cells_per_donor:
+                sampled_cell_indices = np.random.choice(
+                    donor_cell_indices, 
+                    size=N_max_cells_per_donor, 
+                    replace=False
+                )
+                actual_n_cells = N_max_cells_per_donor
+            else:
+                sampled_cell_indices = donor_cell_indices
+                actual_n_cells = n_cells_donor
+            
+            # Sum counts across sampled cells
+            donor_counts = adata.raw.X[sampled_cell_indices].sum(axis=0).A1.astype(int)
+            downsampled_counts_list.append(donor_counts)
+            
+            # Update metadata
+            row_updated = row.copy()
+            row_updated['n_cells'] = actual_n_cells
+            downsampled_metadata_list.append(row_updated)
+        
+        # Reconstruct arrays
+        counts = np.vstack(downsampled_counts_list)
+        metadata = pd.DataFrame(downsampled_metadata_list)
+        
+        # Reconstruct AnnData
+        mdd_subjects_counts_adata = anndata.AnnData(
+            X=counts,
+            var=adata.raw.var.copy(),
+            obs=metadata
+        )
+        
+        print(f"  Cell counts per donor after downsampling:")
+        print(f"    Median: {metadata['n_cells'].astype(int).median()}")
+        print(f"    Range: [{metadata['n_cells'].astype(int).min()}, {metadata['n_cells'].astype(int).max()}]")
 
         all_mdd_subjects_counts_adata.append(mdd_subjects_counts_adata)
         all_counts.append(counts)
         all_metadata.append(metadata)
 
+    ## Print summary statistics across all cell types
+    print(f"\n{'='*80}")
+    print(f"SUMMARY - Donor-level balance across cell types ({sex})")
+    print(f"{'='*80}")
+    print(f"{'Cell Type':<20} {'K (donors/cond)':<20} {'Median cells/donor':<25} {'Range':<20}")
+    print(f"{'-'*80}")
+    
+    for celltype_data in all_metadata:
+        ct_name = celltype_data['most_common_cluster'].iloc[0]
+        k_per_cond = (celltype_data['Condition'] == 'Control').sum()
+        median_cells = celltype_data['n_cells'].astype(int).median()
+        min_cells = celltype_data['n_cells'].astype(int).min()
+        max_cells = celltype_data['n_cells'].astype(int).max()
+        print(f"{ct_name:<20} {k_per_cond:<20} {median_cells:<25.0f} [{min_cells}-{max_cells}]")
+    print(f"{'='*80}\n")
+
     ## concatenate
+    if len(all_mdd_subjects_counts_adata) == 0:
+        raise ValueError(f"No cell types had sufficient donors for {sex}")
+    
     mdd_subjects_counts_adata = anndata.concat(all_mdd_subjects_counts_adata, axis=0)
     counts = np.concatenate(all_counts, axis=0)
     metadata = pd.concat(all_metadata, axis=0)
@@ -569,8 +800,8 @@ def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', min_n_cells=10):
         print("All genes have at least one zero-count, setting size factors fit type to 'poscounts'")
         sf_type = 'poscounts'
     else:
-        print("Not all genes have at least one zero-count, keeping size factors fit type as 'ratio'")
-        sf_type = 'ratio'
+        print("Not all genes have at least one zero-count, keeping size factors fit type as 'poscounts'")
+        sf_type = 'poscounts'
 
     ## run pyDESeq2
     #per_celltype = run_pyDESeq2_per_celltype(counts, metadata, 'most_common_cluster')

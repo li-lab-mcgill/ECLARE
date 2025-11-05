@@ -316,7 +316,8 @@ if target_dataset == 'MDD':
     if subsample > max_subsample:
         subsample = max_subsample
 
-    student_rna_atac_sub    = subsample_adata(student_rna_atac, subsample, ['Age_bins', 'Condition', 'modality'], subsample_type='balanced')
+    student_rna_atac_sub    = subsample_adata(student_rna_atac, subsample, ['Age_bins', 'Condition'], subsample_type='balanced')
+    #student_rna_atac_sub    = subsample_adata(student_rna_atac, subsample, ['Age_bins', 'Condition', 'modality'], subsample_type='balanced')
     sns.barplot(student_rna_atac_sub.obs, x='modality', y='Age', hue='Condition', errorbar='se'); plt.ylim([30,50])
     sns.catplot(data=student_rna_atac_sub.obs, x='modality', y='Age', hue='Condition', col='SubClusters', kind='bar', height=5, aspect=.75)
     sns.catplot(data=student_rna_atac_sub.obs, x='modality', hue='Condition', col='SubClusters', kind='count')
@@ -1675,10 +1676,26 @@ paths = [
 '''
 paths = [
     ("MDD_ExN_all", leiden_sorted),
-    ('MDD_ExN_0_10_3_4_1_7_6_9', ['0', '10', '3', '4', '1', '7', '6', '9']),
-    ('MDD_ExN_0_2_12_11_13_8_14', ['0', '2', '12', '11', '13', '8', '14']),
+    ('MDD_ExN_0_13_6_5_1_4_8_9', ['0', '13', '6', '5', '1', '4', '8', '9']),
+    ('MDD_ExN_0_2_12_7_15_11_10_16', ['0', '2', '12', '7', '15', '11', '10', '16']),
 ]
 
+old_atac = ["ExN1_L36", "ExN1_L35", "ExN2_L23","Ast1","ExN3_L56","ExN3_L46","In_VIP","ExN1_L24","Ast3","ExN2",
+         "Oli5", "ExN4_L56", "Mix2", "In_SST", "ExN2_L56", "ExN1_L23", "In_PV", "ExN2_L46",
+         "ExN1_L46", "Oli6", "Oli7", "End1", "ExN1", "In_LAMP5", "Ast4", "OPC2", "Oli4", "Mic2",
+         "InN3", "Oli2", "Ast2", "ExN1_L56", "Oli1", "Mic1", "OPC4", "OPC1", "OPC3", "Mix1",
+         "Oli3", "End2"]
+new_atac = ["ExN1", "ExN2", "ExN12", "Ast1", "ExN5", "ExN9", "InVIP", "ExN10", "Ast3", "ExN2",
+         "Oli5", "ExN6", "Mix2", "InSST", "ExN4", "ExN11", "InPV", "ExN8",
+         "ExN7", "Oli6", "Oli7", "End1", "ExN1", "InLAMP5", "Ast4", "OPC2", "Oli4", "Mic2",
+         "InN3", "Oli2", "Ast2", "ExN3", "Oli1", "Mic1", "OPC4", "OPC1", "OPC3", "Mix1",
+         "Oli3", "End2"]
+
+## rename ATAC subclusters, while ensuring that column still remains categorica[tuple[str, str]]l
+atac_SubClusters_mapper = {f"{key}_ATAC": f"{value}_ATAC" for key, value in zip(old_atac, new_atac)}
+target_adata.obs['SubClusters'] = target_adata.obs['SubClusters'].astype(str)
+target_adata.obs.loc[target_adata.obs['SubClusters'].str.contains('_ATAC'), 'SubClusters'] = target_adata.obs.loc[target_adata.obs['SubClusters'].str.contains('_ATAC'), 'SubClusters'].map(atac_SubClusters_mapper)
+target_adata.obs['SubClusters'] = pd.Categorical(target_adata.obs['SubClusters'], categories=target_adata.obs['SubClusters'].unique(), ordered=False)
 
 for path in paths[1:]:
     last_leiden = path[-1][-1]
@@ -1772,7 +1789,7 @@ ordinal_rna_prebias = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_
 ordinal_rna_pt = torch.sigmoid(ordinal_rna_prebias).flatten().detach().cpu().numpy()
 pfc_zhu_rna_EN.obs['ordinal_pseudotime'] = ordinal_rna_pt
 pfc_zhu_rna_EN.obsm['X_ordinal_latents'] = ordinal_rna_latents.detach().cpu().numpy()
-pfc_zhu_rna_EN.write_h5ad(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'rna', 'pfc_zhu_rna_EN_ordinal.h5ad'))
+pfc_zhu_rna_EN.write_h5ad(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'rna', f'pfc_zhu_rna_EN_ordinal_{pfc_zhu_rna_EN.n_obs}.h5ad'))
 
 # Load data
 mdd_rna_scaled = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled.h5ad'), backed='r')
@@ -1782,6 +1799,11 @@ mdd_rna_scaled_sub.obs = mdd_rna_scaled_sub.obs.merge(source_target_adata.obs, l
 mdd_rna_scaled_sub.obs = mdd_rna_scaled_sub.obs.loc[:, ~mdd_rna_scaled_sub.obs.columns.str.endswith('_right')]
 
 ## add ordinal latents to mdd_rna_scaled_sub
+ordinal_rna_logits, ordinal_rna_probas, ordinal_rna_latents = ordinal_model(torch.tensor(student_rna_sub.X.toarray(), dtype=torch.float32), modality=0, normalize=0)
+ordinal_rna_prebias = ordinal_model.ordinal_layer_rna.coral_weights(ordinal_rna_latents)
+ordinal_rna_pt = torch.sigmoid(ordinal_rna_prebias).flatten().detach().cpu().numpy()
+
+mdd_rna_scaled_sub.obs['ordinal_pseudotime'] = ordinal_rna_pt
 mdd_rna_scaled_sub.obsm['X_ordinal_latents'] = ordinal_rna_latents.detach().cpu().numpy()
 sc.pp.neighbors(mdd_rna_scaled_sub, use_rep='X_ordinal_latents', key_added='X_ordinal_latents_neighbors', n_neighbors=30, n_pcs=10)
 
@@ -1798,7 +1820,7 @@ mdd_rna_scaled_sub.raw = raw_adata
 
 ## save mdd_rna_scaled_sub to mdd_data directory
 cast_object_columns_to_str(mdd_rna_scaled_sub)
-mdd_rna_scaled_sub.write_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub.h5ad'))
+mdd_rna_scaled_sub.write_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', f'mdd_rna_scaled_sub_{mdd_rna_scaled_sub.n_obs}.h5ad'))
 
 ## ATAC
 def rename_obs_columns(adata):
@@ -1858,7 +1880,7 @@ mdd_atac_gas_broad_raw_sub = rename_obs_columns(mdd_atac_gas_broad_raw_sub)
 ## set raw data and save
 mdd_atac_gas_broad_sub.raw = mdd_atac_gas_broad_raw_sub
 cast_object_columns_to_str(mdd_atac_gas_broad_sub)
-mdd_atac_gas_broad_sub.write_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub.h5ad'))
+mdd_atac_gas_broad_sub.write_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', f'mdd_atac_gas_broad_sub_{mdd_atac_gas_broad_sub.n_obs}.h5ad'))
 
 ## filterered mean GRN from brainSCOPE
 from eclare.post_hoc_utils import tree
