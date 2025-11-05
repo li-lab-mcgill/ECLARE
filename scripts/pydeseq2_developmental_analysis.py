@@ -410,12 +410,15 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
 
                 if (km_gene_sets_mapper is not None) and (data_type == 'RNA'):
                     results['km'] = results['gene'].map(km_gene_sets_mapper)
+                    p_metric = 'padj'
+
                 elif (km_gene_sets_mapper is not None) and (data_type == 'ATAC'):
                     results['km'] = results['gene_linked_to_peak'].map(km_gene_sets_mapper)
+                    p_metric = 'pvalue'
 
                 term_genes = term_genes_dict.get(celltype, [])
 
-                volcano_plot(results, term_genes, (ax[0, c], ax[1, c]))
+                volcano_plot(results, term_genes, (ax[0, c], ax[1, c]), p_metric=p_metric)
                 ax[0, c].set_title(celltype)
                 ax[1, c].set_title(celltype)
 
@@ -1414,14 +1417,75 @@ def volcano_plot(results, term_genes, axes, p_metric='padj'):
     results['term_genes'] = results['gene'].isin(term_genes)
     results['-log10(padj)'] = -np.log10(results[p_metric])
     results['signif_padj'] = results[p_metric] < 0.05
-    results.loc[~results['signif_padj'], 'km'] = 'Not significant'
-    results['km'] = pd.Categorical(results['km'], categories=['km1', 'km2', 'km3', 'km4', 'Not significant'], ordered=True)
+    
+    # Identify significant peaks without km assignment
+    has_km = results['km'].isin(['km1', 'km2', 'km3', 'km4'])
+    is_significant = results['signif_padj']
+    
+    # Assign categories
+    results.loc[~is_significant, 'km'] = 'Not significant'
+    results.loc[is_significant & ~has_km, 'km'] = 'Significant (no km)'
+    
+    results['km'] = pd.Categorical(results['km'], categories=['km1', 'km2', 'km3', 'km4', 'Significant (no km)', 'Not significant'], ordered=True)
 
-    # Define default colors and add grey for 'Not significant'
+    # Define default colors and add grey for both 'Not significant' and 'Significant (no km)'
     default_colors = sns.color_palette()[:4]  # Get the first four default colors
-    custom_colors = default_colors + [(0.6, 0.6, 0.6)]  # Add grey
-    sns.scatterplot(data=results.reset_index(), x='log2FoldChange', y='-log10(padj)', hue='km', marker='o', alpha=0.5, palette=custom_colors, ax=axes[1], legend='auto')
-    sns.scatterplot(data=results.reset_index(), x='log2FoldChange', y='-log10(padj)', hue='term_genes', marker='o', alpha=0.5, ax=axes[0], legend='auto')
+    custom_colors = default_colors + [(0.6, 0.6, 0.6)] + [(0.6, 0.6, 0.6)]  # Add grey for both categories
+    
+    # Create a marker style mapping
+    marker_styles = {'km1': 'o', 'km2': 'o', 'km3': 'o', 'km4': 'o', 'Significant (no km)': '^', 'Not significant': 'o'}
+    
+    # Define plotting order: plot less important categories first, km clusters last (so they appear on top)
+    plot_order = ['Not significant', 'Significant (no km)', 'km1', 'km2', 'km3', 'km4']
+    
+    # Plot each category separately to control marker styles and order
+    for category in plot_order:
+        if category not in results['km'].cat.categories:
+            continue
+        subset = results[results['km'] == category].reset_index()
+        if not subset.empty:
+            color_idx = list(results['km'].cat.categories).index(category)
+            sns.scatterplot(
+                data=subset, 
+                x='log2FoldChange', 
+                y='-log10(padj)', 
+                marker=marker_styles[category],
+                color=custom_colors[color_idx],
+                alpha=0.5, 
+                ax=axes[1], 
+                label=category
+            )
+    
+    # Top row: plot False first, then True (so True appears on top)
+    plot_data = results.reset_index()
+    
+    # Plot False term_genes first (bottom layer)
+    false_subset = plot_data[plot_data['term_genes'] == False]
+    if not false_subset.empty:
+        sns.scatterplot(
+            data=false_subset, 
+            x='log2FoldChange', 
+            y='-log10(padj)', 
+            marker='o', 
+            alpha=0.5, 
+            ax=axes[0], 
+            label='False',
+            color=sns.color_palette()[0]
+        )
+    
+    # Plot True term_genes last (top layer)
+    true_subset = plot_data[plot_data['term_genes'] == True]
+    if not true_subset.empty:
+        sns.scatterplot(
+            data=true_subset, 
+            x='log2FoldChange', 
+            y='-log10(padj)', 
+            marker='o', 
+            alpha=0.5, 
+            ax=axes[0], 
+            label='True',
+            color=sns.color_palette()[1]
+        )
 
     # Explicitly set legend locations to avoid slow "best" calculation
     if axes[0].get_legend() is not None:
