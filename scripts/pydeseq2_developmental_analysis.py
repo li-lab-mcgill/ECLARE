@@ -29,76 +29,6 @@ from eclare import set_env_variables
 set_env_variables(config_path='/home/mcb/users/dmannk/scMultiCLIP/ECLARE/config')
 
 
-@ray.remote
-def compute_gene_activity_score(gene, peak_gene_links_subset, var_names, raw_X):
-    peaks_linked_to_gene = peak_gene_links_subset.groupby('peak').mean()
-    peaks_mask = np.isin(var_names, peaks_linked_to_gene.index)
-    gene_activity_scores = raw_X[:, peaks_mask].dot(peaks_linked_to_gene.values)
-    return gene, gene_activity_scores
-
-
-def balance_cell_types(adata, cell_type_col='most_common_cluster', cell_types=None, random_state=None):
-    """
-    Balance cell type composition by sampling equal numbers from each cell type.
-    
-    Parameters
-    ----------
-    adata : AnnData
-        Input AnnData object with cell type annotations
-    cell_type_col : str
-        Column name in adata.obs containing cell type labels
-    cell_types : list or None
-        List of cell types to include. If None, uses all unique cell types.
-    random_state : int or None
-        Random seed for reproducibility
-        
-    Returns
-    -------
-    AnnData
-        Balanced AnnData object with equal cells per type
-    """
-    if random_state is not None:
-        np.random.seed(random_state)
-    
-    # Filter to specified cell types if provided
-    if cell_types is not None:
-        adata = adata[adata.obs[cell_type_col].isin(cell_types)].copy()
-    else:
-        cell_types = adata.obs[cell_type_col].unique().tolist()
-    
-    # Get cell type counts
-    cell_type_counts = adata.obs[cell_type_col].value_counts()
-    print(f"\nCell type counts before balancing ({cell_type_col}):")
-    print(cell_type_counts)
-    
-    # Find minimum number of cells across cell types
-    min_cells = cell_type_counts.min()
-    print(f"\nSampling {min_cells} cells per cell type for balanced analysis...")
-    
-    # Sample equal number of cells from each cell type
-    balanced_indices = []
-    for cell_type in cell_types:
-        cell_type_mask = adata.obs[cell_type_col] == cell_type
-        cell_type_indices = np.where(cell_type_mask)[0]
-        
-        if len(cell_type_indices) >= min_cells:
-            sampled_indices = np.random.choice(cell_type_indices, size=min_cells, replace=False)
-            balanced_indices.extend(sampled_indices)
-        else:
-            print(f"Warning: {cell_type} has fewer cells ({len(cell_type_indices)}) than min_cells ({min_cells})")
-    
-    # Subset to balanced samples
-    adata_balanced = adata[balanced_indices].copy()
-    
-    # Verify balanced composition
-    balanced_counts = adata_balanced.obs[cell_type_col].value_counts()
-    print(f"\nCell type counts after balancing:")
-    print(balanced_counts)
-    print(f"Total cells: {adata_balanced.n_obs}\n")
-    
-    return adata_balanced
-
-
 def main(subset_type=None, gene_activity_score_type='promoter'):
 
     ## load data (RNA and ATAC gene activity score)
@@ -232,8 +162,8 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
 
         ## per celltype with power-tilted approach
         # Defaults: max_min_n_cells=20, max_imbalance_ratio=2.0, N_max_cells_per_donor=200
-        rna_per_celltype, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, N_max_cells_per_donor=100)
-        atac_per_celltype, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, N_max_cells_per_donor=100)
+        rna_per_celltype, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, max_min_n_cells=10, N_max_cells_per_donor=300)
+        atac_per_celltype, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, max_min_n_cells=10, N_max_cells_per_donor=300)
 
         ## ensure that atac_var in proper format (and that rna_var an index)
         atac_var = atac_var.reset_index().loc[:,'index'].str.split(':|-', expand=True).apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
@@ -293,7 +223,6 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
             enr_res = enr.results
             return enr_res
 
-        
         def do_gsea(results, celltype, gene_sets):
             from gseapy import prerank
 
@@ -310,7 +239,6 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
             gsea_res = res.res2d
 
             return gsea_res
-
 
         ## run enrichr and gsea, celltypes combined - test all km_gene_sets
         rna_enrichr_res_all = do_enrichr(rna_sig_results, rna_sig_results.index.unique().tolist(), km_gene_sets)
@@ -335,7 +263,72 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
 
         ## run enrichr for each celltype - test brainSCOPE TF-TG links
         tf_tg_links = peak_gene_links.groupby('TF')['gene'].unique().to_dict()
-        rna_enrichr_res_brainscope = {celltype: do_enrichr(rna_sig_results, [celltype], tf_tg_links) for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc='Running EnrichR on RNA - brainSCOPE TF-TG links')}
+        tf_tg_links_with_kms = tf_tg_links.copy()
+        tf_tg_links_with_kms.update(km_gene_sets)
+
+        rna_enrichr_res_brainscope = {celltype: do_enrichr(rna_sig_results, [celltype], tf_tg_links_with_kms) for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc='Running EnrichR on RNA - brainSCOPE TF-TG links')}  
+
+        N_tops = 10
+        rna_enrichr_res_brainscope_tops = {celltype: rna_enrichr_res_brainscope[celltype].sort_values('Combined Score', ascending=False).head(N_tops) for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc=f'Extracting top {N_tops} terms from brainSCOPE TF-TG links')}
+        rna_enrichr_res_brainscope_tops = {celltype: rna_enrichr_res_brainscope_tops[celltype].assign(log10_1_FDR=rna_enrichr_res_brainscope_tops[celltype].get('Adjusted P-value').apply(lambda x: -np.log10(x))) for celltype in rna_sig_genes_per_celltype.keys()}
+
+        from gseapy import dotplot as gp_dotplot
+        from matplotlib_venn import venn2, venn3
+        from venn import pseudovenn
+        female_ExN_TF = female_ExN.loc[female_ExN['TF'].eq('EGR1')]
+        female_ExN_TF_genes = set(female_ExN_TF.get('TG').unique())
+
+        merged_eqtl_edges_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'eqtl_edges', 'merged_eqtl_edges.csv'))
+        merged_eqtl_edges_egr1 = merged_eqtl_edges_df[merged_eqtl_edges_df['GRN.TF'].eq('EGR1')]
+        merged_eqtl_edges_egr1_genes = set(merged_eqtl_edges_egr1['GRN.TG'].unique())
+
+        egr1_scompreg_hits_dict = {}
+
+        for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
+            plt.figure()
+            gp_dotplot(
+                rna_enrichr_res_brainscope_tops[celltype],
+                column='log10_1_FDR',
+                title=f'EnrichR for {celltype} celltype',
+                top_term=10,
+                size=20,
+                cutoff=1e3, # purposefully too large even for log10(1/FDR)
+                cmap='copper',
+            )
+
+            ## Venn diagram between genes overlapping EGR1 and km3 terms
+            egr1_genes = set(rna_enrichr_res_brainscope[celltype].loc[rna_enrichr_res_brainscope[celltype]['Term'].eq('EGR1'), 'Genes'].str.split(';').iloc[0])
+            km3_genes = set(rna_enrichr_res_brainscope[celltype].loc[rna_enrichr_res_brainscope[celltype]['Term'].eq('km3'), 'Genes'].str.split(';').iloc[0])
+
+            plt.figure()
+            venn3([egr1_genes, km3_genes, female_ExN_TF_genes], set_labels=['EGR1', 'km3', 'sc-compReg'])
+            egr1_km3_scompreg_hits = egr1_genes & km3_genes & female_ExN_TF_genes
+            plt.title(f'Threeway hits: {egr1_km3_scompreg_hits}')
+
+            ## GRNs for EGR1 and sc-compReg hits
+            egr1_scompreg_hits = list(egr1_genes & female_ExN_TF_genes)
+            egr1_scompreg_hits_grn = female_ExN_TF.loc[female_ExN_TF['TG'].isin(egr1_scompreg_hits)]
+            assert egr1_scompreg_hits_grn['TF'].eq('EGR1').all()
+
+            egr1_scompreg_hits_bedtool = BedTool.from_dataframe(egr1_scompreg_hits_grn.get('enhancer').str.split(':|-', expand=True))
+            gwas_hits_bedtool = BedTool.from_dataframe(gwas_hits.get('Peak coordinates (hg38)').str.split(':|-', expand=True))
+            egr1_scompreg_hits_bedtool_intersect = egr1_scompreg_hits_bedtool.intersect(gwas_hits_bedtool, u=True)
+
+            plt.figure()
+            venn3([egr1_genes, km3_genes, merged_eqtl_edges_egr1_genes], set_labels=['EGR1', 'km3', 'eqtl_edges'])
+            egr1_km3_eqtl_hits = egr1_genes & km3_genes & merged_eqtl_edges_egr1_genes
+            plt.title(f'Threeway hits: {egr1_km3_eqtl_hits}')
+
+            plt.figure()
+            venn3([egr1_genes, female_ExN_TF_genes, merged_eqtl_edges_egr1_genes], set_labels=['EGR1', 'sc-compReg', 'eqtl_edges'])
+            egr1_scompreg_eqtl_hits = egr1_genes & female_ExN_TF_genes & merged_eqtl_edges_egr1_genes
+            plt.title(f'Threeway hits: {egr1_scompreg_eqtl_hits}')
+
+            plt.figure()
+            gene_sets_dict = {'EGR1': egr1_genes, 'km3': km3_genes, 'sc-compReg': female_ExN_TF_genes, 'eqtl_edges': merged_eqtl_edges_egr1_genes}
+            venn(gene_sets_dict)
+
+
         best_egr1_term = 'EGR1'
         best_nr4a2_term = 'NR4A2'
         best_sox2_term = 'SOX2'
@@ -405,6 +398,9 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
             fig, ax = plt.subplots(2, 4, figsize=(20, 11), sharex=True, sharey=True)
             plt.suptitle(f"{terms_dict[TF_name]} - {data_type}")
 
+            x_absmax = max(abs(results_data['log2FoldChange'].max()), abs(results_data['log2FoldChange'].min())) + 0.5
+            xlims = [x_absmax * -1, x_absmax]
+
             for c, celltype in enumerate(celltypes):
                 results = results_data.loc[celltype].copy()
 
@@ -417,10 +413,12 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
                     p_metric = 'pvalue'
 
                 term_genes = term_genes_dict.get(celltype, [])
-
                 volcano_plot(results, term_genes, (ax[0, c], ax[1, c]), p_metric=p_metric)
+
                 ax[0, c].set_title(celltype)
                 ax[1, c].set_title(celltype)
+                ax[0, c].xlim(xlims)
+                ax[1, c].xlim(xlims)
 
             plt.tight_layout()
             os.makedirs(os.path.join(output_dir, 'pychromVAR', TF_name, sex), exist_ok=True)
@@ -518,7 +516,7 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
             ## check overlap between filtered sig genes linked to peaks and sc-compReg results for female ExN EGR1
             #set(sig_genes_linked_to_peaks['gene']) & set(female_ExN_TF['TG'])
             rna_overlap_with_scCompReg = set(all_terms_genes) & set(female_ExN_TF['TG'])
-            atac_overlap_with_scCompReg = set(filtered_sig_genes_linked_to_peaks['gene']) & set(female_ExN_TF['TG'])
+            atac_overlap_with_scCompReg = set(filtered_sig_genes_linked_to_peaks['gene']) & set(female_ExN_TF['TG']) if len(filtered_sig_genes_linked_to_peaks) > 0 else set()
 
             outputs_dict = {
                 'sig_genes_linked_to_peaks': filtered_sig_genes_linked_to_peaks,
@@ -697,7 +695,7 @@ def get_peak_gene_links():
     female_ExN = pd.read_csv(os.path.join(os.environ['OUTPATH'], 'enrichment_analyses_16103846_41', 'mean_grn_df_filtered_female_ExN.csv'))
     female_ExN['enhancer'] = female_ExN['enhancer'].map(peak_names_mapper_reverse)
 
-    return peak_gene_links, female_ExN
+    return peak_gene_links, female_ExN, peak_names_mapper_reverse
 
 def subset_data(adata, gwas_hits, subset_type, hvg_genes=None):
 
@@ -1501,10 +1499,6 @@ def volcano_plot(results, term_genes, axes, p_metric='padj'):
     axes[1].axhline(y=-np.log10(0.05), color='grey', linestyle='--', linewidth=0.8)  # Horizontal line at significance threshold
     axes[1].axvline(x=0.5, color='grey', linestyle='--', linewidth=0.8)  # Vertical line at log2FoldChange = 1.5
     axes[1].axvline(x=-0.5, color='grey', linestyle='--', linewidth=0.8)  # Vertical line at log2FoldChange = -1.5
-
-    x_absmax = np.max(abs(results['log2FoldChange'])) + 0.5
-    axes[0].set_xlim(x_absmax * -1, x_absmax)
-    axes[1].set_xlim(x_absmax * -1, x_absmax)
 
 
 def _plot_combined(
@@ -2337,6 +2331,77 @@ def create_rna_atac_comparison(output_dir):
         fig.savefig(comparison_plot_file, dpi=300, bbox_inches='tight')
         print(f"RNA vs ATAC scatter plot saved to: {comparison_plot_file}")
         plt.close(fig)
+
+
+
+@ray.remote
+def compute_gene_activity_score(gene, peak_gene_links_subset, var_names, raw_X):
+    peaks_linked_to_gene = peak_gene_links_subset.groupby('peak').mean()
+    peaks_mask = np.isin(var_names, peaks_linked_to_gene.index)
+    gene_activity_scores = raw_X[:, peaks_mask].dot(peaks_linked_to_gene.values)
+    return gene, gene_activity_scores
+
+
+def balance_cell_types(adata, cell_type_col='most_common_cluster', cell_types=None, random_state=None):
+    """
+    Balance cell type composition by sampling equal numbers from each cell type.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        Input AnnData object with cell type annotations
+    cell_type_col : str
+        Column name in adata.obs containing cell type labels
+    cell_types : list or None
+        List of cell types to include. If None, uses all unique cell types.
+    random_state : int or None
+        Random seed for reproducibility
+        
+    Returns
+    -------
+    AnnData
+        Balanced AnnData object with equal cells per type
+    """
+    if random_state is not None:
+        np.random.seed(random_state)
+    
+    # Filter to specified cell types if provided
+    if cell_types is not None:
+        adata = adata[adata.obs[cell_type_col].isin(cell_types)].copy()
+    else:
+        cell_types = adata.obs[cell_type_col].unique().tolist()
+    
+    # Get cell type counts
+    cell_type_counts = adata.obs[cell_type_col].value_counts()
+    print(f"\nCell type counts before balancing ({cell_type_col}):")
+    print(cell_type_counts)
+    
+    # Find minimum number of cells across cell types
+    min_cells = cell_type_counts.min()
+    print(f"\nSampling {min_cells} cells per cell type for balanced analysis...")
+    
+    # Sample equal number of cells from each cell type
+    balanced_indices = []
+    for cell_type in cell_types:
+        cell_type_mask = adata.obs[cell_type_col] == cell_type
+        cell_type_indices = np.where(cell_type_mask)[0]
+        
+        if len(cell_type_indices) >= min_cells:
+            sampled_indices = np.random.choice(cell_type_indices, size=min_cells, replace=False)
+            balanced_indices.extend(sampled_indices)
+        else:
+            print(f"Warning: {cell_type} has fewer cells ({len(cell_type_indices)}) than min_cells ({min_cells})")
+    
+    # Subset to balanced samples
+    adata_balanced = adata[balanced_indices].copy()
+    
+    # Verify balanced composition
+    balanced_counts = adata_balanced.obs[cell_type_col].value_counts()
+    print(f"\nCell type counts after balancing:")
+    print(balanced_counts)
+    print(f"Total cells: {adata_balanced.n_obs}\n")
+    
+    return adata_balanced
 
 if __name__ == '__main__':
     main(subset_type=None)

@@ -38,7 +38,7 @@ for file in eqtl_edges_files:
 eqtl_edges_df = pd.concat(eqtl_edges_dfs, ignore_index=True)
 assert (eqtl_edges_df['eqtl.Gene'] == eqtl_edges_df['GRN.TG']).all()
 
-#eqtl_edges_df.to_csv(os.path.join(eqtl_edges_dir, 'eqtl_edges.txt'), sep='\t', index=False)
+eqtl_edges_df.to_csv(os.path.join(eqtl_edges_dir, 'merged_eqtl_edges.csv'), index=False)
 
 #%% see if have scQTL associated to gene hits
 
