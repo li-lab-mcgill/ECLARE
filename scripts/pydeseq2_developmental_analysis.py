@@ -69,54 +69,8 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
     ## load GWAS hits
     zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
     gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
-    gwas_catalogue_hits = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'gwas-catalog-download-associations-v1.0-full.tsv'), sep='\t')
+    gwas_catalog_bedtool, gwas_catalog_metadata = get_gwas_catalogue_hits()
 
-    depressive_traits = ['depressive disorder', 'postpartum depression', 'treatment resistant depression', 'major depressive disorder', 'mixed anxiety and depressive disorder', 'age of onset of depressive disorder', 'psychotic symptom measurement', 'major depressive episode']
-    #mdd_gwas_catalogue_hits = gwas_catalogue_hits.loc[gwas_catalogue_hits['DISEASE/TRAIT'].fillna('').str.lower().isin(depressive_traits)]
-    mdd_gwas_catalogue_hits = gwas_catalogue_hits
-
-    # Split semicolon-separated values and explode to separate rows
-    mdd_gwas_exploded = mdd_gwas_catalogue_hits.copy()
-
-    # Split CHR_ID if it also has semicolons
-    if 'CHR_ID' in mdd_gwas_exploded.columns:
-        mdd_gwas_exploded['CHR_ID'] = mdd_gwas_exploded['CHR_ID'].astype(str).str.split(';')
-        mdd_gwas_exploded = mdd_gwas_exploded.explode('CHR_ID')
-
-    # Split and explode CHR_POS
-    if 'CHR_POS' in mdd_gwas_exploded.columns:
-        mdd_gwas_exploded['CHR_POS'] = mdd_gwas_exploded['CHR_POS'].astype(str).str.split(';')
-        mdd_gwas_exploded = mdd_gwas_exploded.explode('CHR_POS')
-        
-    # Clean up CHR_POS: convert to numeric (coercing errors to NaN)
-    mdd_gwas_exploded['CHR_POS'] = pd.to_numeric(mdd_gwas_exploded['CHR_POS'], errors='coerce')
-
-    # Remove NaN values and empty strings
-    mdd_gwas_exploded = mdd_gwas_exploded.dropna(subset=['CHR_ID', 'CHR_POS'])
-    mdd_gwas_exploded = mdd_gwas_exploded[mdd_gwas_exploded['CHR_ID'] != '']
-
-    # Reset index to track which row is which
-    mdd_gwas_exploded = mdd_gwas_exploded.reset_index(drop=True)
-
-    # Create BED format dataframe WITH metadata preservation
-    gwas_catalog_bed_df = pd.DataFrame({
-        'chr': 'chr' + mdd_gwas_exploded['CHR_ID'].astype(str),
-        'start': mdd_gwas_exploded['CHR_POS'].astype(int),
-        'end': mdd_gwas_exploded['CHR_POS'].astype(int) + 1,  # 1bp interval for SNP
-        'snp_id': mdd_gwas_exploded.index,  # Track the index to map back later
-        'trait': mdd_gwas_exploded['DISEASE/TRAIT'],  # Add trait info
-        'rsid': mdd_gwas_exploded.get('SNPS', '')  # Add SNP RS ID if available
-    })
-
-    # Remove any remaining invalid entries
-    gwas_catalog_bed_df = gwas_catalog_bed_df.dropna(subset=['chr', 'start', 'end'])
-
-    # Store the full metadata for later mapping
-    gwas_catalog_metadata = mdd_gwas_exploded.copy()
-
-    # Create BedTool (will use first 3 columns as BED format)
-    gwas_catalog_bedtool = BedTool.from_dataframe(gwas_catalog_bed_df)
-    
     ## load peak-gene links and km gene sets
     peak_gene_links, female_ExN, peak_names_mapper_reverse = get_peak_gene_links()
     km_gene_sets, km_gene_sets_mapper = load_km_gene_sets()
@@ -358,45 +312,16 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
             egr1_scompreg_hits_grn = female_ExN_TF.loc[female_ExN_TF['TG'].isin(egr1_scompreg_hits)]
             assert egr1_scompreg_hits_grn['TF'].eq('EGR1').all()
 
-            # Prepare BED format dataframes with proper handling of coordinates
-            egr1_bed_df = egr1_scompreg_hits_grn['enhancer'].str.split('[:-]', expand=True)
-            egr1_bed_df = egr1_bed_df.dropna()  # Remove any rows with NaN
-            egr1_bed_df.columns = ['chr', 'start', 'end']
-            egr1_bed_df['start'] = egr1_bed_df['start'].astype(int)
-            egr1_bed_df['end'] = egr1_bed_df['end'].astype(int)
-            
-            gwas_bed_df = gwas_hits['Peak coordinates (hg38)'].str.split('[:-]', expand=True)
-            gwas_bed_df = gwas_bed_df.dropna()  # Remove any rows with NaN
-            gwas_bed_df.columns = ['chr', 'start', 'end']
-            gwas_bed_df['start'] = gwas_bed_df['start'].astype(int)
-            gwas_bed_df['end'] = gwas_bed_df['end'].astype(int)
-            
-            egr1_scompreg_hits_bedtool = BedTool.from_dataframe(egr1_bed_df)
-            
-            # Use wa=True and wb=True to get both intervals and SNP metadata
-            egr1_scompreg_hits_bedtool_intersect = egr1_scompreg_hits_bedtool.intersect(
-                gwas_catalog_bedtool, 
-                wa=True,  # Write original egr1 intervals
-                wb=True   # Write overlapping GWAS intervals with metadata
-            )
-            
-            # Convert to dataframe and parse columns
-            egr1_scompreg_hits_bedtool_intersect_df = egr1_scompreg_hits_bedtool_intersect.to_dataframe()
-            
-            # The columns are: chr, start, end (from egr1) + chr, start, end, snp_id, trait, rsid (from GWAS)
-            egr1_scompreg_hits_bedtool_intersect_df.columns = [
-                'egr1_chr', 'egr1_start', 'egr1_end', 
-                'gwas_chr', 'gwas_start', 'gwas_end', 
-                'snp_id', 'trait', 'rsid'
-            ]
-            
-            print(f"\n{celltype}: Found {len(egr1_scompreg_hits_bedtool_intersect_df)} SNPs intersecting with EGR1 enhancers")
-            print(f"Unique traits: {egr1_scompreg_hits_bedtool_intersect_df['trait'].nunique()}")
-            print(f"\nTop traits:\n{egr1_scompreg_hits_bedtool_intersect_df['trait'].value_counts().head(10)}")
+            ## merge egr1_scompreg_hits_grn with pvalues from atac_results
+            egr1_scompreg_hits_grn = egr1_scompreg_hits_grn.merge(atac_results, left_on='enhancer', right_on='gene', how='left')
+            egr1_scompreg_hits_grn = egr1_scompreg_hits_grn.loc[egr1_scompreg_hits_grn['pvalue'] < 0.05]
+
+            ## intersect GWAS hits with EGR1 and sc-compReg hits
+            #egr1_scompreg_hits_bedtool_intersect_df = intersect_gwas_hits_with_egr1_scompreg_hits(egr1_scompreg_hits_grn, gwas_catalog_metadata)
+
             
             # Store the intersection results in the dictionary
             egr1_scompreg_hits_dict[celltype] = {
-                'intersection_df': egr1_scompreg_hits_bedtool_intersect_df,
                 'egr1_genes': egr1_genes,
                 'km3_genes': km3_genes,
                 'egr1_scompreg_hits': egr1_scompreg_hits,
@@ -785,6 +710,57 @@ def get_peak_gene_links():
     female_ExN['enhancer'] = female_ExN['enhancer'].map(peak_names_mapper_reverse)
 
     return peak_gene_links, female_ExN, peak_names_mapper_reverse
+
+def get_gwas_catalogue_hits():
+    gwas_catalogue_hits = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'gwas-catalog-download-associations-v1.0-full.tsv'), sep='\t')
+
+    depressive_traits = ['depressive disorder', 'postpartum depression', 'treatment resistant depression', 'major depressive disorder', 'mixed anxiety and depressive disorder', 'age of onset of depressive disorder', 'psychotic symptom measurement', 'major depressive episode']
+    #mdd_gwas_catalogue_hits = gwas_catalogue_hits.loc[gwas_catalogue_hits['DISEASE/TRAIT'].fillna('').str.lower().isin(depressive_traits)]
+    mdd_gwas_catalogue_hits = gwas_catalogue_hits
+
+    # Split semicolon-separated values and explode to separate rows
+    mdd_gwas_exploded = mdd_gwas_catalogue_hits.copy()
+
+    # Split CHR_ID if it also has semicolons
+    if 'CHR_ID' in mdd_gwas_exploded.columns:
+        mdd_gwas_exploded['CHR_ID'] = mdd_gwas_exploded['CHR_ID'].astype(str).str.split(';')
+        mdd_gwas_exploded = mdd_gwas_exploded.explode('CHR_ID')
+
+    # Split and explode CHR_POS
+    if 'CHR_POS' in mdd_gwas_exploded.columns:
+        mdd_gwas_exploded['CHR_POS'] = mdd_gwas_exploded['CHR_POS'].astype(str).str.split(';')
+        mdd_gwas_exploded = mdd_gwas_exploded.explode('CHR_POS')
+        
+    # Clean up CHR_POS: convert to numeric (coercing errors to NaN)
+    mdd_gwas_exploded['CHR_POS'] = pd.to_numeric(mdd_gwas_exploded['CHR_POS'], errors='coerce')
+
+    # Remove NaN values and empty strings
+    mdd_gwas_exploded = mdd_gwas_exploded.dropna(subset=['CHR_ID', 'CHR_POS'])
+    mdd_gwas_exploded = mdd_gwas_exploded[mdd_gwas_exploded['CHR_ID'] != '']
+
+    # Reset index to track which row is which
+    mdd_gwas_exploded = mdd_gwas_exploded.reset_index(drop=True)
+
+    # Create BED format dataframe WITH metadata preservation
+    gwas_catalog_bed_df = pd.DataFrame({
+        'chr': 'chr' + mdd_gwas_exploded['CHR_ID'].astype(str),
+        'start': mdd_gwas_exploded['CHR_POS'].astype(int),
+        'end': mdd_gwas_exploded['CHR_POS'].astype(int) + 1,  # 1bp interval for SNP
+        'snp_id': mdd_gwas_exploded.index,  # Track the index to map back later
+        'trait': mdd_gwas_exploded['DISEASE/TRAIT'],  # Add trait info
+        'rsid': mdd_gwas_exploded.get('SNPS', '')  # Add SNP RS ID if available
+    })
+
+    # Remove any remaining invalid entries
+    gwas_catalog_bed_df = gwas_catalog_bed_df.dropna(subset=['chr', 'start', 'end'])
+
+    # Store the full metadata for later mapping
+    gwas_catalog_metadata = mdd_gwas_exploded.copy()
+
+    # Create BedTool (will use first 3 columns as BED format)
+    gwas_catalog_bedtool = BedTool.from_dataframe(gwas_catalog_bed_df)
+
+    return gwas_catalog_bedtool, gwas_catalog_metadata
 
 def subset_data(adata, gwas_hits, subset_type, hvg_genes=None):
 
@@ -2491,6 +2467,45 @@ def balance_cell_types(adata, cell_type_col='most_common_cluster', cell_types=No
     print(f"Total cells: {adata_balanced.n_obs}\n")
     
     return adata_balanced
+
+def intersect_gwas_hits_with_egr1_scompreg_hits(egr1_scompreg_hits_dict, gwas_catalog_metadata):
+    # Prepare BED format dataframes with proper handling of coordinates
+    egr1_bed_df = egr1_scompreg_hits_grn['enhancer'].str.split('[:-]', expand=True)
+    egr1_bed_df = egr1_bed_df.dropna()  # Remove any rows with NaN
+    egr1_bed_df.columns = ['chr', 'start', 'end']
+    egr1_bed_df['start'] = egr1_bed_df['start'].astype(int)
+    egr1_bed_df['end'] = egr1_bed_df['end'].astype(int)
+    
+    gwas_bed_df = gwas_hits['Peak coordinates (hg38)'].str.split('[:-]', expand=True)
+    gwas_bed_df = gwas_bed_df.dropna()  # Remove any rows with NaN
+    gwas_bed_df.columns = ['chr', 'start', 'end']
+    gwas_bed_df['start'] = gwas_bed_df['start'].astype(int)
+    gwas_bed_df['end'] = gwas_bed_df['end'].astype(int)
+    
+    egr1_scompreg_hits_bedtool = BedTool.from_dataframe(egr1_bed_df)
+    
+    # Use wa=True and wb=True to get both intervals and SNP metadata
+    egr1_scompreg_hits_bedtool_intersect = egr1_scompreg_hits_bedtool.intersect(
+        gwas_catalog_bedtool, 
+        wa=True,  # Write original egr1 intervals
+        wb=True   # Write overlapping GWAS intervals with metadata
+    )
+    
+    # Convert to dataframe and parse columns
+    egr1_scompreg_hits_bedtool_intersect_df = egr1_scompreg_hits_bedtool_intersect.to_dataframe()
+    
+    # The columns are: chr, start, end (from egr1) + chr, start, end, snp_id, trait, rsid (from GWAS)
+    egr1_scompreg_hits_bedtool_intersect_df.columns = [
+        'egr1_chr', 'egr1_start', 'egr1_end', 
+        'gwas_chr', 'gwas_start', 'gwas_end', 
+        'snp_id', 'trait', 'rsid'
+    ]
+    
+    print(f"\n{celltype}: Found {len(egr1_scompreg_hits_bedtool_intersect_df)} SNPs intersecting with EGR1 enhancers")
+    print(f"Unique traits: {egr1_scompreg_hits_bedtool_intersect_df['trait'].nunique()}")
+    print(f"\nTop traits:\n{egr1_scompreg_hits_bedtool_intersect_df['trait'].value_counts().head(10)}")
+
+    return egr1_scompreg_hits_bedtool_intersect_df
 
 if __name__ == '__main__':
     main(subset_type=None)
