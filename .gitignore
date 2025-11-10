@@ -10,6 +10,8 @@ benchmark_*/**/*_env
 slurm-*.out
 
 *.zip
+*.tmp
+*.pyc
 
 *.npz
 *.npy
