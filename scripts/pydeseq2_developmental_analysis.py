@@ -17,6 +17,8 @@ import ray
 from scipy import stats
 from statsmodels.stats.multitest import multipletests
 
+from pybedtools import BedTool
+
 # Optional (covariate regression)
 try:
     import statsmodels.formula.api as smf
@@ -29,35 +31,11 @@ from eclare import set_env_variables
 set_env_variables(config_path='/home/mcb/users/dmannk/scMultiCLIP/ECLARE/config')
 
 
-def main(subset_type=None, gene_activity_score_type='promoter'):
+def main(subset_type=None, gene_activity_score_type=None):
 
     ## load data (RNA and ATAC gene activity score)
     mdd_rna_scaled_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub_15582.h5ad'))
     mdd_atac_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub_14814.h5ad'))
-    
-    ## balance cell-type composition for both RNA and ATAC
-    '''
-    target_cell_types = ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']
-    print("=" * 80)
-    print("Balancing RNA data:")
-    print("=" * 80)
-    mdd_rna_scaled_sub = balance_cell_types(
-        mdd_rna_scaled_sub, 
-        cell_type_col='most_common_cluster',
-        cell_types=target_cell_types,
-        random_state=42
-    )
-    
-    print("=" * 80)
-    print("Balancing ATAC data:")
-    print("=" * 80)
-    mdd_atac_sub = balance_cell_types(
-        mdd_atac_sub,
-        cell_type_col='most_common_cluster',
-        cell_types=target_cell_types,
-        random_state=42
-    )
-    '''
     
     ## load data (ATAC broad peaks)
     mdd_atac_broad = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_broad.h5ad'), backed='r')
@@ -70,6 +48,7 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
     zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
     gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
     gwas_catalog_bedtool, gwas_catalog_metadata = get_gwas_catalogue_hits()
+    get_brain_gmt()
 
     ## load peak-gene links and km gene sets
     peak_gene_links, female_ExN, peak_names_mapper_reverse = get_peak_gene_links()
@@ -156,8 +135,8 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
     for sex in ['male', 'female']:
 
         ## across all celltypes
-        rna_all = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, test_type='all')
-        rna_all.index = mdd_rna_scaled_sub.raw.var_names
+        rna_all, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, test_type='all')
+        rna_all.index = rna_var.index
         rna_all.index.name = 'gene'
         rna_all.reset_index(inplace=True)
 
@@ -171,39 +150,13 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
         atac_var = pd.Index(atac_var)
         rna_var = rna_var.index
 
-        def concat_results(per_celltype, genes):
-            results = pd.concat([
-                df.assign(celltype=celltype, gene=genes).assign(
-                    km=genes.map(gwas_hits.set_index('Target gene name')['km'].to_dict()),
-                    traits=genes.map(gwas_hits.groupby('Target gene name')['Trait'].unique().str.join('_').to_dict())
-                    ).set_index('celltype') 
-                for celltype, df in per_celltype.items() if df is not None
-            ])
-
-            return results
-
-        def extract_results(results, p_metric='pvalue'):
-            significant_results = results[results[p_metric] < 0.05]
-            mdd_significant_results = significant_results.loc[significant_results.traits.str.contains('MDD').fillna(False)]
-            sig_genes_per_celltype = significant_results.groupby('celltype')['gene'].apply(np.sort).to_dict()
-            sig_km_per_celltype = significant_results.dropna(subset=['km']).groupby('celltype')['km'].unique().to_dict()
-            return significant_results, mdd_significant_results, sig_genes_per_celltype, sig_km_per_celltype
-
         ## concatenate results across celltypes
         rna_results = concat_results(rna_per_celltype, rna_var)
         atac_results = concat_results(atac_per_celltype, atac_var)
 
-        ## TMP: for ATAC, perform FDR correction for candidate peaks only
-        candidate_egr1_peaks = peak_gene_links.loc[peak_gene_links['TF'].eq('EGR1')]
-        atac_results['egr1_or_target'] = atac_results['gene'].isin(candidate_egr1_peaks['peak'])
-        for celltype in atac_per_celltype.keys():
-            padj_egr1_or_target = multipletests(atac_results.loc[atac_results.index.isin([celltype]) & atac_results['egr1_or_target'], 'pvalue'], method='fdr_bh')[1]
-            atac_results.loc[atac_results.index.isin([celltype]) & atac_results['egr1_or_target'], 'padj_egr1_or_target'] = padj_egr1_or_target
-            print(celltype, padj_egr1_or_target.min())
-
         ## extract significant results
         rna_sig_results, rna_mdd_sig_results, rna_sig_genes_per_celltype, rna_sig_km_per_celltype = extract_results(rna_results, p_metric='padj')
-        atac_sig_results, atac_mdd_sig_results, atac_sig_genes_per_celltype, atac_sig_km_per_celltype = extract_results(atac_results, p_metric='padj')
+        #atac_sig_results, atac_mdd_sig_results, atac_sig_genes_per_celltype, atac_sig_km_per_celltype = extract_results(atac_results, p_metric='padj')
 
         def do_enrichr(sig_results, celltype, gene_sets):
             from gseapy import enrichr
@@ -241,6 +194,7 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
 
             return gsea_res
 
+        '''
         ## run enrichr and gsea, celltypes combined - test all km_gene_sets
         rna_enrichr_res_all = do_enrichr(rna_sig_results, rna_sig_results.index.unique().tolist(), km_gene_sets)
 
@@ -261,6 +215,7 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
         ## run enrichr for each celltype - test ChEA_2022
         rna_enrichr_res_chea_celltypes = {celltype: do_enrichr(rna_sig_results, [celltype], 'ChEA_2022') for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc='Running EnrichR on RNA - ChEA_2022')}
         atac_enrichr_res_chea_celltypes = {celltype: do_enrichr(atac_sig_results, [celltype], 'ChEA_2022') for celltype in tqdm(atac_sig_genes_per_celltype.keys(), desc='Running EnrichR on ATAC - ChEA_2022')}
+        '''
 
         ## run enrichr for each celltype - test brainSCOPE TF-TG links
         tf_tg_links = peak_gene_links.groupby('TF')['gene'].unique().to_dict()
@@ -275,7 +230,6 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
 
         from gseapy import dotplot as gp_dotplot
         from matplotlib_venn import venn2, venn3
-        from pybedtools import BedTool
         
         female_ExN_TF = female_ExN.loc[female_ExN['TF'].eq('EGR1')]
         female_ExN_TF_genes = set(female_ExN_TF.get('TG').unique())
@@ -287,6 +241,7 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
         egr1_scompreg_hits_dict = {}
 
         for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
+
             plt.figure()
             gp_dotplot(
                 rna_enrichr_res_brainscope_tops[celltype],
@@ -297,10 +252,15 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
                 cutoff=1e3, # purposefully too large even for log10(1/FDR)
                 cmap='copper',
             )
+            plt.show()
 
             ## Venn diagram between genes overlapping EGR1 and km3 terms
             egr1_genes = set(rna_enrichr_res_brainscope[celltype].loc[rna_enrichr_res_brainscope[celltype]['Term'].eq('EGR1'), 'Genes'].str.split(';').iloc[0])
             km3_genes = set(rna_enrichr_res_brainscope[celltype].loc[rna_enrichr_res_brainscope[celltype]['Term'].eq('km3'), 'Genes'].str.split(';').iloc[0])
+
+            plt.figure()
+            venn2([egr1_genes, female_ExN_TF_genes], set_labels=['DE TGs of EGR1', 'sc-compReg'])
+            egr1_scompreg_hits = egr1_genes & female_ExN_TF_genes
 
             plt.figure()
             venn3([egr1_genes, km3_genes, female_ExN_TF_genes], set_labels=['EGR1', 'km3', 'sc-compReg'])
@@ -328,20 +288,33 @@ def main(subset_type=None, gene_activity_score_type='promoter'):
                 'egr1_scompreg_hits_grn': egr1_scompreg_hits_grn
             }
 
-            plt.figure()
-            venn3([egr1_genes, km3_genes, merged_eqtl_edges_egr1_genes], set_labels=['EGR1', 'km3', 'eqtl_edges'])
-            egr1_km3_eqtl_hits = egr1_genes & km3_genes & merged_eqtl_edges_egr1_genes
-            plt.title(f'Threeway hits: {egr1_km3_eqtl_hits}')
+        ## Concatenate all 'egr1_scompreg_hits_grn' from egr1_scompreg_hits_dict
+        egr1_scompreg_hits_grn_all = pd.concat([
+            egr1_scompreg_hits_dict[celltype]['egr1_scompreg_hits_grn'].assign(celltype=celltype) for celltype in egr1_scompreg_hits_dict.keys()
+            ])
 
-            plt.figure()
-            venn3([egr1_genes, female_ExN_TF_genes, merged_eqtl_edges_egr1_genes], set_labels=['EGR1', 'sc-compReg', 'eqtl_edges'])
-            egr1_scompreg_eqtl_hits = egr1_genes & female_ExN_TF_genes & merged_eqtl_edges_egr1_genes
-            plt.title(f'Threeway hits: {egr1_scompreg_eqtl_hits}')
+        ## Group results be celltype
+        egr1_scompreg_hits_grn_by_celltypes = egr1_scompreg_hits_grn_all.groupby(['enhancer', 'TG'])['celltype'].agg([
+            ('n_celltypes', 'nunique'),
+            ('celltypes', 'unique')
+        ]).sort_values(by='n_celltypes', ascending=False)
 
-            plt.figure()
-            gene_sets_dict = {'EGR1': egr1_genes, 'km3': km3_genes, 'sc-compReg': female_ExN_TF_genes, 'eqtl_edges': merged_eqtl_edges_egr1_genes}
-            venn(gene_sets_dict)
+        hits_by_celltypes = pd.merge(
+            pd.get_dummies(egr1_scompreg_hits_grn_all.celltype).assign(RG=False)[['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']],
+            egr1_scompreg_hits_grn_all[['TG','enhancer']].apply(lambda x: ' - '.join(x), axis=1).rename('TG - enhancer'),
+            left_index=True, right_index=True, how='right'
+            ).groupby('TG - enhancer').any()
 
+        sort_idxs = pd.DataFrame(np.stack(np.where(hits_by_celltypes)).T).groupby(0).sum().loc[:,1].argsort().values
+        hits_by_celltypes = hits_by_celltypes.iloc[sort_idxs]
+
+        plt.figure(figsize=(3, 5))
+        ax = sns.heatmap(hits_by_celltypes, cmap='viridis', cbar=False, annot=hits_by_celltypes.map(lambda x: 'x' if x else ''), fmt='', 
+                         annot_kws={'size': 8, 'weight': 'bold', 'color': 'black'})
+        plt.xticks(rotation=45)
+        plt.xlabel('Imputed cell-type labels')
+
+        plt.show()
 
         best_egr1_term = 'EGR1'
         best_nr4a2_term = 'NR4A2'
@@ -799,7 +772,24 @@ def subset_data(adata, gwas_hits, subset_type, hvg_genes=None):
 
     return adata
 
+def concat_results(per_celltype, genes):
+    results = pd.concat([
+        df.assign(celltype=celltype, gene=genes).assign(
+            km=genes.map(gwas_hits.set_index('Target gene name')['km'].to_dict()),
+            traits=genes.map(gwas_hits.groupby('Target gene name')['Trait'].unique().str.join('_').to_dict())
+            ).set_index('celltype') 
+        for celltype, df in per_celltype.items() if df is not None
+    ])
 
+    return results
+
+def extract_results(results, p_metric='pvalue'):
+    significant_results = results[results[p_metric] < 0.05]
+    mdd_significant_results = significant_results.loc[significant_results.traits.str.contains('MDD').fillna(False)]
+    sig_genes_per_celltype = significant_results.groupby('celltype')['gene'].apply(np.sort).to_dict()
+    sig_km_per_celltype = significant_results.dropna(subset=['km']).groupby('celltype')['km'].unique().to_dict()
+    return significant_results, mdd_significant_results, sig_genes_per_celltype, sig_km_per_celltype
+    
 def run_pyDESeq2_on_celltypes(adata, sex, test_type='split', max_min_n_cells=20, 
                               max_imbalance_ratio=2.0, N_max_cells_per_donor=300, random_state=42):
     """
@@ -1223,7 +1213,7 @@ def run_pyDESeq2_contrasts(counts, metadata, rna_condition_key, sf_type='ratio',
 
     return per_celltype
 
-def run_pyDESeq2_all_celltypes(counts, metadata):
+def run_pyDESeq2_all_celltypes(counts, metadata, sf_type='ratio'):
 
     inference = DefaultInference(n_cpus=8)
     dds = DeseqDataSet(
@@ -1232,6 +1222,7 @@ def run_pyDESeq2_all_celltypes(counts, metadata):
         design="~ Batch + Condition",
         refit_cooks=True,
         inference=inference,
+        size_factors_fit_type=sf_type
     )
     dds.deseq2()
 
