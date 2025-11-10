@@ -48,7 +48,7 @@ def main(subset_type=None, gene_activity_score_type=None):
     zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
     gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
     gwas_catalog_bedtool, gwas_catalog_metadata = get_gwas_catalogue_hits()
-    get_brain_gmt()
+    #get_brain_gmt()
 
     ## load peak-gene links and km gene sets
     peak_gene_links, female_ExN, peak_names_mapper_reverse = get_peak_gene_links()
