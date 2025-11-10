@@ -1,42 +1,42 @@
-library(ArchR)
-library(GenomicRanges)
+#!/usr/bin/env Rscript
 
-proj <- readRDS("/Users/dmannk/cisformer/data/mdd_data/ArchR_Subcluster_by_peaks_updated.rds")   # or loadArchRProject()
+library(Seurat)
 
-# Get peak set (usually from the ATAC / PeakMatrix)
-peakGR <- getPeakSet(proj, useMatrix = "PeakMatrix")  # adjust matrix name if different
+# Load the object
+DATAPATH <- "/home/mcb/users/dmannk/scMultiCLIP/data/mdd_data"
+rds_path <- file.path(DATAPATH, "ArchR_Subcluster_by_peaks_updated.rds")
+bed_path <- file.path(DATAPATH, "ArchR_Subcluster_peaks_narrowPeaks.bed")
 
-# Convert to a BED-like data.frame
+proj <- readRDS(rds_path)
+
+# Check available assays
+print(Assays(proj))
+
+# Pick the ATAC assay (adjust name if needed)
+assay_name <- if ("peaks" %in% Assays(proj)) "peaks" else "ATAC"
+
+# Extract the ranges
+peak_ranges <- proj@assays[[assay_name]]@ranges
+
+# Convert to BED data.frame
 df <- data.frame(
-  chr   = as.character(GenomicRanges::seqnames(peakGR)),
-  start = GenomicRanges::start(peakGR) - 1,  # BED is 0-based start
-  end   = GenomicRanges::end(peakGR)
+  chr   = as.character(GenomicRanges::seqnames(peak_ranges)),
+  start = GenomicRanges::start(peak_ranges) - 1L,  # BED = 0-based
+  end   = GenomicRanges::end(peak_ranges)
 )
 
-# Optional: add name and score columns if you have them
-m <- as.data.frame(mcols(peakGR))
+# Optional: name & score
+df$name  <- paste0("peak_", seq_len(nrow(df)))
+df$score <- 1
 
-if ("name" %in% colnames(m)) {
-  df$name <- m$name
-} else {
-  df$name <- paste0("peak_", seq_len(nrow(df)))
-}
-
-if ("score" %in% colnames(m)) {
-  df$score <- m$score
-} else if ("Log2FC" %in% colnames(m)) {
-  # or any quantitative column you like
-  df$score <- m$Log2FC
-} else {
-  df$score <- 1  # fallback: binary peaks
-}
-
-# Write as plain BED-like file (pyGenomeTracks will happily read this)
+# Write as BED
 write.table(
   df,
-  file = "archr_narrow_peaks.bed",
+  file = bed_path,
   sep = "\t",
   quote = FALSE,
   row.names = FALSE,
   col.names = FALSE
 )
+
+cat("✅ Exported", nrow(df), "peaks to", bed_path, "\n")
