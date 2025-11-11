@@ -130,6 +130,7 @@ def main(subset_type=None, gene_activity_score_type=None):
         obs = mdd_atac_sub.obs.copy()
         mdd_atac_sub = mdd_atac_broad_sub[:, peak_counts > 100].copy()
         mdd_atac_sub.obs = obs
+        # mdd_atac_sub.write_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_broad_sub_14814.h5ad'))
 
 
     for sex in ['male', 'female']:
@@ -272,9 +273,10 @@ def main(subset_type=None, gene_activity_score_type=None):
             egr1_scompreg_hits_grn = female_ExN_TF.loc[female_ExN_TF['TG'].isin(egr1_scompreg_hits)]
             assert egr1_scompreg_hits_grn['TF'].eq('EGR1').all()
 
-            ## merge egr1_scompreg_hits_grn with pvalues from atac_results
+            ## filter by peaks' p-values (merge egr1_scompreg_hits_grn with pvalues from atac_results)
             egr1_scompreg_hits_grn = egr1_scompreg_hits_grn.merge(atac_results, left_on='enhancer', right_on='gene', how='left')
-            egr1_scompreg_hits_grn = egr1_scompreg_hits_grn.loc[egr1_scompreg_hits_grn['pvalue'] < 0.05]
+            egr1_scompreg_hits_grn.dropna(subset='enhancer', inplace=True)
+            #egr1_scompreg_hits_grn = egr1_scompreg_hits_grn.loc[egr1_scompreg_hits_grn['pvalue'] < 0.05]
 
             ## intersect GWAS hits with EGR1 and sc-compReg hits
             #egr1_scompreg_hits_bedtool_intersect_df = intersect_gwas_hits_with_egr1_scompreg_hits(egr1_scompreg_hits_grn, gwas_catalog_metadata)
@@ -299,23 +301,34 @@ def main(subset_type=None, gene_activity_score_type=None):
             ('celltypes', 'unique')
         ]).sort_values(by='n_celltypes', ascending=False)
 
+        ## Group results by celltype
         hits_by_celltypes = pd.merge(
             pd.get_dummies(egr1_scompreg_hits_grn_all.celltype).assign(RG=False)[['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']],
             egr1_scompreg_hits_grn_all[['TG','enhancer']].apply(lambda x: ' - '.join(x), axis=1).rename('TG - enhancer'),
             left_index=True, right_index=True, how='right'
             ).groupby('TG - enhancer').any()
+        assert hits_by_celltypes.index.value_counts().eq(1).all()
 
+        ## sort by number of celltypes for each hit (presort alphabetically)
+        hits_by_celltypes.sort_index(inplace=True)
         sort_idxs = pd.DataFrame(np.stack(np.where(hits_by_celltypes)).T).groupby(0).sum().loc[:,1].argsort().values
         hits_by_celltypes = hits_by_celltypes.iloc[sort_idxs]
 
+        ## plot heatmap of hits by celltype
         plt.figure(figsize=(3, 5))
         ax = sns.heatmap(hits_by_celltypes, cmap='viridis', cbar=False, annot=hits_by_celltypes.map(lambda x: 'x' if x else ''), fmt='', 
                          annot_kws={'size': 8, 'weight': 'bold', 'color': 'black'})
         plt.xticks(rotation=45)
         plt.xlabel('Imputed cell-type labels')
-
         plt.show()
 
+        ## save intermediate results
+        output_dir = os.path.join(os.environ['OUTPATH'], 'mdd_developmental_analysis')
+        os.makedirs(output_dir, exist_ok=True)
+        egr1_scompreg_hits_grn_all.to_csv(os.path.join(output_dir,  'egr1_scompreg_hits_grn_all.csv'), index=False)
+        hits_by_celltypes.to_csv(os.path.join(output_dir, 'hits_by_celltypes.csv'), index=False)
+
+        ## preparations for volcano plots
         best_egr1_term = 'EGR1'
         best_nr4a2_term = 'NR4A2'
         best_sox2_term = 'SOX2'
@@ -607,10 +620,6 @@ def main(subset_type=None, gene_activity_score_type=None):
             ncols=4,
             save_path=os.path.join(os.environ['OUTPATH'], 'pychromVAR', 'EGR1', sex)
         )
-        
-        ## Save results on a celltype & sex basis
-        output_dir = os.path.join(os.environ['DATAPATH'], 'mdd_data', 'developmental_analysis')
-        os.makedirs(output_dir, exist_ok=True)
         
         # Save enrichr results
         for celltype, res in rna_enrichr_res.items():

@@ -4,24 +4,19 @@ suppressPackageStartupMessages({
   library(Seurat)
   library(Signac)
   library(Matrix)
+  library(zellkonverter)
 })
 
 # ---- Paths ----
 DATAPATH <- "/home/mcb/users/dmannk/scMultiCLIP/data/mdd_data"
-rds_path <- file.path(DATAPATH, "ArchR_Subcluster_by_peaks_updated.rds")
+h5ad_path <- file.path(DATAPATH, "mdd_atac_broad_sub_14814_nolayers.h5ad")
+#rds_path <- file.path(DATAPATH, "ArchR_Subcluster_by_peaks_updated.rds")
+
 # We'll write many files: prefix + group_label + ".narrowPeak"
-out_prefix <- file.path(DATAPATH, "ArchR_Subcluster")
+out_prefix <- file.path(DATAPATH, "pseudobulked_narrowPeaks", "mdd_atac_broad_sub_14814")
 
 # ---- Load object ----
-proj <- readRDS(rds_path)
-
-meta <- proj@meta.data
-required_cols <- c("sex", "ClustersMapped", "condition")
-missing_cols <- setdiff(required_cols, colnames(meta))
-if (length(missing_cols) > 0) {
-  stop("Missing required metadata columns in proj@meta.data: ",
-       paste(missing_cols, collapse = ", "))
-}
+proj <- readH5AD(h5ad_path)
 
 # ---- Find ATAC / peaks assay ----
 assays <- Assays(proj)
