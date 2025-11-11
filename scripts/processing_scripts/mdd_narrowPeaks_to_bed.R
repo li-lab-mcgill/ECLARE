@@ -5,37 +5,74 @@ suppressPackageStartupMessages({
   library(Signac)
   library(Matrix)
   library(zellkonverter)
+  library(GenomicRanges)
+  library(IRanges)
+  library(SummarizedExperiment)
 })
 
 # ---- Paths ----
 DATAPATH <- "/home/mcb/users/dmannk/scMultiCLIP/data/mdd_data"
-h5ad_path <- file.path(DATAPATH, "mdd_atac_broad_sub_14814_nolayers.h5ad")
+h5ad_path <- file.path(DATAPATH, "mdd_atac_broad_sub_14814.h5ad")
 #rds_path <- file.path(DATAPATH, "ArchR_Subcluster_by_peaks_updated.rds")
+celltype_key <- "most_common_cluster"
 
 # We'll write many files: prefix + group_label + ".narrowPeak"
 out_prefix <- file.path(DATAPATH, "pseudobulked_narrowPeaks", "mdd_atac_broad_sub_14814")
 
 # ---- Load object ----
-proj <- readH5AD(h5ad_path)
+# readH5AD returns a SingleCellExperiment, need to extract data and create Seurat object
+sce <- readH5AD(h5ad_path)
+cat("Loaded SingleCellExperiment with", ncol(sce), "cells and", nrow(sce), "features\n")
 
-# ---- Find ATAC / peaks assay ----
-assays <- Assays(proj)
-cat("Available assays:", paste(assays, collapse = ", "), "\n")
+# Use the only assay present: "X"
+count_mat <- SummarizedExperiment::assay(sce, "X")
+cat("Using assay 'X' with", nrow(count_mat), "features and", ncol(count_mat), "cells\n")
 
-if ("peaks" %in% assays) {
-  atac_assay <- "peaks"
-} else if ("ATAC" %in% assays) {
-  atac_assay <- "ATAC"
-} else {
-  atac_assay <- DefaultAssay(proj)
+# Extract peak names (should be in chr:start-end format)
+peak_names <- rownames(sce)
+cat("Parsing", length(peak_names), "peak coordinates from var_names...\n")
+
+# Parse chr:start-end format
+peak_parts <- strsplit(peak_names, "[:-]")
+if (any(sapply(peak_parts, length) != 3)) {
+  stop("Peak names are not in expected format 'chr:start-end'. ",
+       "First few names: ", paste(head(peak_names, 3), collapse = ", "))
 }
 
-cat("Using assay:", atac_assay, "\n")
+chrom <- sapply(peak_parts, function(x) x[1])
+start <- as.integer(sapply(peak_parts, function(x) x[2]))
+end <- as.integer(sapply(peak_parts, function(x) x[3]))
 
-if (!inherits(proj[[atac_assay]], "ChromatinAssay")) {
-  stop("Assay '", atac_assay, "' is not a ChromatinAssay. ",
-       "Check which assay contains your ATAC peaks.")
-}
+# Create GenomicRanges
+peak_ranges_gr <- GRanges(
+  seqnames = chrom,
+  ranges = IRanges(start = start, end = end)
+)
+names(peak_ranges_gr) <- peak_names
+
+cat("Created GenomicRanges with", length(peak_ranges_gr), "peaks\n")
+
+# Extract metadata
+meta <- as.data.frame(colData(sce))
+rownames(meta) <- colnames(sce)
+
+# Create ChromatinAssay
+cat("Creating ChromatinAssay...\n")
+chrom_assay <- CreateChromatinAssay(
+  counts = count_mat,
+  ranges = peak_ranges_gr
+)
+
+# Create Seurat object with ChromatinAssay
+cat("Creating Seurat object...\n")
+proj <- CreateSeuratObject(
+  counts = chrom_assay,
+  assay = "peaks",
+  meta.data = meta
+)
+
+atac_assay <- "peaks"
+cat("Created Seurat object with ChromatinAssay '", atac_assay, "'\n")
 
 # ---- 1) Get peak ranges (shared across all groups) ----
 peak_ranges <- granges(proj[[atac_assay]])
@@ -54,13 +91,41 @@ summit_off[peak_width <= 0] <- 0L
 # ---- 2) Count matrix (peaks x cells) ----
 count_mat <- GetAssayData(proj, assay = atac_assay, slot = "counts")
 
-# ---- 3) Define groups: all combinations of sex / ClustersMapped / condition ----
+# ---- 3) Define groups: all combinations of sex / celltype_key / condition ----
+# Extract metadata from Seurat object (already added during object creation)
+meta <- proj@meta.data
+
+# Define required columns for grouping
+required_cols <- c("sex", celltype_key, "condition")
+# Check if columns exist (handle case variations)
+if (!"sex" %in% colnames(meta)) {
+  if ("Sex" %in% colnames(meta)) {
+    meta$sex <- meta$Sex
+  } else {
+    stop("Neither 'sex' nor 'Sex' column found in metadata")
+  }
+}
+if (!"condition" %in% colnames(meta)) {
+  if ("Condition" %in% colnames(meta)) {
+    meta$condition <- meta$Condition
+  } else {
+    stop("Neither 'condition' nor 'Condition' column found in metadata")
+  }
+}
+if (!celltype_key %in% colnames(meta)) {
+  stop(paste0(celltype_key, " column not found in metadata. Available columns: "), 
+       paste(colnames(meta), collapse = ", "))
+}
+
+# Create group dataframe
 group_df <- meta[, required_cols, drop = FALSE]
+# Ensure rownames match cell names
+rownames(group_df) <- rownames(meta)
 
 group_df$group_label <- apply(group_df, 1, function(x) {
   paste0(
     "sex_", x["sex"],
-    "_Cluster_", x["ClustersMapped"],
+    "_Cluster_", x[celltype_key],
     "_cond_", x["condition"]
   )
 })
