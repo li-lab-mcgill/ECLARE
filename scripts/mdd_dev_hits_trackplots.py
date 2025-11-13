@@ -37,7 +37,7 @@ import numpy as np
 egr1_hits_df = egr1_hits_df.assign(log10_pvalue=-np.log10(egr1_hits_df['pvalue']))
 egr1_hits_df['product'] = egr1_hits_df[['LR', 'log2FoldChange', 'log10_pvalue']].prod(axis=1).abs()
 
-## 
+## save hits dataframe to file to be ingested by pyGenomeTracks
 egr1_links_df = egr1_hits_df[['chrom_gene', 'chromStart_gene', 'chromEnd_gene', 'chrom_peak', 'chromStart_peak', 'chromEnd_peak', 'product']]
 egr1_links_df_path = os.path.join(os.environ['OUTPATH'], 'mdd_developmental_analysis', 'egr1_scompreg_hits_grn_all.links')
 egr1_links_df.to_csv(egr1_links_df_path, index=False, sep='\t')
@@ -53,32 +53,22 @@ def get_config_ini_content(links_file):
     height = 3
 
     [narrow female ExN case]
-    file = {os.environ['DATAPATH']}/mdd_data/pseudobulked_narrowPeaks/ArchR_Subcluster.female_ExN_case.narrowPeak
+    file = {os.environ['DATAPATH']}/mdd_data/pseudobulked_narrowPeaks/mdd_atac_broad_sub_14814.female_EN_Case.narrowPeak
     height = 4
-    max_value = 5
+    max_value = 1
     line_width = 0.1
     title = female ExN case
     show_labels = false
     color = red
 
     [narrow female ExN control]
-    file = {os.environ['DATAPATH']}/mdd_data/pseudobulked_narrowPeaks/ArchR_Subcluster.female_ExN_control.narrowPeak
+    file = {os.environ['DATAPATH']}/mdd_data/pseudobulked_narrowPeaks/mdd_atac_broad_sub_14814.female_EN_Control.narrowPeak
     height = 4
-    max_value = 5
+    max_value = 1
     line_width = 0.1
     title = female ExN control
     show_labels = false
     color = blue
-    overlay_previous = no
-
-    [narrow female End control]
-    file = {os.environ['DATAPATH']}/mdd_data/pseudobulked_narrowPeaks/ArchR_Subcluster.female_End_control.narrowPeak
-    height = 4
-    max_value = 5
-    line_width = 0.1
-    title = female End control
-    show_labels = false
-    color = black
     overlay_previous = no
 
     [spacer]
@@ -112,11 +102,13 @@ with open(os.path.join(os.environ['OUTPATH'], 'mdd_developmental_analysis', 'con
     f.write(config_ini_content)
 
 ## create trackplot
+output_path = os.path.join(os.environ['OUTPATH'], 'mdd_developmental_analysis', 'egr1_scompreg_hits_grn_all.png')
 subprocess.run([
     'pyGenomeTracks', '--tracks', os.path.join(os.environ['OUTPATH'], 'mdd_developmental_analysis', 'config.ini'),
-    '--region', 'chr3:50200000-50340000',
-    '-o', os.path.join(os.environ['OUTPATH'], 'mdd_developmental_analysis', 'egr1_scompreg_hits_grn_all.png')
+    '--region', 'chr10:100990000-101040000',
+    '-o', output_path
     ])
+print(f"Trackplot saved to {output_path}")
 
 ## show trackplot
 def open_region_image(image_path):
@@ -127,3 +119,27 @@ def open_region_image(image_path):
 
 image_path = os.path.join(os.environ['OUTPATH'], 'mdd_developmental_analysis', 'egr1_scompreg_hits_grn_all.png')
 open_region_image(image_path)
+
+def case_control_analysis():
+    '''
+    Analyze case-control differences in EGR1 hits
+    '''
+    case_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'pseudobulked_narrowPeaks', f'mdd_atac_broad_sub_14814.female_EN_Case.narrowPeak'), sep='\t', header=None)
+    control_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'pseudobulked_narrowPeaks', f'mdd_atac_broad_sub_14814.female_EN_Control.narrowPeak'), sep='\t', header=None)
+
+    case_df.columns = ['chrom', 'chromStart', 'chromEnd', 'name', 'score', 'strand', 'signalValue', 'pValue', 'qValue', 'peak']
+    control_df.columns = ['chrom', 'chromStart', 'chromEnd', 'name', 'score', 'strand', 'signalValue', 'pValue', 'qValue', 'peak']
+
+    ## find interval with maximum case-control difference
+    case_control_df = pd.merge(case_df, control_df, left_index=True, right_index=True, how='inner', suffixes=('_case', '_control'))
+    case_control_df = case_control_df.loc[case_control_df['signalValue_case'].ge(0) & case_control_df['signalValue_control'].ge(0)]
+    delta = np.abs(case_control_df['signalValue_case'] - case_control_df['signalValue_control'])
+    delta_max = delta.argmax()
+
+    ## find EGR1 hits in the interval
+    intervals = case_control_df[['chrom_case', 'chromStart_case', 'chromEnd_case']]
+    intervals['chromStart_case'] = intervals['chromStart_case'] + 1
+    intervals['interval'] = intervals.apply(lambda x: f"{x[0]}:{x[1]}-{x[2]}", axis=1)
+    egr1_hits_df = egr1_hits_df.assign(egr1_hit=egr1_hits_df['enhancer'].isin(intervals['interval']))
+    return egr1_hits_df
+
