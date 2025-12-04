@@ -13,6 +13,7 @@ import sys
 from tqdm import tqdm
 import ast
 import ray
+import pickle
 
 from gseapy import dotplot as gp_dotplot
 from matplotlib_venn import venn2, venn3
@@ -715,12 +716,32 @@ def load_data():
 
 
 def load_km_gene_sets():
-    km_gene_sets = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv'), index_col=0, header=0)
-    km_gene_sets = km_gene_sets['clusters.1'].to_dict()
-    km_gene_sets = {k: ast.literal_eval(v) for k, v in km_gene_sets.items()} # or else, just a single string that looks like a list of genes
 
-    km_gene_sets_df = pd.DataFrame.from_dict(km_gene_sets, orient='index').unstack().reset_index().set_index(0).drop(columns=['level_0']).rename(columns={'level_1': 'km'})
-    km_gene_sets_mapper = km_gene_sets_df.to_dict().get('km')
+    ## get pickled data
+    with open(os.path.join(os.environ['OUTPATH'], 'gene_clusters_results.pkl'), 'rb') as f:
+        results_pfc_zhu = pickle.load(f)
+        results_mdd = pickle.load(f)
+
+    ## get km gene sets
+    km_gene_sets_pfc_zhu = results_pfc_zhu['genes_per_cluster'].to_dict()
+    km_gene_sets_mdd = results_mdd['genes_per_cluster'].to_dict()
+
+    ## append dataset name to km gene sets
+    km_gene_sets_pfc_zhu = {k+'_pfc_zhu': v for k, v in km_gene_sets_pfc_zhu.items()}
+    km_gene_sets_mdd = {k+'_mdd': v for k, v in km_gene_sets_mdd.items()}
+
+    ## get km gene sets mapper
+    km_gene_sets_pfc_df = pd.DataFrame.from_dict(km_gene_sets_pfc_zhu, orient='index').unstack().reset_index().set_index(0).drop(columns=['level_0']).rename(columns={'level_1': 'km'})
+    km_gene_sets_mdd_df = pd.DataFrame.from_dict(km_gene_sets_mdd, orient='index').unstack().reset_index().set_index(0).drop(columns=['level_0']).rename(columns={'level_1': 'km'})
+
+    ## get km gene sets mapper
+    km_gene_sets_pfc_mapper = km_gene_sets_pfc_df.to_dict().get('km')
+    km_gene_sets_mdd_mapper = km_gene_sets_mdd_df.to_dict().get('km')
+
+    ## concatenate km gene sets and mapper
+    km_gene_sets = {**km_gene_sets_pfc_zhu, **km_gene_sets_mdd}
+    km_gene_sets_mapper = {**km_gene_sets_pfc_mapper, **km_gene_sets_mdd_mapper}
+
     return km_gene_sets, km_gene_sets_mapper
 
 def get_peak_gene_links():
