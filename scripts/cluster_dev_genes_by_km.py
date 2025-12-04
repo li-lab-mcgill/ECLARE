@@ -33,6 +33,19 @@ sc.tl.leiden(pfc_zhu_rna_EN, resolution=0.6, random_state=0, neighbors_key='X_or
 sc.tl.umap(pfc_zhu_rna_EN, neighbors_key='X_ordinal_latents_neighbors')
 sc.pl.umap(pfc_zhu_rna_EN, color=['Cell type', 'ordinal_pseudotime', 'leiden'], wspace=0.3, ncols=3)
 
+
+# Convert raw to AnnData (copies X, var from raw; obs from parent)
+mdd_rna_scaled_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', f'mdd_rna_scaled_sub_15582.h5ad'))
+mdd_rna_raw = mdd_rna_scaled_sub.raw.to_adata()
+
+# Copy embeddings and graphs from processed object
+mdd_rna_raw.obsm = dict(mdd_rna_scaled_sub.obsm)
+mdd_rna_raw.obsp = dict(mdd_rna_scaled_sub.obsp)
+mdd_rna_raw.uns = mdd_rna_scaled_sub.uns.copy()
+
+sc.pp.normalize_total(mdd_rna_raw, target_sum=1e4, exclude_highly_expressed=False)
+sc.pp.log1p(mdd_rna_raw)
+
 ## compute Moran's I for each gene
 W = WSP(pfc_zhu_rna_EN.obsp['X_ordinal_latents_neighbors_connectivities'].tocsr())
 W_dense = W.to_W()
@@ -136,7 +149,10 @@ def fit_gam_smoother_for_gene(g, gene_name, X, pseudotime, n_knots=9, n_grid=200
     
     # Fit GAM with spline term
     # s(0) means fit a smooth spline on the first (and only) feature
-    gam = GAM(s(0, n_splines=n_knots), distribution=distribution, link=link)
+    gam = GAM(
+        s(0, n_splines=n_knots, spline_order=3)
+    )
+
     
     try:
         gam.fit(pseudotime.reshape(-1, 1), y_offset)
@@ -167,6 +183,13 @@ def fit_gam_smoother_for_gene(g, gene_name, X, pseudotime, n_knots=9, n_grid=200
 
 # Get pseudotime and prepare for smoothing and put data in Ray's object store for efficient parallel access
 pseudotime = pfc_zhu_rna_EN.obs['ordinal_pseudotime'].values
+gene_expr_sig_df = pd.DataFrame(gene_expr_sig, index=pseudotime, columns=km_genes)
+gene_expr_sig_df.sort_index(inplace=True)
+
+## extract pseudotime and expression data from padded dataframe
+pseudotime = gene_expr_sig_df.index.values
+gene_expr_sig = gene_expr_sig_df.values
+
 pseudotime_ref = ray.put(pseudotime)
 X_ref_sig = ray.put(gene_expr_sig)
 

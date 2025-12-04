@@ -1791,10 +1791,11 @@ pfc_zhu_rna_EN.obs['ordinal_pseudotime'] = ordinal_rna_pt
 pfc_zhu_rna_EN.obsm['X_ordinal_latents'] = ordinal_rna_latents.detach().cpu().numpy()
 pfc_zhu_rna_EN.write_h5ad(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'rna', f'pfc_zhu_rna_EN_ordinal_{pfc_zhu_rna_EN.n_obs}.h5ad'))
 
-# Load data
+## Load data
 mdd_rna_scaled = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled.h5ad'), backed='r')
-mdd_rna_scaled_sub = mdd_rna_scaled[mdd_rna_scaled.obs_names.isin(student_rna_sub.obs_names)].to_memory()
+mdd_rna_scaled_sub = mdd_rna_scaled[mdd_rna_scaled.obs_names.isin(student_rna_sub.obs_names)].to_memory() ## subset to student adata
 
+## add source_target_adata metadata to mdd_rna_scaled_sub
 mdd_rna_scaled_sub.obs = mdd_rna_scaled_sub.obs.merge(source_target_adata.obs, left_index=True, right_index=True, suffixes=('', '_right'))
 mdd_rna_scaled_sub.obs = mdd_rna_scaled_sub.obs.loc[:, ~mdd_rna_scaled_sub.obs.columns.str.endswith('_right')]
 
@@ -1807,7 +1808,7 @@ mdd_rna_scaled_sub.obs['ordinal_pseudotime'] = ordinal_rna_pt
 mdd_rna_scaled_sub.obsm['X_ordinal_latents'] = ordinal_rna_latents.detach().cpu().numpy()
 sc.pp.neighbors(mdd_rna_scaled_sub, use_rep='X_ordinal_latents', key_added='X_ordinal_latents_neighbors', n_neighbors=30, n_pcs=10)
 
-## find genes in full data
+## find genes in 'full' data
 mdd_rna_scaled_sub.raw.var.set_index('_index', inplace=True)
 genes_in_full_data_bool = mdd_rna_scaled_sub.raw.var.index.isin(mdd_rna_full.var_names)
 

@@ -31,7 +31,7 @@ from eclare import set_env_variables
 set_env_variables(config_path='/home/mcb/users/dmannk/scMultiCLIP/ECLARE/config')
 
 
-def main(subset_type=None, gene_activity_score_type=None):
+def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=False):
 
     ## load data (RNA and ATAC gene activity score)
     mdd_rna_scaled_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub_15582.h5ad'))
@@ -135,25 +135,47 @@ def main(subset_type=None, gene_activity_score_type=None):
 
     for sex in ['male', 'female']:
 
-        ## across all celltypes
-        rna_all, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, test_type='all')
-        rna_all.index = rna_var.index
-        rna_all.index.name = 'gene'
-        rna_all.reset_index(inplace=True)
+        if analyze_per_celltype:
+            ## per celltype with power-tilted approach
+            # Defaults: max_min_n_cells=20, max_imbalance_ratio=2.0, N_max_cells_per_donor=200
+            rna_per_celltype, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, max_min_n_cells=0, max_imbalance_ratio=np.inf, N_max_cells_per_donor=np.inf)
+            atac_per_celltype, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, max_min_n_cells=0, max_imbalance_ratio=np.inf, N_max_cells_per_donor=np.inf)
 
-        ## per celltype with power-tilted approach
-        # Defaults: max_min_n_cells=20, max_imbalance_ratio=2.0, N_max_cells_per_donor=200
-        rna_per_celltype, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, max_min_n_cells=10, N_max_cells_per_donor=300)
-        atac_per_celltype, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, max_min_n_cells=10, N_max_cells_per_donor=300)
+            ## ensure that atac_var in proper format (and that rna_var an index)
+            atac_var = atac_var.reset_index().loc[:,'index'].str.split(':|-', expand=True).apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
+            atac_var = pd.Index(atac_var)
+            rna_var = rna_var.index
 
-        ## ensure that atac_var in proper format (and that rna_var an index)
-        atac_var = atac_var.reset_index().loc[:,'index'].str.split(':|-', expand=True).apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
-        atac_var = pd.Index(atac_var)
-        rna_var = rna_var.index
-
-        ## concatenate results across celltypes
-        rna_results = concat_results(rna_per_celltype, rna_var)
-        atac_results = concat_results(atac_per_celltype, atac_var)
+            ## concatenate results across celltypes
+            rna_results = concat_results(rna_per_celltype, rna_var)
+            atac_results = concat_results(atac_per_celltype, atac_var)
+        else:
+            ## across all celltypes (combined analysis)
+            rna_all, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, test_type='all')
+            atac_all, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, test_type='all')
+            
+            ## format rna_all results
+            rna_var = rna_var.index
+            rna_all.index = rna_var
+            rna_all.index.name = 'gene'
+            rna_all.reset_index(inplace=True)
+            rna_all['km'] = rna_all['gene'].map(gwas_hits.set_index('Target gene name')['km'].to_dict())
+            rna_all['traits'] = rna_all['gene'].map(gwas_hits.groupby('Target gene name')['Trait'].unique().str.join('_').to_dict())
+            rna_all['celltype'] = 'all'
+            rna_all.set_index('celltype', inplace=True)
+            rna_results = rna_all
+            
+            ## format atac_all results
+            atac_var = atac_var.reset_index().loc[:,'index'].str.split(':|-', expand=True).apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
+            atac_var = pd.Index(atac_var)
+            atac_all.index = atac_var
+            atac_all.index.name = 'gene'
+            atac_all.reset_index(inplace=True)
+            atac_all['km'] = atac_all['gene'].map(gwas_hits.set_index('Target gene name')['km'].to_dict())
+            atac_all['traits'] = atac_all['gene'].map(gwas_hits.groupby('Target gene name')['Trait'].unique().str.join('_').to_dict())
+            atac_all['celltype'] = 'all'
+            atac_all.set_index('celltype', inplace=True)
+            atac_results = atac_all
 
         ## extract significant results
         rna_sig_results, rna_mdd_sig_results, rna_sig_genes_per_celltype, rna_sig_km_per_celltype = extract_results(rna_results, p_metric='padj')
@@ -242,6 +264,10 @@ def main(subset_type=None, gene_activity_score_type=None):
         egr1_scompreg_hits_dict = {}
 
         for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
+
+            if celltype not in rna_enrichr_res_brainscope_tops.keys():
+                print(f'{celltype} not in rna_enrichr_res_brainscope_tops.keys()')
+                continue
 
             plt.figure()
             gp_dotplot(
@@ -428,28 +454,34 @@ def main(subset_type=None, gene_activity_score_type=None):
 
             print(f'Volcano plot saved to {save_path}')
 
-
         ## find term linked genes and peaks
         def find_term_linked_genes_and_peaks(TF_name, rna_results, rna_enrichr_res_celltypes, peak_gene_links):
 
             term_linked_genes = {}
             term_linked_peaks = {}
-            for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
 
-                ## extract linked genes and peaks for genes overlapping with term (EnrichR)
-                try:
-                    term_genes = rna_enrichr_res_celltypes[celltype].loc[rna_enrichr_res_celltypes[celltype]['Term'].eq(terms_dict[TF_name]), 'Genes'].str.split(';').iloc[0]
-                    peak_gene_link_in_term = (peak_gene_links['TF'].eq(TF_name) & peak_gene_links['gene'].isin(term_genes))
-                except:
-                    print(f"No term-linked genes found for {celltype} and {terms_dict[TF_name]}")
-                    term_genes = []
-                    peak_gene_link_in_term = pd.Series([False] * len(peak_gene_links))
+            if list(rna_enrichr_res_celltypes.keys()).pop() == 'all':
+                term_genes = rna_enrichr_res_celltypes['all'].loc[rna_enrichr_res_celltypes['all']['Term'].eq(terms_dict[TF_name]), 'Genes'].str.split(';').iloc[0]
+                peak_gene_link_in_term = (peak_gene_links['TF'].eq(TF_name) & peak_gene_links['gene'].isin(term_genes))
+                term_linked_genes['all'] = peak_gene_links.loc[peak_gene_link_in_term, 'gene'].unique()
+                term_linked_peaks['all'] = peak_gene_links.loc[peak_gene_link_in_term, 'peak'].unique()
 
-                term_linked_genes[celltype] = peak_gene_links.loc[peak_gene_link_in_term, 'gene'].unique()
-                term_linked_peaks[celltype] = peak_gene_links.loc[peak_gene_link_in_term, 'peak'].unique()
+            else:
+                for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
+
+                    ## extract linked genes and peaks for genes overlapping with term (EnrichR)
+                    try:
+                        term_genes = rna_enrichr_res_celltypes[celltype].loc[rna_enrichr_res_celltypes[celltype]['Term'].eq(terms_dict[TF_name]), 'Genes'].str.split(';').iloc[0]
+                        peak_gene_link_in_term = (peak_gene_links['TF'].eq(TF_name) & peak_gene_links['gene'].isin(term_genes))
+                    except:
+                        print(f"No term-linked genes found for {celltype} and {terms_dict[TF_name]}")
+                        term_genes = []
+                        peak_gene_link_in_term = pd.Series([False] * len(peak_gene_links))
+
+                    term_linked_genes[celltype] = peak_gene_links.loc[peak_gene_link_in_term, 'gene'].unique()
+                    term_linked_peaks[celltype] = peak_gene_links.loc[peak_gene_link_in_term, 'peak'].unique()
 
             return term_linked_genes, term_linked_peaks
-
 
         ## find term linked genes and peaks for EGR1
         def atac_enrichment_analysis(TF_name, rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results, gene_activity_score_type):
@@ -480,7 +512,7 @@ def main(subset_type=None, gene_activity_score_type=None):
                 results_in_term = atac_results.loc[atac_results['gene'].isin(all_terms_peaks)]
 
                 ## filter results by logFC
-                results_in_term_filtered = results_in_term.loc[results_in_term['log2FoldChange'].abs().ge(1.5)]
+                results_in_term_filtered = results_in_term.loc[results_in_term['log2FoldChange'].abs().ge(0.5)]
                 results_in_term_filtered = results_in_term_filtered.loc[results_in_term_filtered['gene'].isin(female_ExN_TF['enhancer'])] # remember, 'gene' in this context refers to peaks
 
                 ## FDR correction on filtered results
@@ -545,7 +577,7 @@ def main(subset_type=None, gene_activity_score_type=None):
                 TF_name=TF_name,
                 results_data=rna_results,
                 term_linked_genes_dict=outputs_dict['term_linked_genes'],
-                celltypes=['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN'],
+                celltypes=['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN'] if analyze_per_celltype else ['all'],
                 output_dir=os.path.join(os.environ['DATAPATH'], 'mdd_data', 'developmental_analysis'),
                 sex=sex,
                 data_type='RNA',
@@ -569,7 +601,7 @@ def main(subset_type=None, gene_activity_score_type=None):
                 TF_name=TF_name,
                 results_data=atac_results,
                 term_linked_genes_dict=outputs_dict['term_linked_peaks'],
-                celltypes=['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN'],
+                celltypes=['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN'] if analyze_per_celltype else ['all'],
                 output_dir=os.path.join(os.environ['DATAPATH'], 'mdd_data', 'developmental_analysis'),
                 sex=sex,
                 data_type='ATAC',
@@ -1296,7 +1328,7 @@ def run_pychromVAR_case_control(
     from pyjaspar import jaspardb
 
     # ----------------------------
-    # 1) Filter by sex, build pseudobulks ONCE (as you do)
+    # 1) Filter by sex, build pseudobulks ONCE
     # ----------------------------
     sex_mask = mdd_atac_broad_sub.obs['sex'].str.lower() == sex.lower()
     adata = mdd_atac_broad_sub[sex_mask].copy()
