@@ -46,19 +46,12 @@ mdd_rna_raw.uns = mdd_rna_scaled_sub.uns.copy()
 sc.pp.normalize_total(mdd_rna_raw, target_sum=1e4, exclude_highly_expressed=False)
 sc.pp.log1p(mdd_rna_raw)
 
-## compute Moran's I for each gene
-W = WSP(pfc_zhu_rna_EN.obsp['X_ordinal_latents_neighbors_connectivities'].tocsr())
-W_dense = W.to_W()
-
-# Convert to dense array once to avoid repeated conversion overhead
-gene_expr = pfc_zhu_rna_EN.X.toarray() if hasattr(pfc_zhu_rna_EN.X, 'toarray') else pfc_zhu_rna_EN.X
-
-# Initialize Ray - will use all available CPU cores by default
-ray.init(num_cpus=40)
-
+## Define Ray remote functions for parallel computation (must be global)
 @ray.remote
 def compute_moran_for_gene(g, gene, X, W_dense, permutations=0):
     """Compute Moran's I for a single gene."""
+    from esda.moran import Moran
+    import pandas as pd
     # X is now dense, so just index directly
     x = X[:, g].flatten() if hasattr(X[:, g], 'flatten') else X[:, g].ravel()
     moran = Moran(x, W_dense, two_tailed=True, permutations=permutations)
@@ -66,38 +59,6 @@ def compute_moran_for_gene(g, gene, X, W_dense, permutations=0):
     moran_series = pd.Series(moran.__dict__, name=gene).loc[['I', p_type]]
     return moran_series
 
-# Put data in Ray's object store so all workers can access it efficiently
-X_ref = ray.put(gene_expr)
-W_ref = ray.put(W_dense)
-
-# Parallel computation with Ray
-print(f"Computing Moran's I for {len(pfc_zhu_rna_EN.var_names)} genes with Ray...")
-futures = [
-    compute_moran_for_gene.remote(g, gene, X_ref, W_ref, permutations=1000)
-    for g, gene in enumerate(pfc_zhu_rna_EN.var_names)
-]
-
-# Get results with progress bar
-moran_series_list = []
-for future in tqdm(futures, desc="Processing genes"):
-    moran_series_list.append(ray.get(future))
-
-moran_df = pd.concat(moran_series_list, axis=1)
-
-# Add q-values (FDR-corrected p-values) using Benjamini-Hochberg method
-p_type = moran_df.index[-1]
-p_values = moran_df.loc[p_type].values
-reject, q_values, _, _ = multipletests(p_values, method='fdr_bh')
-moran_df.loc['q_value'] = q_values
-
-# Filter for significant genes (q < 0.01)
-km_genes = moran_df.loc[:, moran_df.loc['q_value'] < 0.01].columns.tolist()
-print(f"Found {len(km_genes)} significant genes (q < 0.01) for trajectory analysis")
-
-# Extract expression data for significant genes only
-gene_expr_sig = gene_expr[:, pfc_zhu_rna_EN.var_names.isin(km_genes)]
-
-## smooth gene expression by ordinal pseudotime using NB-GAM (similar to tradeSeq)
 @ray.remote
 def fit_gam_smoother_for_gene(g, gene_name, X, pseudotime, n_knots=9, n_grid=200, 
                                distribution='gamma', link='log'):
@@ -108,34 +69,6 @@ def fit_gam_smoother_for_gene(g, gene_name, X, pseudotime, n_knots=9, n_grid=200
     - Uses spline basis functions with specified knots
     - Fits a GAM with appropriate distribution (gamma as approximation to NB for continuous data)
     - Returns smoothed predictions over pseudotime grid
-    
-    Parameters:
-    -----------
-    g : int
-        Gene index
-    gene_name : str
-        Gene name
-    X : array-like
-        Full gene expression matrix
-    pseudotime : array-like
-        Pseudotime values for each cell
-    n_knots : int
-        Number of knots for spline basis (default 9, as in paper)
-    n_grid : int
-        Number of points for prediction grid
-    distribution : str
-        Distribution family ('gamma', 'normal', or 'poisson')
-    link : str
-        Link function ('log', 'identity')
-    
-    Returns:
-    --------
-    gene_name : str
-        Gene name
-    smooth_pseudotime : array
-        Pseudotime grid points
-    smooth_expr : array
-        Smoothed expression values
     """
     from pygam import GAM
     from pygam.terms import s
@@ -148,11 +81,7 @@ def fit_gam_smoother_for_gene(g, gene_name, X, pseudotime, n_knots=9, n_grid=200
     y_offset = y + 0.1 if distribution in ['gamma', 'poisson'] else y
     
     # Fit GAM with spline term
-    # s(0) means fit a smooth spline on the first (and only) feature
-    gam = GAM(
-        s(0, n_splines=n_knots, spline_order=3)
-    )
-
+    gam = GAM(s(0, n_splines=n_knots, spline_order=3))
     
     try:
         gam.fit(pseudotime.reshape(-1, 1), y_offset)
@@ -181,78 +110,250 @@ def fit_gam_smoother_for_gene(g, gene_name, X, pseudotime, n_knots=9, n_grid=200
     
     return gene_name, smooth_pseudotime, smooth_expr
 
-# Get pseudotime and prepare for smoothing and put data in Ray's object store for efficient parallel access
-pseudotime = pfc_zhu_rna_EN.obs['ordinal_pseudotime'].values
-gene_expr_sig_df = pd.DataFrame(gene_expr_sig, index=pseudotime, columns=km_genes)
-gene_expr_sig_df.sort_index(inplace=True)
+def cluster_genes_by_trajectory(adata, 
+                                 connectivity_key='X_ordinal_latents_neighbors_connectivities',
+                                 pseudotime_col='ordinal_pseudotime',
+                                 n_clusters=4,
+                                 q_threshold=0.01,
+                                 permutations=1000,
+                                 n_knots=9,
+                                 n_grid=200,
+                                 dataset_name='dataset'):
+    """
+    Cluster genes based on their expression trajectories along pseudotime.
+    
+    This function:
+    1. Computes Moran's I for each gene to identify spatially autocorrelated genes
+    2. Filters for significant genes (q < q_threshold)
+    3. Smooths gene expression using GAM along pseudotime
+    4. Performs K-means clustering on z-scored smoothed trajectories
+    5. Relabels clusters based on peak expression timing
+    
+    Parameters:
+    -----------
+    adata : AnnData
+        Annotated data matrix with gene expression
+    connectivity_key : str
+        Key in adata.obsp for the connectivity matrix
+    pseudotime_col : str
+        Column name in adata.obs for pseudotime values
+    n_clusters : int
+        Number of clusters for K-means
+    q_threshold : float
+        FDR threshold for significant genes
+    permutations : int
+        Number of permutations for Moran's I
+    n_knots : int
+        Number of knots for GAM splines
+    n_grid : int
+        Number of grid points for smoothed predictions
+    dataset_name : str
+        Name of the dataset for logging
+    
+    Returns:
+    --------
+    dict with:
+        - 'moran_df': DataFrame with Moran's I statistics
+        - 'km_genes': list of significant genes
+        - 'smooth_gene_expr_df': DataFrame with smoothed expression
+        - 'km_labels_relabelled': Series with cluster labels
+        - 'genes_per_cluster': Series with genes per cluster
+        - 'mean_trajectories': DataFrame with mean trajectory per cluster
+    """
+    print(f"\n{'='*60}")
+    print(f"Processing dataset: {dataset_name}")
+    print(f"{'='*60}")
+    
+    ## Step 1: Compute Moran's I for each gene
+    print(f"Computing Moran's I for {len(adata.var_names)} genes...")
+    W = WSP(adata.obsp[connectivity_key].tocsr())
+    W_dense = W.to_W()
+    
+    # Convert to dense array once to avoid repeated conversion overhead
+    gene_expr = adata.X.toarray() if hasattr(adata.X, 'toarray') else adata.X
+    
+    # Put data in Ray's object store
+    X_ref = ray.put(gene_expr)
+    W_ref = ray.put(W_dense)
+    
+    # Parallel computation with Ray
+    futures = [
+        compute_moran_for_gene.remote(g, gene, X_ref, W_ref, permutations=permutations)
+        for g, gene in enumerate(adata.var_names)
+    ]
+    
+    # Get results with progress bar
+    moran_series_list = []
+    for future in tqdm(futures, desc=f"[{dataset_name}] Processing genes"):
+        moran_series_list.append(ray.get(future))
+    
+    moran_df = pd.concat(moran_series_list, axis=1)
+    
+    # Add q-values (FDR-corrected p-values) using Benjamini-Hochberg method
+    p_type = moran_df.index[-1]
+    p_values = moran_df.loc[p_type].values
+    reject, q_values, _, _ = multipletests(p_values, method='fdr_bh')
+    moran_df.loc['q_value'] = q_values
+    
+    # Filter for significant genes
+    km_genes = moran_df.loc[:, moran_df.loc['q_value'] < q_threshold].columns.tolist()
+    print(f"[{dataset_name}] Found {len(km_genes)} significant genes (q < {q_threshold}) for trajectory analysis")
+    
+    if len(km_genes) == 0:
+        print(f"[{dataset_name}] No significant genes found. Returning None.")
+        return None
+    
+    # Extract expression data for significant genes only
+    gene_expr_sig = gene_expr[:, adata.var_names.isin(km_genes)]
+    
+    ## Step 2: Smooth gene expression using GAM
+    print(f"[{dataset_name}] Fitting GAM smoothers for {len(km_genes)} significant genes...")
+    pseudotime = adata.obs[pseudotime_col].values
+    gene_expr_sig_df = pd.DataFrame(gene_expr_sig, index=pseudotime, columns=km_genes)
+    gene_expr_sig_df.sort_index(inplace=True)
+    
+    # Extract pseudotime and expression data from sorted dataframe
+    pseudotime_sorted = gene_expr_sig_df.index.values
+    gene_expr_sig_sorted = gene_expr_sig_df.values
+    
+    pseudotime_ref = ray.put(pseudotime_sorted)
+    X_ref_sig = ray.put(gene_expr_sig_sorted)
+    
+    gam_futures = [
+        fit_gam_smoother_for_gene.remote(g, gene, X_ref_sig, pseudotime_ref, 
+                                         n_knots=n_knots, n_grid=n_grid)
+        for g, gene in enumerate(km_genes)
+    ]
+    
+    # Get results with progress bar
+    smooth_results = {}
+    smooth_pseudotime_grid = None
+    
+    for future in tqdm(gam_futures, desc=f"[{dataset_name}] Smoothing genes"):
+        gene_name, smooth_pt, smooth_expr = ray.get(future)
+        smooth_results[gene_name] = smooth_expr
+        if smooth_pseudotime_grid is None:
+            smooth_pseudotime_grid = smooth_pt
+    
+    # Create DataFrame with smoothed expression
+    smooth_gene_expr_df = pd.DataFrame(smooth_results, index=smooth_pseudotime_grid)
+    smooth_gene_expr_df.index.name = 'pseudotime'
+    
+    ## Step 3: K-means clustering on z-scored smooth trajectories
+    print(f"[{dataset_name}] Performing K-means clustering...")
+    smooth_gene_expr_zscore = smooth_gene_expr_df.apply(zscore, axis=0)
+    
+    km = KMeans(n_clusters=n_clusters, n_init=50, random_state=0)
+    km.fit(smooth_gene_expr_zscore.T.values)
+    
+    # Create cluster labels
+    km_labels = pd.Series(km.labels_, index=km_genes)
+    
+    print(f"[{dataset_name}] Genes per cluster: {km_labels.value_counts().sort_index().to_dict()}")
+    
+    # Compute mean trajectory per cluster
+    smooth_gene_expr_by_cluster = smooth_gene_expr_zscore.copy()
+    smooth_gene_expr_by_cluster.rename(columns=km_labels.to_dict(), inplace=True)
+    smooth_gene_expr_by_cluster.columns.name = 'cluster'
+    mean_trajectories = smooth_gene_expr_by_cluster.groupby(level=0, axis=1).mean()
+    
+    # Plot mean trajectories
+    max_idx_dict = {}
+    fig, ax = plt.subplots(figsize=(8, 5))
+    mean_trajectories.plot(ax=ax, linewidth=2, alpha=0.5)
+    for cluster, trajectory in mean_trajectories.items():
+        max_idx = trajectory.idxmax()
+        max_val = trajectory.max()
+        ax.annotate('*', xy=(max_idx, max_val), fontsize=12, color=f'C{cluster}')
+        max_idx_dict[cluster] = max_idx
+    ax.set_title(f'{dataset_name}: Mean trajectories by cluster')
+    ax.set_xlabel('Pseudotime')
+    ax.set_ylabel('Z-scored expression')
+    plt.tight_layout()
+    plt.show()
+    
+    ## Step 4: Relabel clusters based on location of maximum expression along pseudotime
+    new_labels_mapper = 'km' + pd.Series(max_idx_dict).rank().astype(int).astype(str)
+    mean_trajectories_relabelled = mean_trajectories.rename(columns=new_labels_mapper).sort_index(axis=1)
+    km_labels_relabelled = km_labels.replace(new_labels_mapper).rename('clusters')
+    genes_per_cluster = km_labels_relabelled.groupby(km_labels_relabelled).apply(lambda x: x.index.unique().tolist())
+    
+    print(f"[{dataset_name}] Clustering complete!")
+    
+    return {
+        'moran_df': moran_df,
+        'km_genes': km_genes,
+        'smooth_gene_expr_df': smooth_gene_expr_df,
+        'smooth_gene_expr_zscore': smooth_gene_expr_zscore,
+        'km_labels_relabelled': km_labels_relabelled,
+        'genes_per_cluster': genes_per_cluster,
+        'mean_trajectories': mean_trajectories_relabelled,
+        'new_labels_mapper': new_labels_mapper,
+        'pseudotime': pseudotime,
+        'gene_expr_sig': gene_expr_sig,
+    }
 
-## extract pseudotime and expression data from padded dataframe
-pseudotime = gene_expr_sig_df.index.values
-gene_expr_sig = gene_expr_sig_df.values
+# Initialize Ray - will use all available CPU cores by default
+ray.init(num_cpus=40)
 
-pseudotime_ref = ray.put(pseudotime)
-X_ref_sig = ray.put(gene_expr_sig)
+# Run trajectory clustering on both datasets
+results_pfc_zhu = cluster_genes_by_trajectory(
+    pfc_zhu_rna_EN,
+    connectivity_key='X_ordinal_latents_neighbors_connectivities',
+    pseudotime_col='ordinal_pseudotime',
+    n_clusters=4,
+    dataset_name='pfc_zhu_rna_EN'
+)
 
-print(f"Fitting GAM smoothers for {len(km_genes)} significant genes with Ray...")
-gam_futures = [
-    fit_gam_smoother_for_gene.remote(g, gene, X_ref_sig, pseudotime_ref, 
-                                     n_knots=9, n_grid=200)
-    for g, gene in enumerate(km_genes)
-]
-
-# Get results with progress bar
-smooth_results = {}
-smooth_pseudotime_grid = None
-
-for future in tqdm(gam_futures, desc="Smoothing genes"):
-    gene_name, smooth_pt, smooth_expr = ray.get(future)
-    smooth_results[gene_name] = smooth_expr
-    if smooth_pseudotime_grid is None:
-        smooth_pseudotime_grid = smooth_pt
-
-# Create DataFrame with smoothed expression
-smooth_gene_expr_df = pd.DataFrame(smooth_results, index=smooth_pseudotime_grid)
-smooth_gene_expr_df.index.name = 'pseudotime'
+results_mdd = cluster_genes_by_trajectory(
+    mdd_rna_raw,
+    connectivity_key='X_ordinal_latents_neighbors_connectivities',
+    pseudotime_col='ordinal_pseudotime',
+    n_clusters=4,
+    dataset_name='mdd_rna_raw'
+)
 
 # Shutdown Ray to free resources
 ray.shutdown()
 
-# Apply z-score normalization to smoothed trajectories
-smooth_gene_expr_zscore = smooth_gene_expr_df.apply(zscore, axis=0)
+# Extract results from pfc_zhu for downstream analysis
+def enrichr_by_km(results, gene_sets):
+    from gseapy import dotplot as gp_dotplot
+    from gseapy import enrichr
 
-# Perform K-means clustering on z-scored smooth trajectories
-print("Performing K-means clustering on smoothed trajectories...")
-n_clusters = 4
-km = KMeans(n_clusters=n_clusters, n_init=50, random_state=0)
-km.fit(smooth_gene_expr_zscore.T.values)
+    genes_per_cluster = results['genes_per_cluster']
 
-# Create cluster labels
-km_labels = pd.Series(km.labels_, index=km_genes)
-km_map = {i: f'cluster_{i+1}' for i in range(n_clusters)}
-km_labels_named = km_labels.map(km_map)
+    for km, km_genes in genes_per_cluster.items():
+        hits = list(km_genes)
+        enr = enrichr(
+            gene_list=hits,
+            gene_sets=gene_sets
+        )
+        enr_res = enr.results
 
-print(f"Genes per cluster: {km_labels.value_counts().sort_index().to_dict()}")
+        if gene_sets == 'ChEA_2022':
+            enr_res = enr_res.loc[enr_res['Term'].str.contains('Human')]
+            enr_res.loc[:, 'Term'] = enr_res['Term'].str.split(' ').str[0]
 
-# Compute mean trajectory per cluster
-smooth_gene_expr_by_cluster = smooth_gene_expr_zscore.copy()
-smooth_gene_expr_by_cluster.rename(columns=km_labels.to_dict(), inplace=True)
-smooth_gene_expr_by_cluster.columns.name = 'cluster'
-mean_trajectories = smooth_gene_expr_by_cluster.groupby(level=0, axis=1).mean()
+        g = gp_dotplot(enr_res, title=f'{km} - {len(hits)} genes', size=10, top_term=20)
 
-# Plot mean trajectories
-max_idx_dict = {}
-ax = mean_trajectories.plot(linewidth=2, alpha=0.5)
-for cluster, trajectory in mean_trajectories.items():
-    max_idx = trajectory.idxmax()
-    max_val = trajectory.max()
-    ax.annotate('*', xy=(max_idx, max_val), fontsize=12, color=f'C{cluster}')
-    max_idx_dict[cluster] = max_idx
+    return g
 
-## Relabel clusters based on location of maximum expression along pseudotime
-new_labels_mapper = 'km' + pd.Series(max_idx_dict).rank().astype(int).astype(str)
-mean_trajectories_relabelled = mean_trajectories.rename(columns=new_labels_mapper).sort_index(axis=1)
-km_labels_relabelled = km_labels.replace(new_labels_mapper).rename('clusters')
-genes_per_cluster = km_labels_relabelled.groupby(km_labels_relabelled).apply(lambda x: x.index.unique().tolist())
+#enrichr_by_km(results_pfc_zhu, tf_tg_links)
+#enrichr_by_km(results_mdd, tf_tg_links)
+
+g_pfc_zhu = enrichr_by_km(results_pfc_zhu, 'ChEA_2022')
+g_mdd = enrichr_by_km(results_mdd, 'ChEA_2022')
+
+## write gene-clusters mapping to file to use as gene-sets
+#genes_per_cluster.to_csv(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv'))
+#print(f"Written gene-clusters mapping to {os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv')}")
+
+import pickle
+with open(os.path.join(os.environ['OUTPATH'], 'gene_clusters_results.pkl'), 'wb') as f:
+    pickle.dump(results_pfc_zhu, f)
+    pickle.dump(results_mdd, f)
+print(f"Written gene-clusters results to {os.path.join(os.environ['OUTPATH'], 'gene_clusters_results.pkl')}")
 
 ## Compare learned clusters with clusters of GWAS hits
 zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
@@ -278,10 +379,6 @@ print(f"MAE value: {mae_value:.2f}")
 
 matches_df = mae_df.value_counts(dropna=False)
 print(matches_df)
-
-## write gene-clusters mapping to file to use as gene-sets
-genes_per_cluster.to_csv(os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv'))
-print(f"Written gene-clusters mapping to {os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'gene_clusters_mapping.csv')}")
 
 from scipy.sparse import csr_matrix
 def build_mask_from_intervals(var_names, intervals_np):

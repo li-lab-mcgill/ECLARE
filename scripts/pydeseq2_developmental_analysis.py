@@ -33,26 +33,33 @@ set_env_variables(config_path='/home/mcb/users/dmannk/scMultiCLIP/ECLARE/config'
 
 def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=False):
 
-    ## load data (RNA and ATAC gene activity score)
-    mdd_rna_scaled_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub_15582.h5ad'))
-    mdd_atac_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub_14814.h5ad'))
-    
-    ## load data (ATAC broad peaks)
-    mdd_atac_broad = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_broad.h5ad'), backed='r')
-    mdd_atac_broad_sub = mdd_atac_broad[mdd_atac_broad.obs_names.isin(mdd_atac_sub.obs_names)].to_memory()
+    def load_data():
 
-    mdd_atac_broad_sub.X = mdd_atac_broad_sub.raw.X
-    mdd_atac_broad_sub.var_names = mdd_atac_broad_sub.var_names.str.split(':|-', expand=True).to_frame().apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
+        ## load data (RNA and ATAC gene activity score)
+        mdd_rna_scaled_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub_15582.h5ad'))
+        mdd_atac_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub_14814.h5ad'))
+        
+        ## load data (ATAC broad peaks)
+        mdd_atac_broad = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_broad.h5ad'), backed='r')
+        mdd_atac_broad_sub = mdd_atac_broad[mdd_atac_broad.obs_names.isin(mdd_atac_sub.obs_names)].to_memory()
 
-    ## load GWAS hits
-    zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
-    gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
-    gwas_catalog_bedtool, gwas_catalog_metadata = get_gwas_catalogue_hits()
-    #get_brain_gmt()
+        mdd_atac_broad_sub.X = mdd_atac_broad_sub.raw.X
+        mdd_atac_broad_sub.var_names = mdd_atac_broad_sub.var_names.str.split(':|-', expand=True).to_frame().apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
 
-    ## load peak-gene links and km gene sets
-    peak_gene_links, female_ExN, peak_names_mapper_reverse = get_peak_gene_links()
-    km_gene_sets, km_gene_sets_mapper = load_km_gene_sets()
+        ## load GWAS hits
+        zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
+        gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
+        gwas_catalog_bedtool, gwas_catalog_metadata = get_gwas_catalogue_hits()
+        #get_brain_gmt()
+
+        ## load peak-gene links and km gene sets
+        peak_gene_links, female_ExN, peak_names_mapper_reverse = get_peak_gene_links()
+        km_gene_sets, km_gene_sets_mapper = load_km_gene_sets()
+
+        return mdd_rna_scaled_sub, mdd_atac_sub, mdd_atac_broad_sub, gwas_hits, peak_gene_links, female_ExN, km_gene_sets, km_gene_sets_mapper
+
+    ## load data
+    mdd_rna_scaled_sub, mdd_atac_sub, mdd_atac_broad_sub, gwas_hits, peak_gene_links, female_ExN, km_gene_sets, km_gene_sets_mapper = load_data()
 
     ## restrict peak-enhancer-gene triplets for which all correlation signs agree (all positive or all negative)
     #peak_gene_links = peak_gene_links.loc[peak_gene_links['abs_sign_score_grn'].ge(0.5)]
