@@ -14,6 +14,9 @@ from tqdm import tqdm
 import ast
 import ray
 
+from gseapy import dotplot as gp_dotplot
+from matplotlib_venn import venn2, venn3
+
 from scipy import stats
 from statsmodels.stats.multitest import multipletests
 
@@ -32,31 +35,6 @@ set_env_variables(config_path='/home/mcb/users/dmannk/scMultiCLIP/ECLARE/config'
 
 
 def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=False):
-
-    def load_data():
-
-        ## load data (RNA and ATAC gene activity score)
-        mdd_rna_scaled_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub_15582.h5ad'))
-        mdd_atac_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub_14814.h5ad'))
-        
-        ## load data (ATAC broad peaks)
-        mdd_atac_broad = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_broad.h5ad'), backed='r')
-        mdd_atac_broad_sub = mdd_atac_broad[mdd_atac_broad.obs_names.isin(mdd_atac_sub.obs_names)].to_memory()
-
-        mdd_atac_broad_sub.X = mdd_atac_broad_sub.raw.X
-        mdd_atac_broad_sub.var_names = mdd_atac_broad_sub.var_names.str.split(':|-', expand=True).to_frame().apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
-
-        ## load GWAS hits
-        zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
-        gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
-        gwas_catalog_bedtool, gwas_catalog_metadata = get_gwas_catalogue_hits()
-        #get_brain_gmt()
-
-        ## load peak-gene links and km gene sets
-        peak_gene_links, female_ExN, peak_names_mapper_reverse = get_peak_gene_links()
-        km_gene_sets, km_gene_sets_mapper = load_km_gene_sets()
-
-        return mdd_rna_scaled_sub, mdd_atac_sub, mdd_atac_broad_sub, gwas_hits, peak_gene_links, female_ExN, km_gene_sets, km_gene_sets_mapper
 
     ## load data
     mdd_rna_scaled_sub, mdd_atac_sub, mdd_atac_broad_sub, gwas_hits, peak_gene_links, female_ExN, km_gene_sets, km_gene_sets_mapper = load_data()
@@ -145,8 +123,10 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
         if analyze_per_celltype:
             ## per celltype with power-tilted approach
             # Defaults: max_min_n_cells=20, max_imbalance_ratio=2.0, N_max_cells_per_donor=200
-            rna_per_celltype, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, max_min_n_cells=0, max_imbalance_ratio=np.inf, N_max_cells_per_donor=np.inf)
-            atac_per_celltype, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, max_min_n_cells=0, max_imbalance_ratio=np.inf, N_max_cells_per_donor=np.inf)
+            rna_per_celltype, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, test_type='split',
+                                                                   max_min_n_cells=20, max_imbalance_ratio=2.0, N_max_cells_per_donor=200)
+            atac_per_celltype, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, test_type='split',
+                                                                   max_min_n_cells=20, max_imbalance_ratio=2.0, N_max_cells_per_donor=200)
 
             ## ensure that atac_var in proper format (and that rna_var an index)
             atac_var = atac_var.reset_index().loc[:,'index'].str.split(':|-', expand=True).apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
@@ -158,8 +138,10 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
             atac_results = concat_results(atac_per_celltype, atac_var)
         else:
             ## across all celltypes (combined analysis)
-            rna_all, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, test_type='all')
-            atac_all, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, test_type='all')
+            rna_all, rna_var = run_pyDESeq2_on_celltypes(mdd_rna_scaled_sub, sex, test_type='all',
+                                                          max_min_n_cells=0, max_imbalance_ratio=np.inf, N_max_cells_per_donor=np.inf)
+            atac_all, atac_var = run_pyDESeq2_on_celltypes(mdd_atac_sub, sex, test_type='all',
+                                                          max_min_n_cells=0, max_imbalance_ratio=np.inf, N_max_cells_per_donor=np.inf)
             
             ## format rna_all results
             rna_var = rna_var.index
@@ -257,9 +239,6 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
         N_tops = 10
         rna_enrichr_res_brainscope_tops = {celltype: rna_enrichr_res_brainscope[celltype].sort_values('Combined Score', ascending=False).head(N_tops) for celltype in tqdm(rna_sig_genes_per_celltype.keys(), desc=f'Extracting top {N_tops} terms from brainSCOPE TF-TG links')}
         rna_enrichr_res_brainscope_tops = {celltype: rna_enrichr_res_brainscope_tops[celltype].assign(log10_1_FDR=rna_enrichr_res_brainscope_tops[celltype].get('Adjusted P-value').apply(lambda x: -np.log10(x))) for celltype in rna_sig_genes_per_celltype.keys()}
-
-        from gseapy import dotplot as gp_dotplot
-        from matplotlib_venn import venn2, venn3
         
         female_ExN_TF = female_ExN.loc[female_ExN['TF'].eq('EGR1')]
         female_ExN_TF_genes = set(female_ExN_TF.get('TG').unique())
@@ -268,9 +247,11 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
         merged_eqtl_edges_egr1 = merged_eqtl_edges_df[merged_eqtl_edges_df['GRN.TF'].eq('EGR1')]
         merged_eqtl_edges_egr1_genes = set(merged_eqtl_edges_egr1['GRN.TG'].unique())
 
+        ## loop over celltypes and extract hits
+        celltypes = list(rna_enrichr_res_brainscope_tops.keys())
         egr1_scompreg_hits_dict = {}
 
-        for celltype in ['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']:
+        for celltype in celltypes:
 
             if celltype not in rna_enrichr_res_brainscope_tops.keys():
                 print(f'{celltype} not in rna_enrichr_res_brainscope_tops.keys()')
@@ -328,16 +309,18 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
             egr1_scompreg_hits_dict[celltype]['egr1_scompreg_hits_grn'].assign(celltype=celltype) for celltype in egr1_scompreg_hits_dict.keys()
             ])
 
+        '''
         ## Group results be celltype
         egr1_scompreg_hits_grn_by_celltypes = egr1_scompreg_hits_grn_all.groupby(['enhancer', 'TG'])['celltype'].agg([
             ('n_celltypes', 'nunique'),
             ('celltypes', 'unique')
         ]).sort_values(by='n_celltypes', ascending=False)
+        '''
 
         ## Group results by celltype
         hits_by_celltypes = pd.merge(
-            pd.get_dummies(egr1_scompreg_hits_grn_all.celltype).assign(RG=False)[['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN']],
-            egr1_scompreg_hits_grn_all[['TG','enhancer']].apply(lambda x: ' - '.join(x), axis=1).rename('TG - enhancer'),
+            pd.get_dummies(egr1_scompreg_hits_grn_all['celltype']).reindex(columns=celltypes, fill_value=False),
+            egr1_scompreg_hits_grn_all[['TG','enhancer']].dropna().apply(lambda x: ' - '.join(x), axis=1).rename('TG - enhancer'),
             left_index=True, right_index=True, how='right'
             ).groupby('TG - enhancer').any()
         assert hits_by_celltypes.index.value_counts().eq(1).all()
@@ -428,7 +411,7 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
             else:
                 term_genes_dict = term_linked_genes_dict
 
-            fig, ax = plt.subplots(2, 4, figsize=(20, 11), sharex=True, sharey=True)
+            fig, ax = plt.subplots(2, len(celltypes), figsize=(20, 11), sharex=True, sharey=True, squeeze=False)
             plt.suptitle(f"{terms_dict[TF_name]} - {data_type}")
 
             x_absmax = max(abs(results_data['log2FoldChange'].max()), abs(results_data['log2FoldChange'].min())) + 0.5
@@ -584,7 +567,7 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
                 TF_name=TF_name,
                 results_data=rna_results,
                 term_linked_genes_dict=outputs_dict['term_linked_genes'],
-                celltypes=['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN'] if analyze_per_celltype else ['all'],
+                celltypes=celltypes,
                 output_dir=os.path.join(os.environ['DATAPATH'], 'mdd_data', 'developmental_analysis'),
                 sex=sex,
                 data_type='RNA',
@@ -608,7 +591,7 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
                 TF_name=TF_name,
                 results_data=atac_results,
                 term_linked_genes_dict=outputs_dict['term_linked_peaks'],
-                celltypes=['RG', 'EN-fetal-early', 'EN-fetal-late', 'EN'] if analyze_per_celltype else ['all'],
+                celltypes=celltypes,
                 output_dir=os.path.join(os.environ['DATAPATH'], 'mdd_data', 'developmental_analysis'),
                 sex=sex,
                 data_type='ATAC',
@@ -703,6 +686,32 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
     print("\n" + "="*80)
     print("All plots and analyses complete!")
     print("="*80)
+
+
+def load_data():
+
+    ## load data (RNA and ATAC gene activity score)
+    mdd_rna_scaled_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_rna_scaled_sub_15582.h5ad'))
+    mdd_atac_sub = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_gas_broad_sub_14814.h5ad'))
+    
+    ## load data (ATAC broad peaks)
+    mdd_atac_broad = anndata.read_h5ad(os.path.join(os.environ['DATAPATH'], 'mdd_data', 'mdd_atac_broad.h5ad'), backed='r')
+    mdd_atac_broad_sub = mdd_atac_broad[mdd_atac_broad.obs_names.isin(mdd_atac_sub.obs_names)].to_memory()
+
+    mdd_atac_broad_sub.X = mdd_atac_broad_sub.raw.X
+    mdd_atac_broad_sub.var_names = mdd_atac_broad_sub.var_names.str.split(':|-', expand=True).to_frame().apply(axis=1, func=lambda x: f'{x[0]}:{x[1]}-{x[2]}').values
+
+    ## load GWAS hits
+    zhu_supp_tables = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu', 'adg3754_Tables_S1_to_S14.xlsx')
+    gwas_hits = pd.read_excel(zhu_supp_tables, sheet_name='Table S12', header=2)
+    gwas_catalog_bedtool, gwas_catalog_metadata = get_gwas_catalogue_hits()
+    #get_brain_gmt()
+
+    ## load peak-gene links and km gene sets
+    peak_gene_links, female_ExN, peak_names_mapper_reverse = get_peak_gene_links()
+    km_gene_sets, km_gene_sets_mapper = load_km_gene_sets()
+
+    return mdd_rna_scaled_sub, mdd_atac_sub, mdd_atac_broad_sub, gwas_hits, peak_gene_links, female_ExN, km_gene_sets, km_gene_sets_mapper
 
 
 def load_km_gene_sets():
