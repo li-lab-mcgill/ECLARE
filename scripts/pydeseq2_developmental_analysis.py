@@ -38,11 +38,9 @@ set_env_variables(config_path='/home/mcb/users/dmannk/scMultiCLIP/ECLARE/config'
 def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=False):
 
     ## load data
-    mdd_rna_scaled_sub, mdd_atac_sub, mdd_atac_broad_sub, gwas_hits, peak_gene_links, female_ExN, km_gene_sets, km_gene_sets_mapper = load_data()
-
-    ## restrict peak-enhancer-gene triplets for which all correlation signs agree (all positive or all negative)
-    #peak_gene_links = peak_gene_links.loc[peak_gene_links['abs_sign_score_grn'].ge(0.5)]
-    #peak_gene_links = peak_gene_links.loc[peak_gene_links['Correlation'].ge(0)]
+    mdd_rna_scaled_sub, mdd_atac_sub, mdd_atac_broad_sub, \
+    gwas_hits, peak_gene_links, female_ExN, km_gene_sets, km_gene_sets_mapper, linked_peaks_in_km = \
+        load_data()
 
     ## subset data
     mdd_rna_scaled_sub = subset_data(mdd_rna_scaled_sub, gwas_hits, subset_type)
@@ -244,9 +242,53 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
         female_ExN_TF = female_ExN.loc[female_ExN['TF'].eq('EGR1')]
         female_ExN_TF_genes = set(female_ExN_TF.get('TG').unique())
 
-        merged_eqtl_edges_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'eqtl_edges', 'merged_eqtl_edges.csv'))
-        merged_eqtl_edges_egr1 = merged_eqtl_edges_df[merged_eqtl_edges_df['GRN.TF'].eq('EGR1')]
-        merged_eqtl_edges_egr1_genes = set(merged_eqtl_edges_egr1['GRN.TG'].unique())
+        ## find intersecting genes between enriched genes, km3_mdd and EGR1 regulon
+        km3_mdd_set = set(km_gene_sets['km3_mdd'])
+        egr1_set = set(tf_tg_links['EGR1'])
+        rna_sig_genes_set = set(rna_sig_results['gene'])
+        egr1_km3_mdd_rna_sig_hits = list(km3_mdd_set & egr1_set & rna_sig_genes_set)
+
+        #merged_eqtl_edges_df = pd.read_csv(os.path.join(os.environ['DATAPATH'], 'brainSCOPE', 'eqtl_edges', 'merged_eqtl_edges.csv'))
+        #merged_eqtl_edges_egr1 = merged_eqtl_edges_df[merged_eqtl_edges_df['GRN.TF'].eq('EGR1')]
+        #merged_eqtl_edges_egr1_genes = set(merged_eqtl_edges_egr1['GRN.TG'].unique())
+
+        def devmdd_fig6(manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_fig6.svg')):
+
+            gp_dotplot(
+                rna_enrichr_res_brainscope_tops['all'], # 'all' dummy name for single celltype
+                column='log10_1_FDR',
+                title=f'TF brainSCOPE regulon & km clusters',
+                top_term=10,
+                size=10,
+                cutoff=1e3, # purposefully too large even for log10(1/FDR)
+                cmap='copper',
+                ofname=manuscript_figpath
+            )
+
+            print(f"Saving figure to {manuscript_figpath}")
+            plt.close()
+
+        def devmdd_fig7(hits, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_fig7.svg')):
+            from gseapy import enrichr
+
+            ## avoid do_enrichr since universe is too leniant
+            enr = enrichr(
+                gene_list=hits,
+                gene_sets='GO_Biological_Process_2021',
+                top_term=10,
+            )
+            enr_res = enr.results
+
+            gp_dotplot(
+                enr_res,
+                title=f'EGR1 regulon x km3_mdd: GO_Biological_Process_2021',
+                top_term=10,
+                size=15,
+                ofname=manuscript_figpath
+            )
+
+            print(f"Saving figure to {manuscript_figpath}")
+            plt.close()
 
         ## loop over celltypes and extract hits
         celltypes = list(rna_enrichr_res_brainscope_tops.keys())
@@ -272,7 +314,7 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
 
             ## Venn diagram between genes overlapping EGR1 and km3 terms
             egr1_genes = set(rna_enrichr_res_brainscope[celltype].loc[rna_enrichr_res_brainscope[celltype]['Term'].eq('EGR1'), 'Genes'].str.split(';').iloc[0])
-            km3_genes = set(rna_enrichr_res_brainscope[celltype].loc[rna_enrichr_res_brainscope[celltype]['Term'].str.contains('km3'), 'Genes'].str.split(';').iloc[0])
+            km3_genes = set(rna_enrichr_res_brainscope[celltype].loc[rna_enrichr_res_brainscope[celltype]['Term'].str.contains('km3_mdd'), 'Genes'].str.split(';').iloc[0])
 
             plt.figure()
             venn2([egr1_genes, female_ExN_TF_genes], set_labels=['DE TGs of EGR1', 'sc-compReg'])
@@ -284,8 +326,8 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
             plt.title(f'Threeway hits: {egr1_km3_scompreg_hits}')
 
             ## GRNs for EGR1 and sc-compReg hits
-            egr1_scompreg_hits = list(egr1_genes & female_ExN_TF_genes)
-            egr1_scompreg_hits_grn = female_ExN_TF.loc[female_ExN_TF['TG'].isin(egr1_scompreg_hits)]
+            #egr1_scompreg_hits = list(egr1_genes & female_ExN_TF_genes)
+            egr1_km3_scompreg_hits_grn = female_ExN_TF.loc[female_ExN_TF['TG'].isin(egr1_km3_scompreg_hits)]
             assert egr1_scompreg_hits_grn['TF'].eq('EGR1').all()
 
             ## filter by peaks' p-values (merge egr1_scompreg_hits_grn with pvalues from atac_results)
@@ -295,7 +337,6 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
 
             ## intersect GWAS hits with EGR1 and sc-compReg hits
             #egr1_scompreg_hits_bedtool_intersect_df = intersect_gwas_hits_with_egr1_scompreg_hits(egr1_scompreg_hits_grn, gwas_catalog_metadata)
-
             
             # Store the intersection results in the dictionary
             egr1_scompreg_hits_dict[celltype] = {
@@ -447,7 +488,7 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
             print(f'Volcano plot saved to {save_path}')
 
         ## find term linked genes and peaks
-        def find_term_linked_genes_and_peaks(TF_name, rna_results, rna_enrichr_res_celltypes, peak_gene_links):
+        def find_term_linked_genes_and_peaks_per_celltype(TF_name, rna_results, rna_enrichr_res_celltypes, peak_gene_links):
 
             term_linked_genes = {}
             term_linked_peaks = {}
@@ -475,10 +516,16 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
 
             return term_linked_genes, term_linked_peaks
 
-        ## find term linked genes and peaks for EGR1
-        def atac_enrichment_analysis_pychromVAR(TF_name, rna_results, rna_enrichr_res_brainscope, peak_gene_links):
+        ## perform ATAC enrichment with pychromVAR analysis
+        def atac_enrichment_analysis_pychromVAR(TF_name, rna_results, rna_enrichr_res_brainscope, peak_gene_links, term_linked_genes=None, term_linked_peaks=None):
 
-            term_linked_genes, term_linked_peaks = find_term_linked_genes_and_peaks(TF_name, rna_results, rna_enrichr_res_brainscope, peak_gene_links)
+            ## if term_linked_genes and term_linked_peaks are not provided, find them per celltype
+            if (term_linked_genes is None) or (term_linked_peaks is None):
+                term_linked_genes, term_linked_peaks = find_term_linked_genes_and_peaks_per_celltype(TF_name, rna_results, rna_enrichr_res_brainscope, peak_gene_links)
+                print('Term names (celltypes) are: ', list(term_linked_genes.keys()))
+            else:
+                ## likely km-specific gene sets
+                print('Term names (km clusters) are: ', list(term_linked_genes.keys()))
 
             ## get female ExN sc-compReg results for TF
             female_ExN_TF = female_ExN.loc[female_ExN['TF'].eq(TF_name)]
@@ -489,7 +536,8 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
                 peak_gene_links,
                 mdd_atac_broad_sub,
                 sex,
-                genome_fasta_path=os.path.join(os.environ['DATAPATH'], 'hg38.fa'))
+                genome_fasta_path=os.path.join(os.environ['DATAPATH'], 'hg38.fa'),
+                per_term_peak_sets=True)
 
             per_pb = res["per_pseudobulk_z"]
             per_pb['set'] = pd.Categorical(per_pb['set'], categories=per_pb['set'].unique(), ordered=True)
@@ -507,6 +555,7 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
 
             return outputs_dict
 
+        ## perform ATAC enrichment with pyDESeq2 analysis
         def atac_enrichment_analysis_pyDESeq2(TF_name, rna_results, rna_enrichr_res_brainscope, peak_gene_links, atac_results):
 
             term_linked_genes, term_linked_peaks = find_term_linked_genes_and_peaks(TF_name, rna_results, rna_enrichr_res_brainscope, peak_gene_links)
@@ -618,10 +667,10 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
             )
 
         ## Get pychromVAR results
-        egr1_pychromvar_outputs_dict = atac_enrichment_analysis_pychromVAR('EGR1', rna_results, rna_enrichr_res_brainscope, peak_gene_links)
-        nr4a2_pychromvar_outputs_dict = atac_enrichment_analysis_pychromVAR('NR4A2', rna_results, rna_enrichr_res_brainscope, peak_gene_links)
-        sox2_pychromvar_outputs_dict = atac_enrichment_analysis_pychromVAR('SOX2', rna_results, rna_enrichr_res_brainscope, peak_gene_links)
-        spi1_pychromvar_outputs_dict = atac_enrichment_analysis_pychromVAR('SPI1', rna_results, rna_enrichr_res_brainscope, peak_gene_links)
+        egr1_pychromvar_outputs_dict = atac_enrichment_analysis_pychromVAR('EGR1', rna_results, rna_enrichr_res_brainscope, peak_gene_links, km_gene_sets, linked_peaks_in_km)
+        #nr4a2_pychromvar_outputs_dict = atac_enrichment_analysis_pychromVAR('NR4A2', rna_results, rna_enrichr_res_brainscope, peak_gene_links)
+        #sox2_pychromvar_outputs_dict = atac_enrichment_analysis_pychromVAR('SOX2', rna_results, rna_enrichr_res_brainscope, peak_gene_links)
+        #spi1_pychromvar_outputs_dict = atac_enrichment_analysis_pychromVAR('SPI1', rna_results, rna_enrichr_res_brainscope, peak_gene_links)
 
         def ttest_case_control(per_pb, condition_col="condition", value_col="z", set_col="set",
                             case_label="Case", control_label="Control"):
@@ -737,7 +786,12 @@ def load_data():
     peak_gene_links, female_ExN, peak_names_mapper_reverse = get_peak_gene_links()
     km_gene_sets, km_gene_sets_mapper = load_km_gene_sets()
 
-    return mdd_rna_scaled_sub, mdd_atac_sub, mdd_atac_broad_sub, gwas_hits, peak_gene_links, female_ExN, km_gene_sets, km_gene_sets_mapper
+    ## find peaks linked to km-specific gene sets
+    km_gene_sets_df = pd.DataFrame.from_dict(km_gene_sets, orient='index').unstack().reset_index().set_index(0).drop(columns=['level_0']).rename(columns={'level_1': 'km'})
+    peak_gene_links = peak_gene_links.merge(km_gene_sets_df, left_on='gene', right_index=True, how='left')
+    linked_peaks_in_km = peak_gene_links.groupby('km')['peak'].unique().to_dict()
+
+    return mdd_rna_scaled_sub, mdd_atac_sub, mdd_atac_broad_sub, gwas_hits, peak_gene_links, female_ExN, km_gene_sets, km_gene_sets_mapper, linked_peaks_in_km
 
 
 def load_km_gene_sets():
@@ -766,10 +820,6 @@ def load_km_gene_sets():
     ## concatenate km gene sets and mapper
     km_gene_sets = {**km_gene_sets_pfc_zhu, **km_gene_sets_mdd}
     km_gene_sets_mapper = {**km_gene_sets_pfc_mapper, **km_gene_sets_mdd_mapper}
-
-    #km_gene_sets_df = pd.DataFrame.from_dict(km_gene_sets, orient='index').unstack().reset_index().set_index(0).drop(columns=['level_0']).rename(columns={'level_1': 'km'})
-    #peak_gene_links = peak_gene_links.merge(km_gene_sets_df, left_on='gene', right_index=True, how='left')
-    #linked_peaks_in_km = peak_gene_links.groupby('km')['peak'].unique().to_dict()
 
     return km_gene_sets, km_gene_sets_mapper
 
@@ -1389,7 +1439,7 @@ def run_pychromVAR_case_control(
     case_label="Case",
     control_label="Control",
     min_cells_per_pseudobulk=50,
-    per_celltype_peak_sets=False
+    per_term_peak_sets=False
 ):
     import pychromvar as pc
     from pyjaspar import jaspardb
@@ -1443,12 +1493,14 @@ def run_pychromVAR_case_control(
     #    (Critical change: we do NOT split by condition before compute_deviations)
     # ----------------------------
 
-    if per_celltype_peak_sets:
+    if per_term_peak_sets:
 
         all_results = []  # rows of per-pseudobulk Z; we’ll test later
         overlap_registry = {}
 
-        for set_name, ivals in term_linked_peaks.items():
+        for set_name, ivals in tqdm(term_linked_peaks.items(), desc='Computing deviations per term peak set'):
+            print(f"Processing {set_name} (n_peaks={len(ivals)})")
+
             # mask peaks for this set
             mask, n_in, n_hit = build_mask_from_intervals(pb.var_names, ivals)
             if n_hit == 0:
@@ -1468,10 +1520,11 @@ def run_pychromVAR_case_control(
             pb.varm["motif_match"] = M_subset
             pb.uns["motif_name"] = names_subset
 
-            dev = pc.compute_deviations(pb, n_jobs=n_jobs)  # SAME background/statistics for all samples
+            dev = pc_compute_deviations(pb, n_jobs=n_jobs)  # SAME background/statistics for all samples
+            dev = process_dev_df(dev)
 
-            df_dev = deviations_to_df(dev, row_name="pseudobulk", col_name="motif")
             # annotate multi-indexed columns to carry set_name
+            df_dev = deviations_to_df(dev, row_name="pseudobulk", col_name="motif")
             df_dev.columns = pd.MultiIndex.from_product([[set_name], df_dev.columns], names=["set", "motif"])
 
             # record per-motif overlap size (for later reporting)
@@ -1479,7 +1532,7 @@ def run_pychromVAR_case_control(
             overlap_registry[set_name] = pd.Series(overlap, index=df_dev.columns.get_level_values("motif"))
 
             # collect long-form with metadata for testing
-            long = df_dev.stack(level=["set", "motif"]).to_frame("z").reset_index()
+            long = df_dev.stack(level=["set", "motif"]).to_frame("bias_corrected_dev").reset_index()
             # attach metadata: condition, celltype, donor, etc.
             meta_cols = [condition_col, "ClustersMapped", "BrainID", "sex", "n_cells"]
             long = long.merge(pb.obs[meta_cols], left_on="pseudobulk", right_index=True, how="left")
@@ -1493,11 +1546,7 @@ def run_pychromVAR_case_control(
     else:
         #dev = pc.compute_deviations(pb, n_jobs=n_jobs)  # SAME background/statistics for all samples
         dev = pc_compute_deviations(pb, n_jobs=n_jobs)
-
-        ## get bias corrected deviations (default is Z-score)
-        dev.layers["dev"] = dev.X
-        bias_corrected_dev = dev.layers["obs_dev"] - dev.layers["mean_bg_dev"]
-        dev.X = bias_corrected_dev
+        dev = process_dev_df(dev)
 
         ## convert to tidy dataframe
         df_dev = deviations_to_df(dev, row_name="pseudobulk", col_name="motif")
@@ -1513,6 +1562,7 @@ def run_pychromVAR_case_control(
     # Keep only desired labels
     dev_long = dev_long[dev_long[condition_col].isin([case_label, control_label])].copy()
 
+    ## for bias-corrected deviations (chromVAR)
     def welch_test(group):
         # group: rows for one (set, motif)
         x = pd.to_numeric(group.loc[group[condition_col] == case_label, "bias_corrected_dev"], errors="coerce").dropna().values
@@ -1531,6 +1581,7 @@ def run_pychromVAR_case_control(
             out.update(t_stat=float(t), p_welch=float(p))
         return pd.Series(out)
 
+    ## alternative for Z-score (pychromVAR tutorial)
     def wilcoxon_test(group):
         # group: rows for one (set, motif)
         x = pd.to_numeric(group.loc[group[condition_col] == case_label, "bias_corrected_dev"], errors="coerce").dropna().values
@@ -1551,11 +1602,19 @@ def run_pychromVAR_case_control(
         .reset_index()
     )
 
-    # multiple testing over all (set, motif) combinations
-    tests["q_welch"] = np.nan
+    # multiple testing over all (set, motif) combinations (stringent)
+    tests["q_welch_global"] = np.nan
     mask = tests["p_welch"].notna()
     if mask.sum():
-        tests.loc[mask, "q_welch"] = multipletests(tests.loc[mask, "p_welch"], method="fdr_bh")[1]
+        tests.loc[mask, "q_welch_global"] = multipletests(tests.loc[mask, "p_welch"], method="fdr_bh")[1]
+
+    # multiple testing within each set separately (more lenient)
+    tests["q_welch_per_set"] = np.nan
+    for set_name in tests["set"].unique():
+        set_mask = (tests["set"] == set_name) & tests["p_welch"].notna()
+        if set_mask.sum():
+            tests.loc[set_mask, "q_welch_per_set"] = multipletests(tests.loc[set_mask, "p_welch"], method="fdr_bh")[1]
+
 
     # ----------------------------
     # 6) (Optional) OLS with covariates on Z ~ condition + covars
@@ -1585,7 +1644,14 @@ def run_pychromVAR_case_control(
         tests = tests.merge(ols_res, on=["set","motif"], how="left")
         mask2 = tests["p_ols"].notna()
         if mask2.sum():
-            tests.loc[mask2, "q_ols"] = multipletests(tests.loc[mask2, "p_ols"], method="fdr_bh")[1]
+            tests.loc[mask2, "q_ols_global"] = multipletests(tests.loc[mask2, "p_ols"], method="fdr_bh")[1]
+        
+        # per-set OLS FDR correction (more lenient)
+        tests["q_ols_per_set"] = np.nan
+        for set_name in tests["set"].unique():
+            set_mask = (tests["set"] == set_name) & tests["p_ols"].notna()
+            if set_mask.sum():
+                tests.loc[set_mask, "q_ols_per_set"] = multipletests(tests.loc[set_mask, "p_ols"], method="fdr_bh")[1]
 
     # ----------------------------
     # 7) Tidy outputs
@@ -1594,7 +1660,10 @@ def run_pychromVAR_case_control(
     per_pb = dev_long.copy()
 
     # Per (set, motif) test table
-    results = tests.sort_values(["q_welch", "p_welch"], na_position="last")
+    results = tests.sort_values(["q_welch_global", "q_welch_per_set", "p_welch"], na_position="last")
+
+    #output_dir = os.path.join(os.environ['OUTPATH'], 'mdd_developmental_analysis')
+    #results.to_csv(os.path.join(output_dir, 'results_differential_enrichment_per_km.csv'), index=False)
 
     return {
         "per_pseudobulk_z": per_pb,   # rows: pseudobulk x (set,motif) with metadata
@@ -2072,7 +2141,12 @@ def pc_compute_deviations(data, n_jobs=-1, chunk_size:int=10000):
 
     return dev
 
-
+def process_dev_df(dev):
+    ## get bias corrected deviations (default is Z-score)
+    dev.layers["dev"] = dev.X
+    bias_corrected_dev = dev.layers["obs_dev"] - dev.layers["mean_bg_dev"]
+    dev.X = bias_corrected_dev
+    return dev
 
 
 def create_comprehensive_plot(output_dir, modality_filter):

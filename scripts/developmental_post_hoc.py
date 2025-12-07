@@ -16,8 +16,7 @@ import anndata
 import magic
 import graphtools as gt
 
-from eclare.post_hoc_utils import metric_boxplots, download_mlflow_runs, extract_target_source_replicate
-from eclare.post_hoc_utils import load_model_and_metadata
+from eclare.post_hoc_utils import metric_boxplots, download_mlflow_runs, extract_target_source_replicate, tree, load_model_and_metadata
 from eclare.setup_utils import return_setup_func_from_dataset
 
 # Suppress specific warnings
@@ -2705,8 +2704,6 @@ def scenic_plus_lineplots(target_adata, paths, d_df_dict, p_one_sided_dict, pseu
 ## focus on paths L23 and L46 (in that order)
 paths = [('L23', dict(paths)['L23']), ('L46', dict(paths)['L46'])]
 
-from eclare.post_hoc_utils import tree
-
 window_len = 1
 pseudotime_key = 'ordinal_pseudotime'
 
@@ -3321,6 +3318,9 @@ subsampled_eclare_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_
 scJoint_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'scJoint_adata.h5ad'))
 glue_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'glue_adata.h5ad'))
 
+subsampled_kd_clip_adatas = {}
+subsampled_clip_adatas = {}
+
 for source_dataset in source_datasets:
     subsampled_kd_clip_adatas[source_dataset] = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_kd_clip_adatas_{source_dataset}.h5ad'))
     subsampled_clip_adatas[source_dataset] = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_clip_adatas_{source_dataset}.h5ad'))
@@ -3328,12 +3328,13 @@ for source_dataset in source_datasets:
 
 #%% plot eRegulon scores
 
+student_rna_atac_full = anndata.concat([student_rna, student_atac], axis=0)
 signatures = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig3_signatures.h5ad'))
 
 if 'Sex' not in signatures.obs.columns:
-    signatures.obs = signatures.obs.merge(subsampled_eclare_adata.obs['Sex'], left_index=True, right_index=True, how='left')
+    signatures.obs = signatures.obs.merge(student_rna_atac_full.obs['Sex'], left_index=True, right_index=True, how='left')
 if 'modality' not in signatures.obs.columns:
-    signatures.obs = signatures.obs.merge(subsampled_eclare_adata.obs['modality'], left_index=True, right_index=True, how='left')
+    signatures.obs = signatures.obs.merge(student_rna_atac_full.obs['modality'], left_index=True, right_index=True, how='left')
 
 eRegulons_all = pd.Series(np.hstack(list({
     'Velmeshev_L23': ['ZNF184', 'NFIX'],

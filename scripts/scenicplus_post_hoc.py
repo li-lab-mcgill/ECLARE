@@ -767,29 +767,285 @@ if __name__ == "__main__":
     # Add custom eRegulon here (optional)
     add_eregulon_to_dataframe(
         analyzer=analyzer,
-        tf_name="NR4A2",
+        tf_name="NR4A2-custom",
         chromosome_regions=["chr9:71768678-71769178"],
         target_genes=["ABHD17B"],
-        region_signature_name="NR4A2_custom_regions",
-        gene_signature_name="NR4A2_custom_genes"
+        region_signature_name="NR4A2-custom",
+        gene_signature_name="NR4A2-custom"
     )
 
     add_eregulon_to_dataframe(
         analyzer=analyzer,
-        tf_name="EGR1",
+        tf_name="EGR1-custom",
         chromosome_regions=["chr9:71768678-71769178"],
         target_genes=["ABHD17B"],
-        region_signature_name="EGR1_custom_regions",
-        gene_signature_name="EGR1_custom_genes"
+        region_signature_name="EGR1-custom",
+        gene_signature_name="EGR1-custom"
     )
 
     add_eregulon_to_dataframe(
         analyzer=analyzer,
-        tf_name="SOX2",
+        tf_name="EGR1-km3-sccompReg-custom",
+        chromosome_regions=[
+            "chr12:1774208-1774708",
+            "chr2:108560371-108560871",
+            "chr1:205267872-205268372",
+            "chr12:104657671-104658171",
+            "chr1:9604050-9604550",
+            "chr11:6473708-6474208",
+            "chr6:13035596-13036096",
+            "chr2:10285526-10286026",
+            "chr5:149583346-149583846",
+            "chr8:140828685-140829185",
+            "chr3:120742329-120742829",
+            "chr3:141950818-141951318"
+        ],
+        target_genes=[
+            "CACNA1C",
+            "CCDC138",
+            "CDK18",
+            "CHST11",
+            "CLSTN1",
+            "DNHD1",
+            "GFOD1",
+            "HPCAL1",
+            "PPARGC1B",
+            "PTK2",
+            "STXBP5L",
+            "TFDP2"
+        ],
+        region_signature_name="EGR1-km3-sccompReg",
+        gene_signature_name="EGR1-km3-sccompReg"
+    )
+
+    add_eregulon_to_dataframe(
+        analyzer=analyzer,
+        tf_name="EGRR1-custom",
+        chromosome_regions=[
+            "chr12:51812898-51813398",
+            "chr12:52119955-52120455",
+            "chr17:77941668-77942168",
+            "chr17:78238056-78238556",
+            "chr17:78357137-78357637",
+            "chr17:78414269-78414769",
+            "chr17:78465512-78466012",
+            "chr7:151010559-151011059",
+            "chr13:25047050-25047550",
+            "chr2:152618045-152618545",
+            "chr1:116433289-116433789",
+            "chr1:38005263-38005763",
+            "chr12:1774208-1774708",
+            "chr12:1845850-1846350",
+            "chr2:108560371-108560871",
+            "chr19:35299730-35300230",
+            "chr1:205267872-205268372",
+            "chr1:205269451-205269951",
+            "chr1:205512343-205512843",
+            "chr1:205519392-205519892",
+            "chr7:150982280-150982780",
+            "chr19:10395776-10396276",
+            "chr14:104883913-104884413",
+            "chr14:105084234-105084734",
+            "chr12:104657671-104658171",
+            "chr12:104719595-104720095",
+            "chr3:170473253-170473753",
+            "chr7:74044903-74045403",
+            "chr14:95304272-95304772",
+            "chr14:95360299-95360799",
+            "chr1:9604050-9604550",
+            "chr1:9929934-9930434",
+            "chr5:139671267-139671767",
+            "chr8:119889259-119889759",
+            "chr11:6473708-6474208",
+            "chr11:117497360-117497860",
+            "chr11:117588417-117588917",
+            "chr11:117600902-117601402",
+            "chr11:117673502-117674002",
+            "chr6:53032791-53033291",
+            "chr6:53297999-53298499",
+            "chr6:46484410-46484910",
+            "chr10:124687002-124687502",
+            "chr6:13035596-13036096",
+            "chr3:33146828-33147328",
+            "chr8:143986211-143986711",
+            "chr16:85444477-85444977",
+            "chr7:75572349-75572849",
+            "chr12:122825988-122826488",
+            "chr12:122843484-122843984",
+            "chr12:122846798-122847298",
+            "chr2:10285526-10286026",
+            "chr19:10517358-10517858",
+            "chr3:20081026-20081526",
+            "chr3:20099026-20099526",
+            "chr16:85444477-85444977",
+            "chr8:29178939-29179439",
+            "chr8:29179466-29179966",
+            "chr6:96990385-96990885",
+            "chr2:100280084-100280584",
+            "chr2:169345651-169346151",
+            "chr10:101001320-101001820",
+            "chr10:101006449-101006949",
+            "chr3:183818905-183819405",
+            "chr18:77033154-77033654",
+            "chr11:57499482-57499982",
+            "chr17:76554057-76554557",
+            "chr7:140640614-140641114",
+            "chr9:126296220-126296720",
+            "chr9:126379627-126380127",
+            "chr9:126488719-126489219",
+            "chr9:126502940-126503440",
+            "chr9:126588226-126588726",
+            "chr17:32723507-32724007",
+            "chr17:32936144-32936644",
+            "chr11:61754697-61755197",
+            "chr11:61760944-61761444",
+            "chr7:103117011-103117511",
+            "chr1:205046833-205047333",
+            "chr11:124935853-124936353",
+            "chr15:85074044-85074544",
+            "chrX:153765052-153765552",
+            "chr22:38050189-38050689",
+            "chr5:149583346-149583846",
+            "chr11:7513438-7513938",
+            "chr7:578927-579427",
+            "chr8:140828685-140829185",
+            "chr4:1604852-1605352",
+            "chr6:158630865-158631365",
+            "chr15:41882397-41882897",
+            "chr19:2650472-2650972",
+            "chr19:2750607-2751107",
+            "chr20:46575964-46576464",
+            "chr15:91751992-91752492",
+            "chr14:69987580-69988080",
+            "chr12:119017565-119018065",
+            "chr3:120742329-120742829",
+            "chr16:84532113-84532613",
+            "chr3:141950818-141951318",
+            "chr1:168225762-168226262",
+            "chr11:972725-973225",
+            "chr2:47033956-47034456",
+            "chr3:50213311-50213811",
+            "chr3:50264554-50265054",
+            "chr19:36096999-36097499"
+        ],
+        target_genes=[
+            "ACVR1B",
+            "ACVR1B",
+            "AFMID",
+            "AFMID",
+            "AFMID",
+            "AFMID",
+            "AFMID",
+            "AGAP3",
+            "AMER2",
+            "ARL6IP6",
+            "ATP1A1",
+            "C1orf122",
+            "CACNA1C",
+            "CACNA1C",
+            "CCDC138",
+            "CD22",
+            "CDK18",
+            "CDK18",
+            "CDK18",
+            "CDK18",
+            "CDK5",
+            "CDKN2D",
+            "CEP170B",
+            "CEP170B",
+            "CHST11",
+            "CHST11",
+            "CLDN11",
+            "CLIP2",
+            "CLMN",
+            "CLMN",
+            "CLSTN1",
+            "CLSTN1",
+            "CXXC5",
+            "DEPTOR",
+            "DNHD1",
+            "DSCAML1",
+            "DSCAML1",
+            "DSCAML1",
+            "DSCAML1",
+            "ELOVL5",
+            "ELOVL5",
+            "ENPP4",
+            "FAM53B",
+            "GFOD1",
+            "GLB1",
+            "GPAA1",
+            "GSE1",
+            "HIP1",
+            "HIP1R",
+            "HIP1R",
+            "HIP1R",
+            "HPCAL1",
+            "ILF3",
+            "KAT2B",
+            "KAT2B",
+            "KIAA0513",
+            "KIF13B",
+            "KIF13B",
+            "KLHL32",
+            "LONRF2",
+            "LRP2",
+            "LZTS2",
+            "LZTS2",
+            "MAP6D1",
+            "MBP",
+            "MED19",
+            "MFSD11",
+            "MKRN1",
+            "MVB12B",
+            "MVB12B",
+            "MVB12B",
+            "MVB12B",
+            "MVB12B",
+            "MYO1D",
+            "MYO1D",
+            "MYRF",
+            "MYRF",
+            "NAPEPLD",
+            "NFASC",
+            "NRGN",
+            "PDE8A",
+            "PDZD4",
+            "PLA2G6",
+            "PPARGC1B",
+            "PPFIBP2",
+            "PRKAR1B",
+            "PTK2",
+            "RNF212",
+            "RSPH3",
+            "RTF1",
+            "SGTA",
+            "SGTA",
+            "SLC13A3",
+            "SLCO3A1",
+            "SMOC1",
+            "SRRM4",
+            "STXBP5L",
+            "TAF1C",
+            "TFDP2",
+            "TIPRL",
+            "TOLLIP",
+            "TTC7A",
+            "TUSC2",
+            "TUSC2",
+            "ZNF565"
+        ],
+        region_signature_name="EGRR1-custom",
+        gene_signature_name="EGRR1-custom"
+    )
+
+    add_eregulon_to_dataframe(
+        analyzer=analyzer,
+        tf_name="SOX2-custom",
         chromosome_regions=["chr9:71829361-71829861", "chr9:71830119-71830619"],
         target_genes=["ABHD17B"],
-        region_signature_name="SOX2_custom_regions",
-        gene_signature_name="SOX2_custom_genes"
+        region_signature_name="SOX2-custom",
+        gene_signature_name="SOX2-custom"
     )
 
     # Step 2: Create eRegulon objects
@@ -954,8 +1210,8 @@ if __name__ == "__main__":
     signatures = eclare_adata.copy()
     signatures.obs = signatures.obs.loc[:, signatures.obs.columns.isin(ereg.columns)]
     signatures.obs.columns = signatures.obs.columns.str.split('_').str[0]
-    signatures.obs = signatures.obs.groupby(axis=1, level=0).quantile(0.25) # merge
-    signatures.obs = signatures.obs.merge(eclare_adata.obs[['leiden', 'Condition', 'most_common_cluster', 'ordinal_pseudotime']], left_index=True, right_index=True, how='left')
+    signatures.obs = signatures.obs.groupby(axis=1, level=0).quantile(0.5 if source_dataset == 'MDD' else 0.25) # merge eRegulons with same TF name
+    signatures.obs = signatures.obs.merge(eclare_adata.obs[['Sex', 'leiden', 'Condition', 'most_common_cluster', 'ordinal_pseudotime']], left_index=True, right_index=True, how='left')
     signatures.obs['leiden'] = pd.Categorical(signatures.obs['leiden'], categories=signatures.obs.groupby('leiden')['ordinal_pseudotime'].mean().sort_values().index.tolist(), ordered=True)
     # assert (signatures.obs.groupby(axis=1, level=0).apply(np.max, axis=1) == signatures.obs.groupby(axis=1, level=0).max()).values.mean() > 0.99
 
@@ -995,12 +1251,13 @@ if __name__ == "__main__":
     elif source_dataset == 'MDD':
         ## set eRegulons
         eRegulons_all = pd.Series(np.hstack(list({
-            'Velmeshev_L23': ['ZNF184', 'NFIX'],
-            'Velmeshev_L5': ['BACH2', 'SOX5'],
-            'Velmeshev_sexes_L6': ['CPLX3', 'JAM2', 'NXPH3'],
-            'Velmeshev_sexes_L23': ['RORA', 'CNIH3', 'CNTNAP3B'],
-            'sc-compReg': ['EGR1', 'SOX2', 'NR4A2'],
-            'Wang_MDD': ['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18']
+            #'Velmeshev_L23': ['ZNF184', 'NFIX'],
+            #'Velmeshev_L5': ['BACH2', 'SOX5'],
+            #'Velmeshev_sexes_L6': ['CPLX3', 'JAM2', 'NXPH3'],
+            #'Velmeshev_sexes_L23': ['RORA', 'CNIH3', 'CNTNAP3B'],
+            #'sc-compReg': ['EGR1', 'SOX2', 'NR4A2'],
+            'EGR1': ['EGR1', 'EGR1-custom', 'EGR1-km3-sccompReg'],
+            #'Wang_MDD': ['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18']
             }.values())))
         eRegulons = eRegulons_all[eRegulons_all.isin(signatures.obs.columns)].tolist()
 
@@ -1014,7 +1271,7 @@ if __name__ == "__main__":
         #fig.set_size_inches(10, 4)
 
         plot_func(signatures, color=['EGR1', 'SOX2', 'NR4A2'], size=100)
-        plot_func(signatures, color=signatures.obs.columns[signatures.obs.columns.isin(['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18'])], size=100)  # ['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18']
+        #plot_func(signatures, color=signatures.obs.columns[signatures.obs.columns.isin(['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18'])], size=100)  # ['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18']
 
         ## plot leiden clusters
         plot_func(signatures, color=['leiden'], size=100, legend_loc='on data')
@@ -1031,20 +1288,31 @@ if __name__ == "__main__":
             ('MDD_ExN_L46', ['0', '1_L46', '2_L46', '3_L46', '4_L46', '5_L46']),
         ]
 
-        fig, ax = plt.subplots(len(eRegulons), len(paths), figsize=(6, 10), sharex='col', sharey=False)
-        for i, (descr, path) in enumerate(paths):
-            path_signatures = signatures[signatures.obs['leiden'].isin(path)]
-            path_signatures.obs['leiden'] = pd.Categorical(path_signatures.obs['leiden'], categories=path, ordered=True)
-            ax[0,i].set_title(descr)
-            for j, eRegulon in enumerate(eRegulons):
-                sns.lineplot(path_signatures.obs[['leiden','Condition',eRegulon]], x='leiden', y=eRegulon, hue='Condition', palette='Pastel1', errorbar='se', marker='o', legend=True if (i,j)==(0,0) else False, ax=ax[j,i])
+        for sex in ['both', 'female', 'male']:
 
-        for a in ax.flat:
-            for label in a.get_xticklabels():
-                label.set_rotation(30)
-        plt.tight_layout()
+            fig, ax = plt.subplots(len(eRegulons), len(paths), figsize=(6, 5), sharex='col', sharey=False)
+            for i, (descr, path) in enumerate(paths):
 
-        ## VIP density plot
+                if sex == 'both':
+                    path_signatures = signatures[signatures.obs['leiden'].isin(path)]
+                elif sex == 'female':
+                    path_signatures = signatures[signatures.obs['leiden'].isin(path) & (signatures.obs['Sex'] == 'female')]
+                elif sex == 'male':
+                    path_signatures = signatures[signatures.obs['leiden'].isin(path) & (signatures.obs['Sex'] == 'male')]
+
+                path_signatures.obs['leiden'] = pd.Categorical(path_signatures.obs['leiden'], categories=path, ordered=True)
+                ax[0,i].set_title(descr)
+                for j, eRegulon_name in enumerate(eRegulons):
+                    sns.lineplot(path_signatures.obs[['leiden','Condition',eRegulon_name]], x='leiden', y=eRegulon_name, hue='Condition', palette='Pastel1', errorbar='se', marker='o', legend=True if (i,j)==(0,0) else False, ax=ax[j,i])
+
+            for a in ax.flat:
+                for label in a.get_xticklabels():
+                    label.set_rotation(30)
+
+            plt.suptitle(f'Sex: {sex}')
+            plt.tight_layout()
+
+        ## imputed cell-type labels density plots
         eclare_adata.obs['most_common_cluster'] = pd.Categorical(eclare_adata.obs['most_common_cluster'], categories=eclare_adata.obs.groupby('most_common_cluster')['ordinal_pseudotime'].mean().sort_values(ascending=True).index.tolist(), ordered=True)
         sc.tl.embedding_density(eclare_adata, basis=basis, groupby='most_common_cluster')
         sc.pl.embedding_density(eclare_adata, basis=basis, key=f'{basis}_density_most_common_cluster', ncols=5)
