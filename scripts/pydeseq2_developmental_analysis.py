@@ -331,8 +331,8 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
             assert egr1_scompreg_hits_grn['TF'].eq('EGR1').all()
 
             ## filter by peaks' p-values (merge egr1_scompreg_hits_grn with pvalues from atac_results)
-            egr1_scompreg_hits_grn = egr1_scompreg_hits_grn.merge(atac_results, left_on='enhancer', right_on='gene', how='left')
-            egr1_scompreg_hits_grn.dropna(subset='enhancer', inplace=True)
+            egr1_km3_scompreg_hits_grn = egr1_km3_scompreg_hits_grn.merge(atac_results, left_on='enhancer', right_on='gene', how='left')
+            egr1_km3_scompreg_hits_grn.dropna(subset='enhancer', inplace=True)
             #egr1_scompreg_hits_grn = egr1_scompreg_hits_grn.loc[egr1_scompreg_hits_grn['pvalue'] < 0.05]
 
             ## intersect GWAS hits with EGR1 and sc-compReg hits
