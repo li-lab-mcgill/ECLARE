@@ -3328,20 +3328,15 @@ for source_dataset in source_datasets:
 
 #%% plot eRegulon scores
 
-student_rna_atac_full = anndata.concat([student_rna, student_atac], axis=0)
 signatures = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig3_signatures.h5ad'))
-
-if 'Sex' not in signatures.obs.columns:
-    signatures.obs = signatures.obs.merge(student_rna_atac_full.obs['Sex'], left_index=True, right_index=True, how='left')
-if 'modality' not in signatures.obs.columns:
-    signatures.obs = signatures.obs.merge(student_rna_atac_full.obs['modality'], left_index=True, right_index=True, how='left')
 
 eRegulons_all = pd.Series(np.hstack(list({
     'Velmeshev_L23': ['ZNF184', 'NFIX'],
     'Velmeshev_L5': ['BACH2', 'SOX5'],
     'Velmeshev_sexes_L6': ['CPLX3', 'JAM2', 'NXPH3'],
     'Velmeshev_sexes_L23': ['RORA', 'CNIH3', 'CNTNAP3B'],
-    'sc-compReg': ['EGR1', 'SOX2', 'NR4A2'],
+    'sc-compReg': ['EGR1', 'EGR1-km3-sccompReg-custom'],
+    'custom': ['EGR1-custom', 'SOX2-custom', 'NR4A2-custom'],
     'Wang_MDD': ['MEF2C', 'SATB2', 'FOXP1', 'POU3F1', 'PKNOX2', 'CUX2', 'THRB', 'POU6F2', 'RORB', 'ZBTB18']
     }.values())))
 eRegulons = eRegulons_all[eRegulons_all.isin(signatures.obs.columns)].tolist()

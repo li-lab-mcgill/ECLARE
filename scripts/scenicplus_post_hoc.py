@@ -787,41 +787,6 @@ if __name__ == "__main__":
         analyzer=analyzer,
         tf_name="EGR1-km3-sccompReg-custom",
         chromosome_regions=[
-            "chr12:1774208-1774708",
-            "chr2:108560371-108560871",
-            "chr1:205267872-205268372",
-            "chr12:104657671-104658171",
-            "chr1:9604050-9604550",
-            "chr11:6473708-6474208",
-            "chr6:13035596-13036096",
-            "chr2:10285526-10286026",
-            "chr5:149583346-149583846",
-            "chr8:140828685-140829185",
-            "chr3:120742329-120742829",
-            "chr3:141950818-141951318"
-        ],
-        target_genes=[
-            "CACNA1C",
-            "CCDC138",
-            "CDK18",
-            "CHST11",
-            "CLSTN1",
-            "DNHD1",
-            "GFOD1",
-            "HPCAL1",
-            "PPARGC1B",
-            "PTK2",
-            "STXBP5L",
-            "TFDP2"
-        ],
-        region_signature_name="EGR1-km3-sccompReg",
-        gene_signature_name="EGR1-km3-sccompReg"
-    )
-
-    add_eregulon_to_dataframe(
-        analyzer=analyzer,
-        tf_name="EGRR1-custom",
-        chromosome_regions=[
             "chr12:51812898-51813398",
             "chr12:52119955-52120455",
             "chr17:77941668-77942168",
@@ -1035,8 +1000,8 @@ if __name__ == "__main__":
             "TUSC2",
             "ZNF565"
         ],
-        region_signature_name="EGRR1-custom",
-        gene_signature_name="EGRR1-custom"
+        region_signature_name="EGR1-km3-sccompReg-custom",
+        gene_signature_name="EGR1-km3-sccompReg-custom"
     )
 
     add_eregulon_to_dataframe(
@@ -1211,7 +1176,7 @@ if __name__ == "__main__":
     signatures.obs = signatures.obs.loc[:, signatures.obs.columns.isin(ereg.columns)]
     signatures.obs.columns = signatures.obs.columns.str.split('_').str[0]
     signatures.obs = signatures.obs.groupby(axis=1, level=0).quantile(0.5 if source_dataset == 'MDD' else 0.25) # merge eRegulons with same TF name
-    signatures.obs = signatures.obs.merge(eclare_adata.obs[['Sex', 'leiden', 'Condition', 'most_common_cluster', 'ordinal_pseudotime']], left_index=True, right_index=True, how='left')
+    signatures.obs = signatures.obs.merge(eclare_adata.obs[['Sex', 'leiden', 'Condition', 'most_common_cluster', 'ordinal_pseudotime', 'modality']], left_index=True, right_index=True, how='left')
     signatures.obs['leiden'] = pd.Categorical(signatures.obs['leiden'], categories=signatures.obs.groupby('leiden')['ordinal_pseudotime'].mean().sort_values().index.tolist(), ordered=True)
     # assert (signatures.obs.groupby(axis=1, level=0).apply(np.max, axis=1) == signatures.obs.groupby(axis=1, level=0).max()).values.mean() > 0.99
 
@@ -1318,7 +1283,9 @@ if __name__ == "__main__":
         sc.pl.embedding_density(eclare_adata, basis=basis, key=f'{basis}_density_most_common_cluster', ncols=5)
         #fig.set_size_inches(4.75, 4)
 
-        #signatures.write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig3_signatures.h5ad'))
+        signatures_no_uns = signatures.copy()
+        signatures_no_uns.uns = {} # duplicate names in uns creating error while saving
+        #signatures_no_uns.write_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig3_signatures.h5ad'))
 
 #%%
 from scenicplus.triplet_score import _rank_scores_and_assign_random_ranking_in_range_for_ties, _calculate_cross_species_rank_ratio_with_order_statistics
