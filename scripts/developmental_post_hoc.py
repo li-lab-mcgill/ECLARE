@@ -2,8 +2,11 @@
 from eclare import set_env_variables
 set_env_variables(config_path='../config')
 
-import torch
 import os
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
+
+import torch
 import numpy as np
 import pandas as pd
 from types import SimpleNamespace
@@ -1213,20 +1216,20 @@ def cast_object_columns_to_str(adata):
 
 #%% Plot distribution of age and ordinal pseudotime
 
-adata = source_target_adata.copy()
+adata = source_target_adata[source_target_adata.obs['source_or_target'].eq('target')].copy()
 adata.obs_names_make_unique()
 adata.obs[['Age', 'ordinal_pseudotime']] = adata.obs[['Age', 'ordinal_pseudotime']].astype(float)
 #adata.obs['SubClusters'] = pd.Categorical(adata.obs['SubClusters'], categories=source_clusters + target_clusters, ordered=True)
-
-fig, ax = plt.subplots(1, 2, figsize=[12, 8])
-sns.barplot(adata[adata.obs['source_or_target']=='source'].obs, x='modality', y='Age', hue='ClustersMapped', errorbar='se', ax=ax[0])
-sns.barplot(adata[adata.obs['source_or_target']=='source'].obs, x='modality', y='ordinal_pseudotime', hue='ClustersMapped', errorbar='se', ax=ax[1])
-plt.tight_layout(); plt.show()
 
 fig, ax = plt.subplots(1, 2, figsize=[6, 4])
 sns.barplot(adata[adata.obs['source_or_target']=='target'].obs, x='modality', y='Age', hue='Condition', errorbar='se', ax=ax[0])
 sns.barplot(adata[adata.obs['source_or_target']=='target'].obs, x='modality', y='ordinal_pseudotime', hue='Condition', errorbar='se', ax=ax[1])
 plt.tight_layout(); plt.show()
+
+#fig, ax = plt.subplots(1, 2, figsize=[12, 8])
+#sns.barplot(adata[adata.obs['source_or_target']=='source'].obs, x='modality', y='Age', hue='ClustersMapped', errorbar='se', ax=ax[0])
+#sns.barplot(adata[adata.obs['source_or_target']=='source'].obs, x='modality', y='ordinal_pseudotime', hue='ClustersMapped', errorbar='se', ax=ax[1])
+#plt.tight_layout(); plt.show()
 
 #%% Run PAGA on combined source & target data
 
@@ -1261,233 +1264,6 @@ f2 = plot_func(target_adata[target_adata.obs['Condition']=='case'], color=colors
 f3 = plot_func(target_adata[target_adata.obs['Condition']=='control'], color=colors, ncols=len(colors), wspace=0.5, return_fig=True)
 f1.show(); f2.show(); f3.show()
 
-
-#%% correlate diffusion components with ordinal pseudotime
-'''
-
-def diffmap_corrs(adata, pseudotime_key='ordinal_pseudotime'):
-    n_diffmaps = len(adata.uns['diffmap_evals'])
-    diffmap_df = pd.DataFrame(adata.obsm['X_diffmap'], columns=[f'dm{idx}' for idx in range(n_diffmaps)], index=adata.obs_names)
-    diffmap_corrs_df = pd.concat([adata.obs[pseudotime_key], diffmap_df], axis=1).corr()
-    diffmap_corrs_series = diffmap_corrs_df.loc[pseudotime_key,:].iloc[1:]
-    return diffmap_corrs_series
-
-pseudotime_key = 'dpt_pseudotime'
-
-diffmap_corrs_df = pd.concat([
-    diffmap_corrs(source_target_adata, pseudotime_key=pseudotime_key).to_frame().assign(source_or_target='all'),
-    diffmap_corrs(source_target_adata[source_target_adata.obs['source_or_target']=='target'], pseudotime_key=pseudotime_key).to_frame().assign(source_or_target='target'),
-    diffmap_corrs(source_target_adata[source_target_adata.obs['source_or_target']=='source'], pseudotime_key=pseudotime_key).to_frame().assign(source_or_target='source')
-    ], axis=0).reset_index()
-
-fig, ax = plt.subplots(1, 1, figsize=[12, 8])
-sns.barplot(diffmap_corrs_df, x='index', y=pseudotime_key, hue='source_or_target', ax=ax)
-plt.xticks(rotation=30)
-plt.xlabel('')
-plt.ylabel('Pearson correlation')
-plt.title(f'Diffusion components vs. {pseudotime_key}')
-plt.tight_layout(); plt.show()
-
-'''
-
-from sklearn.cross_decomposition import PLSRegression, PLSSVD, CCA
-
-def pls_analysis(adata):
-
-    x = adata.obsm['X_diffmap'][:,1:]
-
-    ## PLS for ordinal pseudotime
-    pseudotime_key = 'ordinal_pseudotime'
-    pls_ordinal = PLSRegression(n_components=1)
-    y_ordinal = adata.obs[pseudotime_key]
-    pls_ordinal.fit(x, y_ordinal)
-    adata.obs[f'{pseudotime_key}_pls'] = pls_ordinal.predict(x).squeeze()
-
-    ## PLS for dpt pseudotime
-    pseudotime_key = 'dpt_pseudotime'
-    pls_dpt = PLSRegression(n_components=1)
-    y_dpt = adata.obs[pseudotime_key]
-    pls_dpt.fit(x, y_dpt)
-    adata.obs[f'{pseudotime_key}_pls'] = pls_dpt.predict(x).squeeze()
-
-    ## combine PLS coefficients and intercepts
-    pls_coeffs_df = pd.DataFrame({
-        'ordinal': pls_ordinal.coef_.squeeze(),
-        'dpt': pls_dpt.coef_.squeeze()
-    })
-
-    pls_intercepts_df = pd.Series({
-        'ordinal': pls_ordinal.intercept_.item(),
-        'dpt': pls_dpt.intercept_.item()
-    }, name='intercept')
-
-    pls_coeffs_df.plot(kind='bar', subplots=True, layout=(1, 2), legend=False, figsize=[10, 5])
-    plt.tight_layout(); plt.show()
-
-    ## extract positive and negative coefficients
-    poscoefs = pls_coeffs_df['ordinal'].copy()
-    pos_coefs_idx = (pls_coeffs_df > 0).all(axis=1)
-    poscoefs[~pos_coefs_idx] = 0
-
-    negcoefs = pls_coeffs_df['ordinal'].copy()
-    neg_coefs_idx = (pls_coeffs_df < 0).all(axis=1)
-    negcoefs[~neg_coefs_idx] = 0
-
-    coefs_delta = negcoefs - poscoefs
-
-    ## apply PLS coefficients to target data
-    adata.obs['ordinal_pos'] = np.matmul(x, poscoefs)# + pls_intercepts_df['ordinal']
-    adata.obs['ordinal_delta'] = np.matmul(x, coefs_delta)
-
-    adata.obs['delta_bins'] = pd.qcut(adata.obs['ordinal_delta'], q=4)
-    sns.histplot(adata.obs, x='ordinal_delta', hue='delta_bins', bins=50, legend=False)
-
-    last_bin = adata.obs['delta_bins'].cat.categories[-1]
-    adata_clean = adata[adata.obs['ordinal_delta'] <= 0].copy()
-
-    sc.pl.umap(adata, color=['ordinal_pos', 'ordinal_delta', 'ordinal_pseudotime_pls', 'ordinal_pseudotime'])
-    sc.pl.umap(adata_clean, color=['ordinal_pos', 'ordinal_delta', 'ordinal_pseudotime_pls', 'ordinal_pseudotime'])
-
-def pls_analysis_2(adata):
-
-    x = adata.obsm['X_diffmap'][:,1:]
-    pls_ordinal = PLSRegression(n_components=2)
-
-    y_ordinal = adata.obs['ordinal_pseudotime']
-    y_dpt = adata.obs['dpt_pseudotime']
-    y_both = np.column_stack([y_ordinal, y_dpt])
-
-    pls_ordinal.fit(x, y_both)
-
-    T = pls_ordinal.transform(x)                 # (n_samples, n_components)
-    Q = pls_ordinal.y_loadings_                  # (n_targets, n_components)
-
-    Y_pred_components = np.einsum("ij,kj->ijk", T, Q)
-
-    all_cells_hits = []
-    for comp in range(Y_pred_components.shape[1]):
-
-        ordinal_pred = Y_pred_components[:,comp,0]
-        corr, pval = pearsonr(ordinal_pred, y_dpt) # correlation between ordinal prediction and actual dpt pseudotime
-        
-        print(f'Component {comp+1}: Pearson r = {corr:.4f}, p = {pval:.4e}')
-
-        if (r > 0) and (pval < 1e-5):
-            hits = pls_ordinal.x_scores_[:,comp] > 0
-            cells_hits = adata.obs_names[hits]
-            all_cells_hits.extend(cells_hits)
-
-    all_cells_hits = list(set(all_cells_hits))
-    adata_hits = adata[adata.obs_names.isin(all_cells_hits)].copy()
-    sc.pl.umap(adata_hits, color=['ordinal_pseudotime', 'dpt_pseudotime'])
-
-    sc.tl.paga(adata_hits)
-    sc.pl.paga_compare(adata_hits)
-    sc.pl.paga_compare(adata_hits, color=['ordinal_pseudotime'])
-
-def pls_analysis_3(adata):
-
-    sc.pp.pca(adata)
-    sc.pp.neighbors(adata, use_rep='X_pca', n_pcs=10, n_neighbors=50)
-
-    x = adata.obsm['X_pca']
-    y = adata.obs['dpt_pseudotime']
-
-    pls = PLSRegression(n_components=30)
-    pls.fit(x,y_both)
-
-    adata.obsm['X_dpt_pseudotime_pls'] = pls.x_scores_
-    sc.pp.neighbors(adata, use_rep='X_dpt_pseudotime_pls')
-
-    sc.tl.umap(adata)
-    sc.pl.umap(adata, color=['dpt_pseudotime', 'ordinal_pseudotime'])
-    sc.pl.umap(adata[adata.obs['source_or_target']=='target'], color=['dpt_pseudotime', 'dpt_pseudotime_pls', 'ordinal_pseudotime'])
-
-def pls_analysis_3(target_adata):
-
-    x = adata.obsm['X_pca']
-    pls = PLSRegression(n_components=5)
-
-    y_ordinal = adata.obs['ordinal_pseudotime']
-    y_diffmaps = adata.obsm['X_diffmap'][:,1:5]
-    y_both = np.column_stack([y_ordinal, y_diffmaps])
-
-    pls.fit(x, y_both)
-    fig, ax = plt.subplots(2, 1, figsize=[10, 10])
-    pd.DataFrame(pls.x_weights_.T).plot(kind='bar', legend=False, ax=ax[0])
-    pd.DataFrame(pls.y_weights_.T).plot(kind='bar', legend=False, ax=ax[1])
-    plt.tight_layout(); plt.show()
-
-    # Find PLS component where weight for ordinal_pseudotime is most similar to that for first diffmap component
-    ordinal_idx = 0  # index of ordinal_pseudotime in y_both
-    diffmap1_idx = 1  # index of first diffmap component in y_both
-
-    # Find indices of PLS components where both ordinal_pseudotime and first diffmap component have the same sign
-    ordinal_weights = pls.y_weights_[ordinal_idx]
-    diffmap1_weights = pls.y_weights_[diffmap1_idx]
-    same_sign_components = np.where(np.sign(ordinal_weights) == np.sign(diffmap1_weights))[0]
-    print(f"PLS components where weights for ordinal_pseudotime and first diffmap have same sign: {same_sign_components}")
-
-    X_new_pca = pls.x_scores_[:, same_sign_components]
-    adata.obsm['X_dpt_pseudotime_pls'] = X_new_pca
-
-    sc.pp.neighbors(adata, use_rep='X_dpt_pseudotime_pls', n_pcs=len(same_sign_components), n_neighbors=50)
-    sc.tl.leiden(adata, resolution=0.6, random_state=0, neighbors_key='X_dpt_pseudotime_pls_neighbors')
-
-    sc.tl.umap(adata)
-    sc.pl.umap(adata, color=['dpt_pseudotime', 'ordinal_pseudotime', 'leiden'])
-
-
-def diffmap_match_geom(adata):
-
-    if 'X_pca' not in adata.obsm.keys():
-        sc.pp.pca(adata)
-    if 'neighbors' not in adata.uns.keys():
-        sc.pp.neighbors(adata, use_rep='X_pca', n_pcs=10, n_neighbors=200)
-    if 'X_umap' not in adata.obsm.keys():
-        sc.tl.umap(adata)
-    if 'leiden' not in adata.obs.columns:
-        sc.tl.leiden(adata, resolution=0.6)
-    if 'paga' not in adata.uns.keys():
-        sc.tl.paga(adata, groups='leiden')
-    if 'X_diffmap' not in adata.obsm.keys():
-        sc.tl.diffmap(adata)
-
-    # DC1, DC2 (skip DC0)
-    dm = adata.obsm['X_diffmap'][:, 1:3]
-
-    # row-normalize connectivities (remove self loops if any)
-    W = adata.obsp[adata.uns['neighbors']['connectivities_key']].tocsr().copy()
-    W.setdiag(0); W.eliminate_zeros()
-    rsum = np.asarray(W.sum(1)).ravel(); rsum[rsum==0] = 1.0
-    Wn = W.multiply(1.0/rsum[:,None])
-
-    # local variance per DC: Var(X) = E[X^2] - E[X]^2, with E computed via Wn
-    Ex   = Wn @ dm                     # (n×2)
-    Ex2  = Wn @ (dm**2)                # (n×2)
-    Var  = Ex2 - Ex**2                 # (n×2)
-
-    share1 = Var[:,0] / (Var.sum(1) + 1e-12)
-    label = np.where(share1 > 0.55, "diffmap_1",
-            np.where(share1 < 0.45, "diffmap_2", "ambiguous"))
-
-    adata.obs["dm_match_geom"]  = pd.Categorical(label)
-    adata.obs["dm_share_dm1"]   = share1
-    
-    diffmap_adata = anndata.AnnData(adata.obsm['X_diffmap'], obsm={'X_umap': adata.obsm['X_umap']}, obs=adata.obs.copy())
-    diffmap_adata.var_names = pd.Index([f'dm{i}' for i in range(adata.obsm['X_diffmap'].shape[1])])
-    sc.pl.umap(diffmap_adata, color=['dm1', 'dm2', 'ordinal_pseudotime'], wspace=0.4)
-
-    sc.pl.umap(adata, color='dm_share_dm1')
-    sc.pl.paga_compare(adata, show=False); plt.close()
-    sc.pl.paga_compare(adata, color='dm_match_geom', legend_loc='right margin', right_margin=0.7, node_size_scale=5)
-
-    adata_dm1 = adata[adata.obs['dm_match_geom'].isin(['diffmap_1', 'ambiguous'])].copy()
-    sc.tl.paga(adata_dm1, groups='leiden')
-    sc.pl.paga_compare(adata_dm1, show=False); plt.close()
-    sc.pl.paga_compare(adata_dm1, color='ordinal_pseudotime', legend_loc='right margin', right_margin=0.7, node_size_scale=5)
-
-    return adata_dm1
 
 #%% perform label transfer between source and target datasets
 
@@ -1637,7 +1413,7 @@ plt.gca().set_xticklabels([])
 '''
 
 if 'Sex' not in target_adata.obs.columns:
-    target_adata.obs = target_adata.obs.merge(student_rna_atac_sub.obs['Sex'], left_index=True, right_index=True, how='left')
+    target_adata.obs = target_adata.obs.merge(student_rna_atac.obs['Sex'], left_index=True, right_index=True, how='left')
 
 colors_uns_keys = [key for key in list(target_adata.uns.keys()) if '_colors' in key]
 for key in colors_uns_keys: del target_adata.uns[key]
@@ -1668,15 +1444,14 @@ paths = [
 
 '''
 paths = [
-    ("MDD_ExN_all", leiden_sorted),
-    ('MDD_ExN_5_1_6_4_7_0', ['5', '1', '6', '4', '7', '0']),
-    ('MDD_ExN_5_3_11_10_9_8', ['5', '3', '11', '10', '9', '8']),
+    ('L23', ['0', '1_L23', '2_L23', '3_L23', '4_L23', '5_L23']),
+    ('L46', ['0', '1_L46', '2_L46', '3_L46', '4_L46', '5_L46']),
 ]
 '''
 paths = [
     ("MDD_ExN_all", leiden_sorted),
-    ('MDD_ExN_0_13_6_5_1_4_8_9', ['0', '13', '6', '5', '1', '4', '8', '9']),
-    ('MDD_ExN_0_2_12_7_15_11_10_16', ['0', '2', '12', '7', '15', '11', '10', '16']),
+    ('MDD_ExN_5_1_6_4_7_0', ['5', '1', '6', '4', '7', '0']),
+    ('MDD_ExN_5_3_11_10_9_8', ['5', '3', '11', '10', '9', '8']),
 ]
 
 old_atac = ["ExN1_L36", "ExN1_L35", "ExN2_L23","Ast1","ExN3_L56","ExN3_L46","In_VIP","ExN1_L24","Ast3","ExN2",
@@ -2421,7 +2196,7 @@ def rolling_mean_and_std_err(target_adata, window_len, paths, d_df_dict_, p_one_
         n_modalities = 3 if plot_all else 2  # RNA, ATAC, and optionally all nuclei
         # Create subplots: rows = modalities, columns = paths
         fig, axes = plt.subplots(n_modalities, n_paths, 
-                                figsize=[3*n_paths, 3*n_modalities], 
+                                figsize=[4*n_paths, 4*n_modalities], 
                                 sharex='col', sharey=False)
         
     else:
@@ -2522,25 +2297,30 @@ def rolling_mean_and_std_err(target_adata, window_len, paths, d_df_dict_, p_one_
                             alpha=0.3, color=sns.color_palette('Pastel1')[1])
 
         # Set labels and titles
-        ax_rna.set_ylabel(pseudotime_key if col_idx == 0 else '', color='grey')
+        ax_rna.set_ylabel(pseudotime_key if col_idx == 0 else '', color='black')
+        ax_atac.set_ylabel(pseudotime_key if col_idx == 0 else '', color='black')
+
         ax_rna.set_title(f'RNA [{sig_level_rna}]', fontproperties=mono)
-        ax_rna.tick_params(colors='grey')
-        ax_rna.spines['top'].set_color('grey')
-        ax_rna.spines['right'].set_color('grey')
-        ax_rna.spines['bottom'].set_color('grey')
-        ax_rna.spines['left'].set_color('grey')
-        ax_rna.set_xticklabels(ax_rna.get_xticklabels(), rotation=30)
-        ax_rna.yaxis.set_major_locator(plt.MaxNLocator(integer=True, nbins=5))
-        
-        ax_atac.set_ylabel(pseudotime_key if col_idx == 0 else '', color='grey')
         ax_atac.set_title(f'ATAC [{sig_level_atac}]', fontproperties=mono)
-        ax_atac.tick_params(colors='grey')
-        ax_atac.spines['top'].set_color('grey')
-        ax_atac.spines['right'].set_color('grey')
-        ax_atac.spines['bottom'].set_color('grey')
-        ax_atac.spines['left'].set_color('grey')
-        ax_atac.set_xticklabels(ax_atac.get_xticklabels(), rotation=30)
+
+        ax_rna.tick_params(axis='x', labelrotation=30)        
+        ax_atac.tick_params(axis='x', labelrotation=30)    
+
+        ax_rna.yaxis.set_major_locator(plt.MaxNLocator(integer=True, nbins=5))
         ax_atac.yaxis.set_major_locator(plt.MaxNLocator(integer=True, nbins=5))
+        '''
+        ax_rna.tick_params(colors='black')
+        ax_rna.spines['top'].set_color('black')
+        ax_rna.spines['right'].set_color('black')
+        ax_rna.spines['bottom'].set_color('black')
+        ax_rna.spines['left'].set_color('black')
+        
+        ax_atac.tick_params(colors='black')
+        ax_atac.spines['top'].set_color('black')
+        ax_atac.spines['right'].set_color('black')
+        ax_atac.spines['bottom'].set_color('black')
+        ax_atac.spines['left'].set_color('black')
+        '''
 
         # Plot all nuclei if requested (row 2)
         if plot_all:
@@ -2551,15 +2331,17 @@ def rolling_mean_and_std_err(target_adata, window_len, paths, d_df_dict_, p_one_
                                high_low.groupby('leiden')['low'].mean().dropna(), 
                                high_low.groupby('leiden')['high'].mean().dropna(), 
                                alpha=0.15, color='grey')
+            '''
             ax_all.set_title('all nuclei')
-            ax_all.set_ylabel(pseudotime_key if col_idx == 0 else '', color='grey')
-            ax_all.tick_params(colors='grey')
-            ax_all.spines['top'].set_color('grey')
-            ax_all.spines['right'].set_color('grey')
-            ax_all.spines['bottom'].set_color('grey')
-            ax_all.spines['left'].set_color('grey')
+            ax_all.set_ylabel(pseudotime_key if col_idx == 0 else '', color='black')
+            ax_all.tick_params(colors='black')
+            ax_all.spines['top'].set_color('black')
+            ax_all.spines['right'].set_color('black')
+            ax_all.spines['bottom'].set_color('black')
+            ax_all.spines['left'].set_color('black')
             ax_all.set_xticklabels(ax_all.get_xticklabels(), rotation=30)
             ax_all.yaxis.set_major_locator(plt.MaxNLocator(integer=True, nbins=5))
+            '''
 
         # Add daggers for significant differences
         y_shift = 0.3
@@ -2610,8 +2392,10 @@ def rolling_mean_and_std_err(target_adata, window_len, paths, d_df_dict_, p_one_
     labels_rna = [label.replace('_', ' - ') for label in labels_rna]
     labels_atac = [label.replace('_', ' - ') for label in labels_atac]
 
-    # Add single legend
-    fig.legend(handles_rna + handles_atac, labels_rna + labels_atac, loc='center left', bbox_to_anchor=(1.0, 0.5))
+    # Add single legend (interleave so cases are in col 1, controls in col 2)
+    handles = [handles_rna[0], handles_atac[0], handles_rna[1], handles_atac[1]]
+    labels = [labels_rna[0], labels_atac[0], labels_rna[1], labels_atac[1]]
+    fig.legend(handles, labels, loc='center left', bbox_to_anchor=(1.0, 0.5), ncol=2, handlelength=4)
     axes[0,0].set_ylabel('ordinal pseudotime')
     axes[1,0].set_ylabel('ordinal pseudotime')
     
@@ -2628,7 +2412,7 @@ def rolling_mean_and_std_err(target_adata, window_len, paths, d_df_dict_, p_one_
 
 def scenic_plus_lineplots(target_adata, paths, d_df_dict, p_one_sided_dict, pseudotime_key='ordinal_pseudotime'):
     
-    fig, ax = plt.subplots(1, len(paths), figsize=(4*len(paths), 4.5), sharex='col', sharey=False)
+    fig, ax = plt.subplots(1, len(paths), figsize=(4*len(paths), 5), sharex='col', sharey=True)
     if len(paths) == 1:
         ax = [ax]
     
@@ -2657,11 +2441,11 @@ def scenic_plus_lineplots(target_adata, paths, d_df_dict, p_one_sided_dict, pseu
                     legend=True if i==0 else False, ax=ax[i])
         
         # Apply consistent styling to match rolling_mean_and_std_err
-        ax[i].tick_params(colors='grey')
-        ax[i].spines['top'].set_color('grey')
-        ax[i].spines['right'].set_color('grey')
-        ax[i].spines['bottom'].set_color('grey')
-        ax[i].spines['left'].set_color('grey')
+        ax[i].tick_params(colors='black')
+        ax[i].spines['top'].set_color('black')
+        ax[i].spines['right'].set_color('black')
+        ax[i].spines['bottom'].set_color('black')
+        ax[i].spines['left'].set_color('black')
         #ax[i].yaxis.set_major_locator(plt.MaxNLocator(integer=True, nbins=5))
         ax[i].set_yticklabels('')
         
@@ -2683,7 +2467,7 @@ def scenic_plus_lineplots(target_adata, paths, d_df_dict, p_one_sided_dict, pseu
     for a in ax:
         for label in a.get_xticklabels():
             label.set_rotation(30)
-        a.set_ylabel(pseudotime_key, color='grey')
+        a.set_ylabel(pseudotime_key + ' cell score', color='black')
     
     # Create a single legend for the entire figure
     handles, labels = ax[0].get_legend_handles_labels()
@@ -2733,15 +2517,17 @@ for sex in ['both','female','male']:
             print('')
 
 ## lineplots
-figs_both = rolling_mean_and_std_err(target_adata, window_len, paths, d_df_dict['both'], p_one_sided_dict['both'], pseudotime_key=pseudotime_key)
+#figs_both = rolling_mean_and_std_err(target_adata, window_len, paths, d_df_dict['both'], p_one_sided_dict['both'], pseudotime_key=pseudotime_key)
+#figs_male = rolling_mean_and_std_err(target_adata[target_adata.obs['Sex']=='male'], window_len, paths, d_df_dict['male'], p_one_sided_dict['male'], pseudotime_key=pseudotime_key)
 figs_female = rolling_mean_and_std_err(target_adata[target_adata.obs['Sex']=='female'], window_len, paths, d_df_dict['female'], p_one_sided_dict['female'], pseudotime_key=pseudotime_key)
-figs_male = rolling_mean_and_std_err(target_adata[target_adata.obs['Sex']=='male'], window_len, paths, d_df_dict['male'], p_one_sided_dict['male'], pseudotime_key=pseudotime_key)
 
 def devmdd_fig4(lineplots_fig, suffix='', manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_fig4.svg')):
 
     lineplots_fig.suptitle(lineplots_fig._suptitle.get_text() + ' - ' + str(suffix) if lineplots_fig._suptitle is not None else str(suffix))
-    lineplots_fig.savefig(manuscript_figpath.replace('.svg', f'_{descr}_{suffix}.svg'), bbox_inches='tight', dpi=300)
-    print(f"Saving figure to {manuscript_figpath.replace('.svg', f'_{descr}_{suffix}.svg')}")
+    lineplots_fig.tight_layout()
+
+    lineplots_fig.savefig(manuscript_figpath.replace('.svg', f'_{suffix}.svg'), bbox_inches='tight', dpi=96)
+    print(f"Saving figure to {manuscript_figpath.replace('.svg', f'_{suffix}.svg')}")
     plt.close()
 
 def dev_fig4(adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig4.svg')):
@@ -3490,3 +3276,229 @@ dev_stages_atac = [dev_stage for dev_stage in dev_stages if dev_stage in student
 student_atac_sub.obs[dev_group_key] = student_atac_sub.obs[dev_group_key].cat.reorder_categories(dev_stages_atac, ordered=True)
 sc.pl.embedding(student_atac_sub, basis='X_umap_retrained', color=dev_group_key, palette=cmap_dev, sort_order=True)
 
+#%% correlate diffusion components with ordinal pseudotime
+'''
+
+def diffmap_corrs(adata, pseudotime_key='ordinal_pseudotime'):
+    n_diffmaps = len(adata.uns['diffmap_evals'])
+    diffmap_df = pd.DataFrame(adata.obsm['X_diffmap'], columns=[f'dm{idx}' for idx in range(n_diffmaps)], index=adata.obs_names)
+    diffmap_corrs_df = pd.concat([adata.obs[pseudotime_key], diffmap_df], axis=1).corr()
+    diffmap_corrs_series = diffmap_corrs_df.loc[pseudotime_key,:].iloc[1:]
+    return diffmap_corrs_series
+
+pseudotime_key = 'dpt_pseudotime'
+
+diffmap_corrs_df = pd.concat([
+    diffmap_corrs(source_target_adata, pseudotime_key=pseudotime_key).to_frame().assign(source_or_target='all'),
+    diffmap_corrs(source_target_adata[source_target_adata.obs['source_or_target']=='target'], pseudotime_key=pseudotime_key).to_frame().assign(source_or_target='target'),
+    diffmap_corrs(source_target_adata[source_target_adata.obs['source_or_target']=='source'], pseudotime_key=pseudotime_key).to_frame().assign(source_or_target='source')
+    ], axis=0).reset_index()
+
+fig, ax = plt.subplots(1, 1, figsize=[12, 8])
+sns.barplot(diffmap_corrs_df, x='index', y=pseudotime_key, hue='source_or_target', ax=ax)
+plt.xticks(rotation=30)
+plt.xlabel('')
+plt.ylabel('Pearson correlation')
+plt.title(f'Diffusion components vs. {pseudotime_key}')
+plt.tight_layout(); plt.show()
+
+'''
+
+from sklearn.cross_decomposition import PLSRegression, PLSSVD, CCA
+
+def pls_analysis(adata):
+
+    x = adata.obsm['X_diffmap'][:,1:]
+
+    ## PLS for ordinal pseudotime
+    pseudotime_key = 'ordinal_pseudotime'
+    pls_ordinal = PLSRegression(n_components=1)
+    y_ordinal = adata.obs[pseudotime_key]
+    pls_ordinal.fit(x, y_ordinal)
+    adata.obs[f'{pseudotime_key}_pls'] = pls_ordinal.predict(x).squeeze()
+
+    ## PLS for dpt pseudotime
+    pseudotime_key = 'dpt_pseudotime'
+    pls_dpt = PLSRegression(n_components=1)
+    y_dpt = adata.obs[pseudotime_key]
+    pls_dpt.fit(x, y_dpt)
+    adata.obs[f'{pseudotime_key}_pls'] = pls_dpt.predict(x).squeeze()
+
+    ## combine PLS coefficients and intercepts
+    pls_coeffs_df = pd.DataFrame({
+        'ordinal': pls_ordinal.coef_.squeeze(),
+        'dpt': pls_dpt.coef_.squeeze()
+    })
+
+    pls_intercepts_df = pd.Series({
+        'ordinal': pls_ordinal.intercept_.item(),
+        'dpt': pls_dpt.intercept_.item()
+    }, name='intercept')
+
+    pls_coeffs_df.plot(kind='bar', subplots=True, layout=(1, 2), legend=False, figsize=[10, 5])
+    plt.tight_layout(); plt.show()
+
+    ## extract positive and negative coefficients
+    poscoefs = pls_coeffs_df['ordinal'].copy()
+    pos_coefs_idx = (pls_coeffs_df > 0).all(axis=1)
+    poscoefs[~pos_coefs_idx] = 0
+
+    negcoefs = pls_coeffs_df['ordinal'].copy()
+    neg_coefs_idx = (pls_coeffs_df < 0).all(axis=1)
+    negcoefs[~neg_coefs_idx] = 0
+
+    coefs_delta = negcoefs - poscoefs
+
+    ## apply PLS coefficients to target data
+    adata.obs['ordinal_pos'] = np.matmul(x, poscoefs)# + pls_intercepts_df['ordinal']
+    adata.obs['ordinal_delta'] = np.matmul(x, coefs_delta)
+
+    adata.obs['delta_bins'] = pd.qcut(adata.obs['ordinal_delta'], q=4)
+    sns.histplot(adata.obs, x='ordinal_delta', hue='delta_bins', bins=50, legend=False)
+
+    last_bin = adata.obs['delta_bins'].cat.categories[-1]
+    adata_clean = adata[adata.obs['ordinal_delta'] <= 0].copy()
+
+    sc.pl.umap(adata, color=['ordinal_pos', 'ordinal_delta', 'ordinal_pseudotime_pls', 'ordinal_pseudotime'])
+    sc.pl.umap(adata_clean, color=['ordinal_pos', 'ordinal_delta', 'ordinal_pseudotime_pls', 'ordinal_pseudotime'])
+
+def pls_analysis_2(adata):
+
+    x = adata.obsm['X_diffmap'][:,1:]
+    pls_ordinal = PLSRegression(n_components=2)
+
+    y_ordinal = adata.obs['ordinal_pseudotime']
+    y_dpt = adata.obs['dpt_pseudotime']
+    y_both = np.column_stack([y_ordinal, y_dpt])
+
+    pls_ordinal.fit(x, y_both)
+
+    T = pls_ordinal.transform(x)                 # (n_samples, n_components)
+    Q = pls_ordinal.y_loadings_                  # (n_targets, n_components)
+
+    Y_pred_components = np.einsum("ij,kj->ijk", T, Q)
+
+    all_cells_hits = []
+    for comp in range(Y_pred_components.shape[1]):
+
+        ordinal_pred = Y_pred_components[:,comp,0]
+        corr, pval = pearsonr(ordinal_pred, y_dpt) # correlation between ordinal prediction and actual dpt pseudotime
+        
+        print(f'Component {comp+1}: Pearson r = {corr:.4f}, p = {pval:.4e}')
+
+        if (r > 0) and (pval < 1e-5):
+            hits = pls_ordinal.x_scores_[:,comp] > 0
+            cells_hits = adata.obs_names[hits]
+            all_cells_hits.extend(cells_hits)
+
+    all_cells_hits = list(set(all_cells_hits))
+    adata_hits = adata[adata.obs_names.isin(all_cells_hits)].copy()
+    sc.pl.umap(adata_hits, color=['ordinal_pseudotime', 'dpt_pseudotime'])
+
+    sc.tl.paga(adata_hits)
+    sc.pl.paga_compare(adata_hits)
+    sc.pl.paga_compare(adata_hits, color=['ordinal_pseudotime'])
+
+def pls_analysis_3(adata):
+
+    sc.pp.pca(adata)
+    sc.pp.neighbors(adata, use_rep='X_pca', n_pcs=10, n_neighbors=50)
+
+    x = adata.obsm['X_pca']
+    y = adata.obs['dpt_pseudotime']
+
+    pls = PLSRegression(n_components=30)
+    pls.fit(x,y_both)
+
+    adata.obsm['X_dpt_pseudotime_pls'] = pls.x_scores_
+    sc.pp.neighbors(adata, use_rep='X_dpt_pseudotime_pls')
+
+    sc.tl.umap(adata)
+    sc.pl.umap(adata, color=['dpt_pseudotime', 'ordinal_pseudotime'])
+    sc.pl.umap(adata[adata.obs['source_or_target']=='target'], color=['dpt_pseudotime', 'dpt_pseudotime_pls', 'ordinal_pseudotime'])
+
+def pls_analysis_3(target_adata):
+
+    x = adata.obsm['X_pca']
+    pls = PLSRegression(n_components=5)
+
+    y_ordinal = adata.obs['ordinal_pseudotime']
+    y_diffmaps = adata.obsm['X_diffmap'][:,1:5]
+    y_both = np.column_stack([y_ordinal, y_diffmaps])
+
+    pls.fit(x, y_both)
+    fig, ax = plt.subplots(2, 1, figsize=[10, 10])
+    pd.DataFrame(pls.x_weights_.T).plot(kind='bar', legend=False, ax=ax[0])
+    pd.DataFrame(pls.y_weights_.T).plot(kind='bar', legend=False, ax=ax[1])
+    plt.tight_layout(); plt.show()
+
+    # Find PLS component where weight for ordinal_pseudotime is most similar to that for first diffmap component
+    ordinal_idx = 0  # index of ordinal_pseudotime in y_both
+    diffmap1_idx = 1  # index of first diffmap component in y_both
+
+    # Find indices of PLS components where both ordinal_pseudotime and first diffmap component have the same sign
+    ordinal_weights = pls.y_weights_[ordinal_idx]
+    diffmap1_weights = pls.y_weights_[diffmap1_idx]
+    same_sign_components = np.where(np.sign(ordinal_weights) == np.sign(diffmap1_weights))[0]
+    print(f"PLS components where weights for ordinal_pseudotime and first diffmap have same sign: {same_sign_components}")
+
+    X_new_pca = pls.x_scores_[:, same_sign_components]
+    adata.obsm['X_dpt_pseudotime_pls'] = X_new_pca
+
+    sc.pp.neighbors(adata, use_rep='X_dpt_pseudotime_pls', n_pcs=len(same_sign_components), n_neighbors=50)
+    sc.tl.leiden(adata, resolution=0.6, random_state=0, neighbors_key='X_dpt_pseudotime_pls_neighbors')
+
+    sc.tl.umap(adata)
+    sc.pl.umap(adata, color=['dpt_pseudotime', 'ordinal_pseudotime', 'leiden'])
+
+
+def diffmap_match_geom(adata):
+
+    if 'X_pca' not in adata.obsm.keys():
+        sc.pp.pca(adata)
+    if 'neighbors' not in adata.uns.keys():
+        sc.pp.neighbors(adata, use_rep='X_pca', n_pcs=10, n_neighbors=200)
+    if 'X_umap' not in adata.obsm.keys():
+        sc.tl.umap(adata)
+    if 'leiden' not in adata.obs.columns:
+        sc.tl.leiden(adata, resolution=0.6)
+    if 'paga' not in adata.uns.keys():
+        sc.tl.paga(adata, groups='leiden')
+    if 'X_diffmap' not in adata.obsm.keys():
+        sc.tl.diffmap(adata)
+
+    # DC1, DC2 (skip DC0)
+    dm = adata.obsm['X_diffmap'][:, 1:3]
+
+    # row-normalize connectivities (remove self loops if any)
+    W = adata.obsp[adata.uns['neighbors']['connectivities_key']].tocsr().copy()
+    W.setdiag(0); W.eliminate_zeros()
+    rsum = np.asarray(W.sum(1)).ravel(); rsum[rsum==0] = 1.0
+    Wn = W.multiply(1.0/rsum[:,None])
+
+    # local variance per DC: Var(X) = E[X^2] - E[X]^2, with E computed via Wn
+    Ex   = Wn @ dm                     # (n×2)
+    Ex2  = Wn @ (dm**2)                # (n×2)
+    Var  = Ex2 - Ex**2                 # (n×2)
+
+    share1 = Var[:,0] / (Var.sum(1) + 1e-12)
+    label = np.where(share1 > 0.55, "diffmap_1",
+            np.where(share1 < 0.45, "diffmap_2", "ambiguous"))
+
+    adata.obs["dm_match_geom"]  = pd.Categorical(label)
+    adata.obs["dm_share_dm1"]   = share1
+    
+    diffmap_adata = anndata.AnnData(adata.obsm['X_diffmap'], obsm={'X_umap': adata.obsm['X_umap']}, obs=adata.obs.copy())
+    diffmap_adata.var_names = pd.Index([f'dm{i}' for i in range(adata.obsm['X_diffmap'].shape[1])])
+    sc.pl.umap(diffmap_adata, color=['dm1', 'dm2', 'ordinal_pseudotime'], wspace=0.4)
+
+    sc.pl.umap(adata, color='dm_share_dm1')
+    sc.pl.paga_compare(adata, show=False); plt.close()
+    sc.pl.paga_compare(adata, color='dm_match_geom', legend_loc='right margin', right_margin=0.7, node_size_scale=5)
+
+    adata_dm1 = adata[adata.obs['dm_match_geom'].isin(['diffmap_1', 'ambiguous'])].copy()
+    sc.tl.paga(adata_dm1, groups='leiden')
+    sc.pl.paga_compare(adata_dm1, show=False); plt.close()
+    sc.pl.paga_compare(adata_dm1, color='ordinal_pseudotime', legend_loc='right margin', right_margin=0.7, node_size_scale=5)
+
+    return adata_dm1
