@@ -32,7 +32,6 @@ n_cudas = torch.cuda.device_count()
 device = 'cpu'
 
 ## Define target and source datasets
-'''
 target_dataset = 'Cortex_Velmeshev'
 genes_by_peaks_str = '9584_by_66620'
 source_datasets = ['PFC_V1_Wang', 'PFC_Zhu']
@@ -43,7 +42,7 @@ methods_id_dict = {
     'eclare': ['04164533'],
     'ordinal': '27204131',
 }
-'''
+
 '''
 target_dataset = 'MDD'
 genes_by_peaks_str = '6816_by_55284'
@@ -56,6 +55,7 @@ methods_id_dict = {
     'ordinal': '22130216',
 }
 '''
+'''
 target_dataset = 'MDD'
 genes_by_peaks_str = '6816_by_55284'#'17279_by_66623'
 source_datasets = ['PFC_Zhu', 'PFC_V1_Wang']
@@ -66,6 +66,7 @@ methods_id_dict = {
     'eclare': ['04203819'],
     'ordinal': '14112531',
 }
+'''
 
 ## define search strings
 search_strings = {
@@ -498,7 +499,8 @@ except:
 for source_dataset in source_datasets:
 
     subsampled_clip_adatas[source_dataset].obs['ordinal_pseudotime'] = ordinal_pseudotimes
-    assert subsampled_clip_adatas[source_dataset].obs_names.tolist() == (student_rna_sub.obs_names.tolist() + student_atac_sub.obs_names.tolist())
+    assert subsampled_clip_adatas[source_dataset].obs_names.tolist() == (teacher_rna_sub.obs_names.tolist() + teacher_atac_sub.obs_names.tolist())
+    #assert subsampled_clip_adatas[source_dataset].obs_names.tolist() == (student_rna_sub.obs_names.tolist() + student_atac_sub.obs_names.tolist())
 
     try:
         subsampled_kd_clip_adatas[source_dataset].obs['ordinal_pseudotime'] = ordinal_pseudotimes
