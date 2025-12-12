@@ -2,8 +2,11 @@
 from eclare import set_env_variables
 set_env_variables(config_path='../config')
 
-import torch
 import os
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
+
+import torch
 import numpy as np
 import pandas as pd
 from types import SimpleNamespace
@@ -595,15 +598,51 @@ student_atac = paga_analysis(student_atac)
 #%% draw graphs for all methods
 
 permute_idxs = np.random.permutation(len(subsampled_eclare_adata))
-colors = ['modality','Lineage', 'sub_cell_type', 'dpt_pseudotime', 'ordinal_pseudotime','Age_Range']
+colors = ['modality','Lineage', 'dpt_pseudotime', 'ordinal_pseudotime','Age_Range']
 
-sc.pl.draw_graph(subsampled_eclare_adata[permute_idxs], color=colors, wspace=0.5, ncols=len(colors)); print('↑ subsampled_eclare_adata ↑')
-sc.pl.draw_graph(glue_adata[permute_idxs], color=colors, wspace=0.5, ncols=len(colors)); print('↑ glue_adata ↑')
-#sc.pl.draw_graph(scJoint_adata[permute_idxs], color=colors, wspace=0.5); print('↑ scJoint_adata ↑')
+## ensure that Lineage colors are the same for all methods
+scJoint_adata.uns['Lineage_colors'] = subsampled_eclare_adata.uns['Lineage_colors']
+glue_adata.uns['Lineage_colors'] = subsampled_eclare_adata.uns['Lineage_colors']
 
+# Create a single figure with multiple rows for ECLARE, scJoint, and scGLUE
+methods_data = [
+    ('ECLARE', subsampled_eclare_adata[permute_idxs]),
+    ('scJoint', scJoint_adata[permute_idxs]),
+    ('scGLUE', glue_adata[permute_idxs])
+]
+
+fig, axes = plt.subplots(len(methods_data), len(colors), figsize=(6*len(colors), 4*len(methods_data)))
+
+for row_idx, (method_name, adata) in enumerate(methods_data):
+    for col_idx, color in enumerate(colors):
+        ax = axes[row_idx, col_idx]
+        sc.pl.draw_graph(adata, color=color, ax=ax, show=False, title=color if row_idx == 0 else None)
+
+        if col_idx == 0:
+            ax.set_ylabel(method_name, fontsize=18, fontweight='bold')
+            # Add row label (a, b, c) at top-left corner
+            ax.text(-0.15, 1.1, chr(97 + row_idx), transform=ax.transAxes, 
+                   fontsize=20, fontweight='bold', va='top', ha='right')
+        
+        # Increase font sizes
+        if row_idx == 0:
+            ax.set_title(color, fontsize=16)
+        ax.tick_params(labelsize=12)
+
+plt.tight_layout()
+plt.show()
+
+## plots for KD-CLIP and CLIP
 for source_dataset in source_datasets:
     sc.pl.draw_graph(subsampled_kd_clip_adatas[source_dataset][permute_idxs], color=colors, wspace=0.5, ncols=len(colors)); print(f'↑ subsampled_kd_clip_adatas[{source_dataset}] ↑')
     sc.pl.draw_graph(subsampled_clip_adatas[source_dataset][permute_idxs], color=colors, wspace=0.5, ncols=len(colors)); print(f'↑ subsampled_clip_adatas[{source_dataset}] ↑')
+
+def dev_figS2(fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_figS2.pdf')):
+    fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    print(f'Saved figure to {manuscript_figpath}')
+    plt.close(fig)
+
+#dev_figS2(fig)
 
 #%% trajectory analysis metrics
 
@@ -818,6 +857,8 @@ for source_dataset in source_datasets:
 
     cast_object_columns_to_str(subsampled_clip_adatas[source_dataset])
     subsampled_clip_adatas[source_dataset].write(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_clip_adatas_{source_dataset}.h5ad'))
+
+
 
 #%% create PHATE embeddings
 import phate
