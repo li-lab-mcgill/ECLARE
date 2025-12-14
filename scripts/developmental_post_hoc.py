@@ -31,6 +31,7 @@ n_cudas = torch.cuda.device_count()
 #device = torch.device(f'cuda:{n_cudas - 1}') if cuda_available else 'cpu'
 device = 'cpu'
 
+'''
 ## Define target and source datasets
 target_dataset = 'Cortex_Velmeshev'
 genes_by_peaks_str = '9584_by_66620'
@@ -42,7 +43,6 @@ methods_id_dict = {
     'eclare': ['04164533'],
     'ordinal': '27204131',
 }
-
 '''
 target_dataset = 'MDD'
 genes_by_peaks_str = '6816_by_55284'
@@ -54,7 +54,7 @@ methods_id_dict = {
     'eclare': ['22105844'],
     'ordinal': '22130216',
 }
-'''
+
 '''
 target_dataset = 'MDD'
 genes_by_peaks_str = '6816_by_55284'#'17279_by_66623'
@@ -321,7 +321,7 @@ if target_dataset == 'MDD':
 
     student_rna_atac_sub    = subsample_adata(student_rna_atac, subsample, ['Age_bins', 'Condition'], subsample_type='balanced')
     #student_rna_atac_sub    = subsample_adata(student_rna_atac, subsample, ['Age_bins', 'Condition', 'modality'], subsample_type='balanced')
-    sns.barplot(student_rna_atac_sub.obs, x='modality', y='Age', hue='Condition', errorbar='se'); plt.ylim([30,50])
+    sns.barplot(student_rna_atac_sub.obs, x='modality', y='Age', hue='Condition', palette='Pastel1', edgecolor='black'); plt.ylim([30,50])
     sns.catplot(data=student_rna_atac_sub.obs, x='modality', y='Age', hue='Condition', col='SubClusters', kind='bar', height=5, aspect=.75)
     sns.catplot(data=student_rna_atac_sub.obs, x='modality', hue='Condition', col='SubClusters', kind='count')
 
@@ -508,6 +508,21 @@ for source_dataset in source_datasets:
     except:
         print(f'WARNING: KD-CLIP adata not created for {source_dataset}')
 
+def devmdd_figS1(manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_figS1.pdf')):
+
+    #target_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'subsampled_eclare_adata_{target_dataset}.h5ad'))
+    #target_adata.obs['Age'] = target_adata.obs['Age'].astype(float)
+
+    source_target_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'source_target_adata_PFC_Zhu_MDD.h5ad'))
+    target_adata = source_target_adata[source_target_adata.obs['source_or_target'] == 'target']
+    target_adata.obs['Age'] = target_adata.obs['Age'].astype(float)
+
+    fig, ax = plt.subplots(1, 2, figsize=[8, 4])
+    sns.barplot(target_adata.obs, x='modality', y='Age', hue='Condition', palette='Pastel1', edgecolor='black', ax=ax[0]); plt.ylim([30,50])
+    sns.barplot(target_adata.obs, x='modality', y='ordinal_pseudotime', hue='Condition', palette='Pastel1', edgecolor='black', ax=ax[1]); plt.ylim([30,50])
+    fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    print(f'Saving figure to {manuscript_figpath}')
+    plt.close()
 
 #%% import source datasets
 

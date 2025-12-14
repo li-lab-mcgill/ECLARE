@@ -316,6 +316,48 @@ results_mdd = cluster_genes_by_trajectory(
 # Shutdown Ray to free resources
 ray.shutdown()
 
+#
+from skimage.exposure import match_histograms
+mdd_rna_ages = mdd_rna_raw.obs['Age'].values
+mdd_ordinal_pseudotime = mdd_rna_raw.obs['ordinal_pseudotime'].values
+mdd_ordinal_pseudotime_matched = match_histograms(mdd_ordinal_pseudotime, mdd_rna_ages)
+mdd_ordinal_pseudotime_mapper = pd.Series(mdd_ordinal_pseudotime_matched, index=mdd_ordinal_pseudotime)
+
+
+def devmdd_figS2(results_pfc_zhu, results_mdd, map_to_age=False, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_figS2.pdf')):
+    fig, ax = plt.subplots(1, 2, figsize=(8, 5))
+    results_pfc_zhu['mean_trajectories'].plot(ax=ax[0], linewidth=3, alpha=0.5)
+
+    if map_to_age:
+        # Map MDD mean trajectories index to closest pseudotime in mapper
+        mdd_mean_traj = results_mdd['mean_trajectories']
+        mapper_index = mdd_ordinal_pseudotime_mapper.index.values
+        
+        # Find closest mapper index for each trajectory index
+        mapped_indices = []
+        for idx_val in mdd_mean_traj.index:
+            closest_idx = mapper_index[np.argmin(np.abs(mapper_index - idx_val))]
+            mapped_indices.append(np.unique(mdd_ordinal_pseudotime_mapper.loc[closest_idx]).item())
+        
+        # Create new dataframe with mapped age indices
+        mdd_mean_traj_mapped = mdd_mean_traj.copy()
+        mdd_mean_traj_mapped.index = mapped_indices
+        mdd_mean_traj_mapped.plot(ax=ax[1], linewidth=3, alpha=0.5)
+    else:
+        results_mdd['mean_trajectories'].plot(ax=ax[1], linewidth=3, alpha=0.5)
+
+    ax[0].set_title('PFC-Zhu')
+    ax[1].set_title('MDD')
+    ax[0].set_xlabel('Pseudotime')
+    ax[1].set_xlabel('Pseudotime')
+    ax[0].set_ylabel('Z-scored expression')
+    ax[1].set_ylabel('Z-scored expression')
+    plt.tight_layout()
+    
+    print(f"Saving figure to {manuscript_figpath}")
+    fig.savefig(manuscript_figpath)
+    plt.close(fig)
+
 # Extract results from pfc_zhu for downstream analysis
 def enrichr_by_km(results, gene_sets):
     from gseapy import dotplot as gp_dotplot
