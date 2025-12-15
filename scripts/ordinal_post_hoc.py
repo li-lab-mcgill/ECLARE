@@ -1,5 +1,8 @@
-from argparse import Namespace
 import os
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
+
+from argparse import Namespace
 from glob import glob
 import mlflow
 import torch
@@ -22,6 +25,12 @@ if __name__ == '__main__':
     source_dataset = 'PFC_V1_Wang'
     target_dataset = 'Cortex_Velmeshev'
 
+    args = Namespace(
+        source_dataset=source_dataset,
+        target_dataset=target_dataset,
+        genes_by_peaks_str='6124_by_19914',
+        ordinal_job_id='01134633',
+    )
     '''
     args = Namespace(
         source_dataset=source_dataset,
@@ -30,12 +39,18 @@ if __name__ == '__main__':
         ordinal_job_id='25195201',
     )
     '''
+    '''
+    source_dataset = 'PFC_Zhu'
+    target_dataset = 'MDD'
+    genes_by_peaks_str = '6816_by_55284'
+    ordinal_job_id = '22130216'
     args = Namespace(
         source_dataset=source_dataset,
         target_dataset=target_dataset,
-        genes_by_peaks_str='6124_by_19914',
-        ordinal_job_id='01134633',
+        genes_by_peaks_str=genes_by_peaks_str,
+        ordinal_job_id=ordinal_job_id,
     )
+    '''
 
     if torch.cuda.is_available():
         print('CUDA available')
@@ -67,14 +82,38 @@ if __name__ == '__main__':
     mlflow.set_tracking_uri('file:///home/mcb/users/dmannk/scMultiCLIP/ECLARE/mlruns')
     ordinal_model = mlflow.pytorch.load_model(model_uri, device=device)
 
+    ## Extract model metrics from MLflow
+    # Parse run_id from model_uri (format: "runs:/<run_id>/model")
+    run_id = model_uri.split('/')[1]
+    
+    # Get the run and extract metrics
+    mlflow_client = mlflow.tracking.MlflowClient()
+    run = mlflow_client.get_run(run_id)
+    
+    # Extract only valid_mae_atac and valid_mae_rna metrics
+    all_metrics = run.data.metrics
+    target_metrics = ['valid_mae_atac', 'valid_mae_rna']
+    model_metrics = {k: v for k, v in all_metrics.items() if k in target_metrics}
+    print(f"Model metrics: {model_metrics}")
+
     ## define dev group and cell group keys and dev stages
-    dev_group_key = {'PFC_V1_Wang': 'Group', 'Cortex_Velmeshev': 'Age_Range', 'PFC_Zhu': 'dev_stage'}[source_dataset]
-    cell_group_key = {'PFC_V1_Wang': 'type', 'Cortex_Velmeshev': 'Lineage', 'PFC_Zhu': 'Cell type'}[source_dataset]
-    dev_stages = {
+    dev_group_key_dict = {
+        'PFC_V1_Wang': 'dev_stage',
+        'Cortex_Velmeshev': 'Age_Range',
+        'PFC_Zhu': 'dev_stage',
+        'MDD': 'Age'
+        }
+    cell_group_key_dict = {
+        'PFC_V1_Wang': 'type',
+        'Cortex_Velmeshev': 'Lineage',
+        'PFC_Zhu': 'Cell type',
+        'MDD': 'ClustersMapped'
+        }
+    dev_stages_dict = {
         'PFC_V1_Wang': ['FirstTrim', 'SecTrim', 'ThirdTrim', 'Inf', 'Adol'],
         'Cortex_Velmeshev': ['2nd trimester', '3rd trimester', '0-1 years', '1-2 years', '2-4 years', '4-10 years', '10-20 years', 'Adult'],
         'PFC_Zhu': ['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult']
-        }[source_dataset]
+        }
 
     ## load source and target data
     source_rna, source_atac, cell_group, _, _, _, _ = source_setup_func(args, return_type='data', keep_group=[''])
@@ -121,39 +160,43 @@ if __name__ == '__main__':
     '''
 
     if source_dataset == 'PFC_V1_Wang' and target_dataset is None:
+
+        cell_group_key = cell_group_key_dict[source_dataset]
+
         ## map cell types
         cell_type_map = {0: "RG-vRG", 1: "RG-tRG", 2: "RG-oRG", 3: "IPC-EN", 4: "EN-newborn", 5: "EN-IT-immature", 6: "EN-L2_3-IT", 7: "EN-L4-IT", 8: "EN-L5-IT", 9: "EN-L6-IT", 10: "EN-non-IT-immature", 11: "EN-L5-ET", 12: "EN-L5_6-NP", 13: "EN-L6-CT", 14: "EN-L6b", 15: "IN-dLGE-immature", 16: "IN-CGE-immature", 17: "IN-CGE-VIP", 18: "IN-CGE-SNCG", 19: "IN-mix-LAMP5", 20: "IN-MGE-immature", 21: "IN-MGE-SST", 22: "IN-MGE-PV", 23: "IPC-glia", 24: "Astrocyte-immature", 25: "Astrocyte-protoplasmic", 26: "Astrocyte-fibrous", 27: "OPC", 28: "Oligodendrocyte-immature", 29: "Oligodendrocyte", 30: "Cajal–Retzius cell", 31: "Microglia", 32: "Vascular", 33: "Unknown"}
-        source_atac.obs[cell_group_key] = source_atac.obs[cell_group_key].map(cell_type_map)
         source_rna.obs[cell_group_key] = source_rna.obs[cell_group_key].map(cell_type_map)
+        source_atac.obs[cell_group_key] = source_atac.obs[cell_group_key].map(cell_type_map)
 
         ## map dev stages
         dev_stage_mapper = {0: 'FirstTrim', 1: 'SecTrim', 2:'ThirdTrim', 3:'Inf', 4:'Adol'}
-        source_rna.obs[cell_group_key] = source_rna.obs[cell_group_key].map(dev_stage_mapper)
-        source_atac.obs[cell_group_key] = source_atac.obs[cell_group_key].map(dev_stage_mapper)
+        source_rna.obs[dev_group_key_dict.get(source_dataset)] = source_rna.obs[dev_group_key_dict.get(source_dataset)].map(dev_stage_mapper)
+        source_atac.obs[dev_group_key_dict.get(source_dataset)] = source_atac.obs[dev_group_key_dict.get(source_dataset)].map(dev_stage_mapper)
 
     ## get cells, dev stages, batches
-    source_rna_cells, source_rna_labels, source_rna_batches = torch.from_numpy(source_rna.X.toarray()), source_rna.obs['dev_stage'], None
-    target_rna_cells, target_rna_labels, target_rna_batches = torch.from_numpy(target_rna.X.toarray()), target_rna.obs['dev_stage'], None
-    source_atac_cells, source_atac_labels, source_atac_batches = torch.from_numpy(source_atac.X.toarray()), source_atac.obs['dev_stage'], None
-    target_atac_cells, target_atac_labels, target_atac_batches = torch.from_numpy(target_atac.X.toarray()), target_atac.obs['dev_stage'], None
+    source_rna_cells, source_rna_labels, source_rna_batches = torch.from_numpy(source_rna.X.toarray()), source_rna.obs[dev_group_key_dict.get(source_dataset)], None
+    target_rna_cells, target_rna_labels, target_rna_batches = torch.from_numpy(target_rna.X.toarray()), target_rna.obs[dev_group_key_dict.get(target_dataset)], None
+    source_atac_cells, source_atac_labels, source_atac_batches = torch.from_numpy(source_atac.X.toarray()), source_atac.obs[dev_group_key_dict.get(source_dataset)], None
+    target_atac_cells, target_atac_labels, target_atac_batches = torch.from_numpy(target_atac.X.toarray()), target_atac.obs[dev_group_key_dict.get(target_dataset)], None
 
     ## get latents
-    source_rna_logits, source_rna_probas, source_rna_latents = ordinal_model(source_rna_cells.to(device=device, dtype=torch.float32), modality=0, normalize=0)
-    target_rna_logits, target_rna_probas, target_rna_latents = ordinal_model(target_rna_cells.to(device=device, dtype=torch.float32), modality=0, normalize=0)
-    source_atac_logits, source_atac_probas, source_atac_latents = ordinal_model(source_atac_cells.to(device=device, dtype=torch.float32), modality=1, normalize=0)
-    target_atac_logits, target_atac_probas, target_atac_latents = ordinal_model(target_atac_cells.to(device=device, dtype=torch.float32), modality=1, normalize=0)
+    ordinal_model = ordinal_model.to('cpu')
+    source_rna_logits, source_rna_probas, source_rna_latents = ordinal_model(source_rna_cells.to(device='cpu', dtype=torch.float32), modality=0, normalize=0)
+    target_rna_logits, target_rna_probas, target_rna_latents = ordinal_model(target_rna_cells.to(device='cpu', dtype=torch.float32), modality=0, normalize=0)
+    source_atac_logits, source_atac_probas, source_atac_latents = ordinal_model(source_atac_cells.to(device='cpu', dtype=torch.float32), modality=1, normalize=0)
+    target_atac_logits, target_atac_probas, target_atac_latents = ordinal_model(target_atac_cells.to(device='cpu', dtype=torch.float32), modality=1, normalize=0)
 
     ## create anndata with latents
     X = np.concatenate([source_rna_latents.detach().cpu().numpy(), target_rna_latents.detach().cpu().numpy()], axis=0)
-    obs = pd.concat([source_rna_labels.to_frame(name='dev_stage'), target_rna_labels.to_frame(name='dev_stage')], axis=0)
+    obs = pd.concat([source_rna_labels.to_frame(name=dev_group_key_dict.get(source_dataset)), target_rna_labels.to_frame(name=dev_group_key_dict.get(target_dataset))], axis=0)
     obs['source_or_target'] = ['source'] * len(source_rna_labels) + ['target'] * len(target_rna_labels)
-    obs['cell_type'] = source_rna.obs['type'].tolist() + target_rna.obs['Lineage'].tolist()
+    obs['cell_type'] = source_rna.obs[cell_group_key_dict.get(source_dataset)].tolist() + target_rna.obs[cell_group_key_dict.get(target_dataset)].tolist()
     ordinal_rna = AnnData(X=X, obs=obs)
 
     X = np.concatenate([source_atac_latents.detach().cpu().numpy(), target_atac_latents.detach().cpu().numpy()], axis=0)
-    obs = pd.concat([source_atac_labels.to_frame(name=dev_group_key), target_atac_labels.to_frame(name=dev_group_key)], axis=0)
+    obs = pd.concat([source_atac_labels.to_frame(name=dev_group_key_dict.get(source_dataset)), target_atac_labels.to_frame(name=dev_group_key_dict.get(target_dataset)  )], axis=0)
     obs['source_or_target'] = ['source'] * len(source_atac_labels) + ['target'] * len(target_atac_labels)
-    obs['cell_type'] = source_atac.obs['type'].tolist() + target_atac.obs['Lineage'].tolist()
+    obs['cell_type'] = source_atac.obs[cell_group_key_dict.get(source_dataset)].tolist() + target_atac.obs[cell_group_key_dict.get(target_dataset)].tolist()
     ordinal_atac = AnnData(X=X, obs=obs)
 
     ## get pseudotimes from CORAL layer - RNA
@@ -190,33 +233,92 @@ if __name__ == '__main__':
         '10-20 years',
         'Adult',
         ]
-    ordinal_rna.obs['dev_stage'] = ordinal_rna.obs['dev_stage'].cat.reorder_categories(dev_stage_order, ordered=True)
-    ordinal_atac.obs['dev_stage'] = pd.Categorical(ordinal_atac.obs['Group'], categories=dev_stage_order, ordered=True)
+    #ordinal_rna.obs['dev_stage'] = ordinal_rna.obs['dev_stage'].cat.reorder_categories(dev_stage_order, ordered=True)
+    #ordinal_rna.obs['dev_stage'] = pd.Categorical(ordinal_rna.obs[dev_group_key_dict.get(source_dataset)], categories=dev_stage_order, ordered=True)
+    #ordinal_atac.obs['dev_stage'] = pd.Categorical(ordinal_atac.obs[dev_group_key_dict.get(source_dataset)], categories=dev_stage_order, ordered=True)
+
+    ## subsample data
+    subsample_factor = 2 if target_dataset=='MDD' else 100
+    ordinal_rna = ordinal_rna[::subsample_factor]
+    ordinal_atac = ordinal_atac[::subsample_factor]
 
     ## get and plot UMAPs
-    sc.pp.neighbors(ordinal_rna)
-    sc.tl.umap(ordinal_rna)
-    sc.pl.umap(ordinal_rna, color=['source_or_target', 'dev_stage', 'pseudotime', 'cell_type'], cmap='viridis', wspace=0.3)
-
     target_ordinal_rna = ordinal_rna[ordinal_rna.obs['source_or_target']=='target']
+    sc.pp.neighbors(target_ordinal_rna)
+    sc.tl.umap(target_ordinal_rna, min_dist=0.01)
     sc.pl.umap(target_ordinal_rna, color=['source_or_target', 'dev_stage', 'pseudotime', 'cell_type'], cmap='viridis', wspace=0.3)
 
     source_ordinal_rna = ordinal_rna[ordinal_rna.obs['source_or_target']=='source']
+    sc.pp.neighbors(source_ordinal_rna)
+    sc.tl.umap(source_ordinal_rna, min_dist=0.01)
     sc.pl.umap(source_ordinal_rna, color=['source_or_target', 'dev_stage', 'pseudotime', 'cell_type'], cmap='viridis', wspace=0.3)
 
-    source_EN_lineage_ordinal_rna = source_ordinal_rna[source_ordinal_rna.obs['cell_type'].str.contains('RG|IPC|EN')]
-    sc.pl.umap(source_EN_lineage_ordinal_rna, color=['source_or_target', 'dev_stage', 'pseudotime', 'cell_type'], cmap='viridis', wspace=0.3)
+    #source_EN_lineage_ordinal_rna = source_ordinal_rna[source_ordinal_rna.obs['cell_type'].str.contains('RG|IPC|EN')]
+    #sc.pl.umap(source_EN_lineage_ordinal_rna, color=['source_or_target', 'dev_stage', 'pseudotime', 'cell_type'], cmap='viridis', wspace=0.3)
 
     ## get and plot UMAPs - ATAC
-    sc.pp.neighbors(ordinal_atac)
-    sc.tl.umap(ordinal_atac)
-    sc.pl.umap(ordinal_atac, color=['source_or_target', 'dev_stage', 'pseudotime', 'cell_type'], cmap='viridis', wspace=0.3)
-
     target_ordinal_atac = ordinal_atac[ordinal_atac.obs['source_or_target']=='target']
+    sc.pp.neighbors(target_ordinal_atac)
+    sc.tl.umap(target_ordinal_atac, min_dist=0.01)
     sc.pl.umap(target_ordinal_atac, color=['source_or_target', 'dev_stage', 'pseudotime', 'cell_type'], cmap='viridis', wspace=0.3)
 
     source_ordinal_atac = ordinal_atac[ordinal_atac.obs['source_or_target']=='source']
+    sc.pp.neighbors(source_ordinal_atac)
+    sc.tl.umap(source_ordinal_atac, min_dist=0.01)
     sc.pl.umap(source_ordinal_atac, color=['source_or_target', 'dev_stage', 'pseudotime', 'cell_type'], cmap='viridis', wspace=0.3)
+
+    def dev_figS1(
+        source_ordinal_rna,
+        target_ordinal_rna,
+        source_ordinal_atac,
+        target_ordinal_atac,
+        source_dataset, target_dataset,
+        model_metrics,
+        manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_figS1.pdf')):
+
+        sc.settings._vector_friendly = True
+        sc.settings.figdir = manuscript_figpath
+
+        # Create a 2x4 figure: rows = modalities (RNA, ATAC)
+        # columns = [source dev_group, source pseudotime, target dev_group, target pseudotime]
+        fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+        size = 50
+        
+        # Row 0: RNA
+        sc.pl.umap(source_ordinal_rna, color=dev_group_key_dict.get(source_dataset), ax=axes[0, 0], show=False, title=dev_group_key_dict.get(source_dataset), size=size)
+        sc.pl.umap(source_ordinal_rna, color='pseudotime', cmap='viridis', ax=axes[0, 1], show=False, title='pseudotime', size=size)
+        sc.pl.umap(target_ordinal_rna, color=dev_group_key_dict.get(target_dataset), ax=axes[0, 2], show=False, title=dev_group_key_dict.get(target_dataset), size=size)
+        sc.pl.umap(target_ordinal_rna, color='pseudotime', cmap='viridis', ax=axes[0, 3], show=False, title='pseudotime', size=size)
+        
+        # Row 1: ATAC
+        sc.pl.umap(source_ordinal_atac, color=dev_group_key_dict.get(source_dataset), ax=axes[1, 0], show=False, size=size)
+        sc.pl.umap(source_ordinal_atac, color='pseudotime', cmap='viridis', ax=axes[1, 1], show=False, size=size)
+        sc.pl.umap(target_ordinal_atac, color=dev_group_key_dict.get(target_dataset), ax=axes[1, 2], show=False, size=size)
+        sc.pl.umap(target_ordinal_atac, color='pseudotime', cmap='viridis', ax=axes[1, 3], show=False, size=size)
+        
+        # Add row labels (a, b)
+        axes[0, 0].text(-0.15, 1.1, 'a', transform=axes[0, 0].transAxes, 
+                       fontsize=20, fontweight='bold', va='top', ha='right')
+        axes[0, 2].text(-0.15, 1.1, 'b', transform=axes[0, 2].transAxes, 
+                       fontsize=20, fontweight='bold', va='top', ha='right')
+        
+        # Add modality labels
+        axes[0, 0].set_ylabel(f'RNA - MAE: {model_metrics["valid_mae_rna"]:.2f}', fontsize=16, fontweight='bold')
+        axes[1, 0].set_ylabel(f'ATAC - MAE: {model_metrics["valid_mae_atac"]:.2f}', fontsize=16, fontweight='bold')
+        
+        # add suptitle
+        fig.suptitle(f'a. {source_dataset} - b. {target_dataset}', fontsize=20, fontweight='bold')
+        
+        # Increase tick label sizes
+        for ax_row in axes:
+            for ax in ax_row:
+                ax.tick_params(labelsize=12)
+        
+        plt.tight_layout()
+        manuscript_figpath = manuscript_figpath.replace('.pdf', f'_{source_dataset}_{target_dataset}.pdf')
+        fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+        print(f'Saving figure to {manuscript_figpath}')
+        plt.close()
 
     ## combine UMAPs
     import anndata as ad

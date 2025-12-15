@@ -1,26 +1,9 @@
 #%% set env variables
-import os
-import sys
+from eclare import set_env_variables
+set_env_variables(config_path='../config')
 
-# Check if environment variables are already set
-eclare_root = os.environ.get('ECLARE_ROOT')
-outpath = os.environ.get('OUTPATH')
-datapath = os.environ.get('DATAPATH')
-
-# Print status of environment variables
-if all([eclare_root, outpath, datapath]):
-    print(f"Environment variables already set:")
-    print(f"ECLARE_ROOT: {eclare_root}")
-    print(f"OUTPATH: {outpath}")
-    print(f"DATAPATH: {datapath}")
-else:
-    print(f"Missing environment variables")
-
-    config_path = '../config'
-    sys.path.insert(0, config_path)
-
-    from export_env_variables import export_env_variables
-    export_env_variables(config_path)
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
 
 #%%
 import os
@@ -34,6 +17,7 @@ import seaborn as sns
 from scanpy.tl import score_genes
 from statsmodels.stats.weightstats import DescrStatsW
 import json
+import scanpy as sc
 
 # Set matplotlib to use a thread-safe backend
 import matplotlib
@@ -60,10 +44,7 @@ import threading
 from eclare.post_hoc_utils import \
     extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, compute_LR_grns, do_enrichr, find_hits_overlap, \
     download_mlflow_runs,\
-    tree
-from ECLARE import set_env_variables
-
-set_env_variables()
+    tree, get_latents
 
 cuda_available = torch.cuda.is_available()
 device = 'cuda' if cuda_available else 'cpu'
@@ -195,6 +176,39 @@ subjects_by_condition_n_sex_df = pd.DataFrame({
 overlapping_subjects = np.intersect1d(mdd_rna.obs[rna_subject_key], mdd_atac.obs[atac_subject_key])
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df[subjects_by_condition_n_sex_df['subject'].isin(overlapping_subjects)]
 subjects_by_condition_n_sex_df = subjects_by_condition_n_sex_df.groupby(['condition', 'sex'])['subject'].unique()
+
+#%% UMAP plots of RNA and ATAC data
+
+latents_rna, latents_atac = get_latents(eclare_student_model, mdd_rna, mdd_atac, return_tensor=False)
+
+rna_adata = anndata.AnnData(
+    X=latents_rna,
+    obs=mdd_rna.obs,
+)
+atac_adata = anndata.AnnData(
+    X=latents_atac,
+    obs=mdd_atac.obs,
+)
+
+rna_adata.obs = rna_adata.obs.assign(modality='RNA')
+atac_adata.obs = atac_adata.obs.assign(modality='ATAC')
+rna_atac_adata = anndata.concat([rna_adata, atac_adata], axis=0)
+rna_atac_adata = rna_atac_adata[np.random.permutation(rna_atac_adata.shape[0])]
+rna_atac_adata.obs.rename(columns={'ClustersMapped': 'cell type'}, inplace=True)
+
+sc.pp.pca(rna_atac_adata)
+sc.pp.neighbors(rna_atac_adata, n_neighbors=50, n_pcs=50)
+sc.tl.umap(rna_atac_adata, min_dist=0.25)
+
+sc.pl.umap(rna_atac_adata, color=['modality', 'cell type'], wspace=0.25, size=5)
+#sc.pl.umap(rna_atac_adata[rna_atac_adata.obs['modality'].eq('RNA')], color=['ClustersMapped'], wspace=0.3, size=3)
+#sc.pl.umap(rna_atac_adata[rna_atac_adata.obs['modality'].eq('ATAC')], color=['ClustersMapped'], wspace=0.3, size=3)
+
+def mdd_umap_plot(rna_atac_adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'enrichment_analyses')):
+
+    sc.settings._vector_friendly = True
+    sc.settings.figdir = manuscript_figpath
+    sc.pl.umap(rna_atac_adata, color=['modality', 'cell type'], wspace=0.25, size=5, save='_eclare_mdd.svg')
 
 #%% setup before pyDESeq2 and sc-compReg
 

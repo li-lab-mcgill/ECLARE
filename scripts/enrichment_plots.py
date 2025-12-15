@@ -89,11 +89,11 @@ slopes_dict = loaded_dicts.get('slopes_dict', tree())
 intercepts_dict = loaded_dicts.get('intercepts_dict', tree())
 intercept_stderrs_dict = loaded_dicts.get('intercept_stderrs_dict', tree())
 enrs_dict = loaded_dicts.get('enrs_dict', tree())
-magma_results_dict = loaded_dicts.get('magma_results_dict', tree())
 mean_grn_df_filtered_dict = loaded_dicts.get('mean_grn_df_filtered_dict', tree())
 mean_grn_df_filtered_pruned_dict = loaded_dicts.get('mean_grn_df_filtered_pruned_dict', tree())
 gene_set_scores_dict = loaded_dicts.get('gene_set_scores_dict', tree())
 ttest_comp_df_dict = loaded_dicts.get('ttest_comp_df_dict', tree())
+magma_results_dict = loaded_dicts.get('magma_results_dict', tree())
 
 ## Load CSV files and other file types
 shared_TF_TG_pairs_df = pd.read_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'))
@@ -411,40 +411,46 @@ ttest_mdd_dn_ax = plot_ttest(ttest_mdd_dn_df, figsize=(4.5, 2))
 
 pathways_of_interest = [
     "ASTON_MAJOR_DEPRESSIVE_DISORDER_DN",
-    #"FAN_EMBRYONIC_CTX_OLIG",
+    "FAN_EMBRYONIC_CTX_OLIG",
     "Oligodendrocyte_Mature_Darmanis_PNAS_2015",
-    #"LEIN_OLIGODENDROCYTE_MARKERS",
-    #"ZHONG_PFC_C4_PTGDS_POS_OPC",
+    "LEIN_OLIGODENDROCYTE_MARKERS",
+    "ZHONG_PFC_C4_PTGDS_POS_OPC",
     #"DESCARTES_FETAL_CEREBRUM_OLIGODENDROCYTES",
     #"COLIN_PILOCYTIC_ASTROCYTOMA_VS_GLIOBLASTOMA_UP",
     #"DESCARTES_MAIN_FETAL_OLIGODENDROCYTES",
     #"DESCARTES_FETAL_CEREBELLUM_OLIGODENDROCYTES",
-    #"LU_AGING_BRAIN_UP",
+    "LU_AGING_BRAIN_UP",
     #"DURANTE_ADULT_OLFACTORY_NEUROEPITHELIUM_OLFACTORY_ENSHEATHING_GLIA",
     #"DESCARTES_MAIN_FETAL_SCHWANN_CELLS",
     #"Oligodendrocyte_All_Zeisel_Science_2015",
     #"GOBERT_OLIGODENDROCYTE_DIFFERENTIATION_DN",
-    #"BLALOCK_ALZHEIMERS_DISEASE_UP"
+    "BLALOCK_ALZHEIMERS_DISEASE_UP",
+    #"Gandal_2018_BipolarDisorder_Upregulated_Cortex",
+    "Gandal_2018_Schizophrenia_Upregulated_Cortex",
+    #"CHEBOTAEV_GR_TARGETS_UP",
 ]
 
 # Call the function
 n = len(pathways_of_interest)
 #fig, axes = plt.subplots(n, 1, figsize=(8, 2.25*n), sharex=True)
-fig, axes = plt.subplots(n, 1, figsize=(5, 1.75*n), sharex=True)
+fig, axes = plt.subplots(np.ceil(n/2).astype(int), 2, figsize=(10, 1.75*np.ceil(n/2).astype(int)), sharex=True)
 if n == 1:
     axes = [axes]
 
 for i, pathway_name in enumerate(pathways_of_interest):
     ttest_df = get_ttest_df(ttest_comp_df_dict, pathway_name=pathway_name)
-    plot_ttest(ttest_df, ax=axes[i])
-    axes[i].set_title(pathway_name)
+    ax = axes[i//2, i%2]
+    plot_ttest(ttest_df, ax=ax)
+    ax.set_title(pathway_name)
 
 #fig.suptitle('Pathway-level differential expression of genes identified from MDD pathway enrichment', fontsize=10, y=0.96)
 fig.tight_layout()
 plt.show()
 
-#fig.savefig(os.path.join(output_dir, 'ttest_mdd_dn_fig.png'),  dpi=300, bbox_inches='tight')
-#fig.savefig(os.path.join(output_dir, 'ttest_mdd_dn_fig.svg'), format='svg', bbox_inches='tight')
+def mdd_figS2(fig, manuscript_figpath=os.path.join(output_dir, 'mdd_figS2.pdf')):
+    fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    print(f'Saving figure to {manuscript_figpath}')
+    plt.close()
 
 #%% Get sc-compReg slopes and their standard errors
 
@@ -811,7 +817,93 @@ def plot_magma(magma_results_df, ax=None):
 
     return ax
 
+def save_proper_magma_results():
+    import pandas as pd
+    import os
+    from glob import glob
+    from collections import defaultdict
+
+    def tree():
+        return defaultdict(tree)
+
+    # Specify the base directory containing the enrichment analyses
+    base_dir = '/home/mcb/users/dmannk/scMultiCLIP/outputs/enrichment_analyses_16103846_41_copy'
+
+    # Find all .gsa.out files
+    gsa_files = glob(os.path.join(base_dir, '**', '*.gsa.out'), recursive=True)
+
+    print(f"Found {len(gsa_files)} .gsa.out files")
+
+    # Initialize tree dict
+    magma_results_dict = tree()
+
+    for gsa_file in gsa_files:
+        # Extract sex and celltype from path
+        # Path format: .../female_Oli/enr_thread_*/sc-compReg_significant_genes_thread_*.gsa.out
+        path_parts = gsa_file.split(os.sep)
+        
+        # Find the part with sex_celltype pattern
+        sex_celltype = None
+        for part in path_parts:
+            if '_' in part and 'thread' not in part and 'enr' not in part and 'enrichment' not in part:
+                # Check if it matches pattern like "female_Oli" or "male_Ast"
+                potential_parts = part.split('_')
+                if len(potential_parts) >= 2:
+                    sex = potential_parts[0].lower()
+                    celltype = '_'.join(potential_parts[1:])  # Handle multi-word celltypes
+                    if sex in ['female', 'male']:
+                        sex_celltype = (sex, celltype)
+                        break
+        
+        if sex_celltype is None:
+            print(f"Warning: Could not parse sex/celltype from {gsa_file}")
+            continue
+        
+        sex, celltype = sex_celltype
+        
+        # Read the file and find the skiprows value
+        with open(gsa_file, 'r') as f:
+            skiprows = 0
+            for l, line in enumerate(f):
+                if 'VARIABLE' in line:
+                    skiprows = l
+                    break
+        
+        # Read MAGMA results
+        try:
+            magma_results = pd.read_csv(gsa_file, sep=r'\s+', skiprows=skiprows)
+            
+            # Extract BETA and P columns, indexed by VARIABLE
+            if 'VARIABLE' in magma_results.columns and 'BETA' in magma_results.columns and 'P' in magma_results.columns:
+                magma_results_series = magma_results.set_index('VARIABLE').loc[:, ['BETA', 'P']]
+                magma_results_dict[sex][celltype] = magma_results_series
+                print(f"Loaded {sex}/{celltype}: {len(magma_results_series)} rows")
+            else:
+                print(f"Warning: Missing expected columns in {gsa_file}")
+                print(f"  Available columns: {magma_results.columns.tolist()}")
+        except Exception as e:
+            print(f"Error reading {gsa_file}: {e}")
+
+    # Convert tree to regular dict for saving
+    magma_results_dict = {sex: dict(celltypes) for sex, celltypes in magma_results_dict.items()}
+
+    # Save to pickle
+    import pickle
+    output_path = os.path.join(base_dir, 'magma_results_dict_fixed.pkl')
+    with open(output_path, 'wb') as f:
+        pickle.dump(magma_results_dict, f)
+
+    print(f"\nSaved magma_results_dict.pkl with structure:")
+    for sex in magma_results_dict:
+        print(f"  {sex}: {list(magma_results_dict[sex].keys())}")
+
+    return magma_results_dict
+
 #magma_results_df = pd.read_csv('data/magma_results/magma_results_mdd_dn_pathways.txt', sep='\t')
+from eclare.post_hoc_utils import magma_dicts_to_df
+magma_results_dict = save_proper_magma_results()
+magma_results_df = magma_dicts_to_df(magma_results_dict)
+magma_results_df = magma_results_df.groupby(['sex', 'celltype']).nth(2).reset_index()
 magma_results_df = magma_results_df.reset_index()
 magma_results_df['mlog10_pvalue'] = -np.log10(magma_results_df['P'])
 magma_results_df['size_mlog10_pvalue'] = np.log1p(magma_results_df['mlog10_pvalue']) * 1000
@@ -898,17 +990,66 @@ keep_pathways = np.hstack(list(topk_pathways_dict.values()))
 enrs_compare_mlog10_pval_ladder = enrs_compare_mlog10_pval_df[keep_pathways].T
 enrs_compare_mlog10_pval_ladder.drop_duplicates(keep='last', inplace=True)
 
-## plot heatmap of topk pathways
-fig, ax = plt.subplots(figsize=(3, 14))
-heatmap = sns.heatmap(enrs_compare_mlog10_pval_ladder, cmap='viridis', vmin=0, vmax=5, ax=ax, cbar_kws={'label': '$-log_{10}$(p-adj.)'})
-ax.set_xticklabels(ax.get_xticklabels(), rotation=30)
+## Split the heatmap into two halves (left and right)
+n_pathways = len(enrs_compare_mlog10_pval_ladder)
+split_idx = n_pathways // 2
 
-# Add red stars where value > -log10(0.05)
+# First half and second half
+enrs_left_half = enrs_compare_mlog10_pval_ladder.iloc[:split_idx]
+enrs_right_half = enrs_compare_mlog10_pval_ladder.iloc[split_idx:]
+
+## plot heatmaps as subfigures (side by side)
+fig, axes = plt.subplots(1, 2, figsize=(8, 7), sharey=False)
+
 threshold = -np.log10(0.05)
-data = enrs_compare_mlog10_pval_ladder.values
-for y in range(data.shape[0]):
-    for x in range(data.shape[1]):
-        if data[y, x] > threshold:
-            ax.plot(x + 0.5, y + 0.5, marker='*', color='red', markersize=10, markeredgecolor='black')
 
-#plt.savefig(os.path.join(output_dir, 'enrs_compare_mlog10_pval_ladder.png'), dpi=300, bbox_inches='tight')
+# Heatmap 1: Left half
+heatmap1 = sns.heatmap(enrs_left_half, cmap='viridis', vmin=0, vmax=5, ax=axes[0], 
+                       cbar_kws={'label': '$-log_{10}$(p-adj.)'})
+axes[0].set_xticklabels(axes[0].get_xticklabels(), rotation=30, ha='right')
+
+# Make ASTON_MAJOR_DEPRESSIVE_DISORDER_DN yticklabel bold
+yticklabels = axes[0].get_yticklabels()
+for label in yticklabels:
+    if 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN' in label.get_text():
+        label.set_fontweight('bold')
+axes[0].set_yticklabels(yticklabels)
+
+# Add red stars for significant values
+data1 = enrs_left_half.values
+for y in range(data1.shape[0]):
+    for x in range(data1.shape[1]):
+        if data1[y, x] > threshold:
+            axes[0].plot(x + 0.5, y + 0.5, marker='*', color='red', markersize=10, markeredgecolor='black')
+
+# Heatmap 2: Right half
+heatmap2 = sns.heatmap(enrs_right_half, cmap='viridis', vmin=0, vmax=5, ax=axes[1], 
+                       cbar_kws={'label': '$-log_{10}$(p-adj.)'})
+axes[1].set_xticklabels(axes[1].get_xticklabels(), rotation=30, ha='right')
+axes[1].set_ylabel('')  # Remove y-label from right plot
+
+# Make ASTON_MAJOR_DEPRESSIVE_DISORDER_DN yticklabel bold
+yticklabels = axes[1].get_yticklabels()
+for label in yticklabels:
+    if 'ASTON_MAJOR_DEPRESSIVE_DISORDER_DN' in label.get_text():
+        label.set_fontweight('bold')
+axes[1].set_yticklabels(yticklabels)
+
+# Add red stars for significant values
+data2 = enrs_right_half.values
+for y in range(data2.shape[0]):
+    for x in range(data2.shape[1]):
+        if data2[y, x] > threshold:
+            axes[1].plot(x + 0.5, y + 0.5, marker='*', color='red', markersize=10, markeredgecolor='black')
+
+axes[0].set_title('top gene sets for sc-compReg', fontsize=12, fontweight='bold', loc='left', x=-3.0)
+axes[1].set_title('top gene sets for pyDESeq2', fontsize=12, fontweight='bold', loc='left', x=-2.75)
+
+plt.tight_layout()
+plt.subplots_adjust(wspace=5)  # Increase horizontal space between subplots
+plt.show()
+
+def mdd_figS1(fig, manuscript_figpath=os.path.join(output_dir, 'mdd_figS1.pdf')):
+    fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    print(f'Saving figure to {manuscript_figpath}')
+    plt.close()
