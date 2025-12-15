@@ -11,7 +11,7 @@ suppressPackageStartupMessages({
 })
 
 # ---- Paths ----
-DATAPATH <- "/home/mcb/users/dmannk/scMultiCLIP/data/mdd_data"
+DATAPATH <- "/Users/dmannk/cisformer/data/mdd_data"
 h5ad_path <- file.path(DATAPATH, "mdd_atac_broad_sub_14814.h5ad")
 #rds_path <- file.path(DATAPATH, "ArchR_Subcluster_by_peaks_updated.rds")
 celltype_key <- "most_common_cluster"
@@ -124,9 +124,9 @@ rownames(group_df) <- rownames(meta)
 
 group_df$group_label <- apply(group_df, 1, function(x) {
   paste0(
-    "sex_", x["sex"],
-    "_Cluster_", x[celltype_key],
-    "_cond_", x["condition"]
+    x["sex"],
+    "_", x[celltype_key],
+    "_", x["condition"]
   )
 })
 # sanitize to be file-system safe
@@ -163,14 +163,14 @@ for (g in group_levels) {
     cpm <- 1e6 * peak_counts / lib_size      # counts per million
   }
 
-  # signalValue (col 7): log10(CPM + tiny offset)
-  signal_value <- log10(cpm + 1e-3)
+  # signalValue (col 7): log10(CPM + 1)
+  signal_value <- log10(cpm + 1)
 
   # --- FIXED SCALING FOR SCORE (no per-group min–max) ---
   # Map signalValue to [0, 1000] in a consistent, monotonic way
   # Here: score ≈ 100 * signalValue, clipped to [0, 1000]
   score_raw <- round(signal_value * 100)
-  score_raw[score_raw < 0]    <- 0
+  score_raw[score_raw < 0]    <- 0 # shouldn't have any
   score_raw[score_raw > 1000] <- 1000
   score <- as.integer(score_raw)
 
