@@ -524,6 +524,18 @@ def devmdd_figS1(manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_pos
     print(f'Saving figure to {manuscript_figpath}')
     plt.close()
 
+def devmdd_figS4(manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results')):
+
+    sc.settings._vector_friendly = True
+    sc.settings.figdir = manuscript_figpath
+    sc.settings.dpi = 300
+
+    source_target_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', f'source_target_adata_PFC_Zhu_MDD.h5ad'))
+    source_target_adata.obs['dataset_name'] = pd.Categorical(source_target_adata.obs['dataset_name'], categories=['PFC_Zhu', 'MDD'], ordered=True)
+    sc.tl.embedding_density(source_target_adata, basis='umap', groupby='dataset_name')
+    sc.pl.embedding_density(source_target_adata, basis='umap', key=f'umap_density_dataset_name', ncols=source_target_adata.obs['dataset_name'].nunique(),
+        save='devmdd_figS4.pdf')
+
 #%% import source datasets
 
 source_clusters_dict = {

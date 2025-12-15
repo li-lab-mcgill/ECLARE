@@ -1,3 +1,8 @@
+import os
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.default_inference import DefaultInference
 from pydeseq2.ds import DeseqStats
@@ -5,7 +10,6 @@ from pydeseq2.ds import DeseqStats
 import pandas as pd
 import numpy as np
 import anndata
-import os
 import glob
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -671,6 +675,110 @@ def main(subset_type=None, gene_activity_score_type=None, analyze_per_celltype=F
         #nr4a2_pychromvar_outputs_dict = atac_enrichment_analysis_pychromVAR('NR4A2', rna_results, rna_enrichr_res_brainscope, peak_gene_links)
         #sox2_pychromvar_outputs_dict = atac_enrichment_analysis_pychromVAR('SOX2', rna_results, rna_enrichr_res_brainscope, peak_gene_links)
         #spi1_pychromvar_outputs_dict = atac_enrichment_analysis_pychromVAR('SPI1', rna_results, rna_enrichr_res_brainscope, peak_gene_links)
+
+        def devmdd_figS3(manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_figS3.pdf')):
+
+            pychromvar_results = pd.read_csv(os.path.join(os.environ['OUTPATH'], 'mdd_developmental_analysis', 'results_differential_enrichment_per_km.csv'))
+            pychromvar_results = pychromvar_results.sort_values(by='p_welch')
+
+            # Calculate -log10(p_welch)
+            pychromvar_results['-log10_p_welch'] = -np.log10(pychromvar_results['p_welch'])
+            
+            # Get unique sets and separate by pfc_zhu and mdd
+            unique_sets = sorted(pychromvar_results['set'].unique())
+            pfc_zhu_sets = [s for s in unique_sets if 'pfc_zhu' in s]
+            mdd_sets = [s for s in unique_sets if 'mdd' in s]
+            
+            # Create 4x2 grid (4 columns, 2 rows) with shared y-axis
+            fig, axes = plt.subplots(2, 4, figsize=(12, 8), sharey=True)
+            
+            # First row: pfc_zhu sets
+            for idx, set_name in enumerate(pfc_zhu_sets):
+                if idx >= 4:  # Only 4 columns available
+                    break
+                ax = axes[0, idx]
+                
+                # Filter data for this set and get top 12 by -log10(p_welch)
+                set_data = pychromvar_results[pychromvar_results['set'] == set_name].copy()
+                set_data = set_data.nlargest(12, '-log10_p_welch')
+                
+                # Separate by q_welch_global significance (e.g., < 0.05)
+                sig_mask = set_data['q_welch_global'] < 0.05
+                
+                # Create scatter plot
+                x_pos = np.arange(len(set_data))
+                # Non-significant: circles
+                ax.scatter(x_pos[~sig_mask], set_data['-log10_p_welch'].values[~sig_mask], 
+                          color='steelblue', alpha=0.7, s=50, marker='o', label='q_global ≥ 0.05')
+                # Significant: diamonds
+                ax.scatter(x_pos[sig_mask], set_data['-log10_p_welch'].values[sig_mask], 
+                          color='steelblue', alpha=0.7, s=80, marker='D', label='q_global < 0.05')
+                
+                # Add horizontal reference line at p = 0.05
+                ax.axhline(y=-np.log10(0.05), color='gray', linestyle='--', linewidth=1, alpha=0.5)
+                
+                ax.set_xticks(x_pos)
+                ax.set_xticklabels(set_data['motif'], fontsize=9, rotation=90, ha='right')
+                # Only add y-axis label to first column
+                if idx == 0:
+                    ax.set_ylabel('-log10(p_welch)', fontsize=10)
+                # Add panel letter (bold) with set name (not bold)
+                panel_letter = chr(97 + idx)  # a, b, c, d...
+                ax.set_title(f'$\\mathbf{{{panel_letter}.}}$ {set_name}', fontsize=11)
+                ax.grid(axis='y', alpha=0.3)
+                if idx == 0:  # Add legend to first subplot
+                    ax.legend(fontsize=8, loc='best')
+                
+            # Hide unused subplots in first row
+            for idx in range(len(pfc_zhu_sets), 4):
+                axes[0, idx].set_visible(False)
+            
+            # Second row: mdd sets
+            for idx, set_name in enumerate(mdd_sets):
+                if idx >= 4:  # Only 4 columns available
+                    break
+                ax = axes[1, idx]
+                
+                # Filter data for this set and get top 12 by -log10(p_welch)
+                set_data = pychromvar_results[pychromvar_results['set'] == set_name].copy()
+                set_data = set_data.nlargest(12, '-log10_p_welch')
+                
+                # Separate by q_welch_global significance (e.g., < 0.05)
+                sig_mask = set_data['q_welch_global'] < 0.05
+                
+                # Create scatter plot
+                x_pos = np.arange(len(set_data))
+                # Non-significant: circles
+                ax.scatter(x_pos[~sig_mask], set_data['-log10_p_welch'].values[~sig_mask], 
+                          color='coral', alpha=0.7, s=50, marker='o', label='q_global ≥ 0.05')
+                # Significant: diamonds
+                ax.scatter(x_pos[sig_mask], set_data['-log10_p_welch'].values[sig_mask], 
+                          color='coral', alpha=0.7, s=80, marker='D', label='q_global < 0.05')
+                
+                # Add horizontal reference line at p = 0.05
+                ax.axhline(y=-np.log10(0.05), color='gray', linestyle='--', linewidth=1, alpha=0.5)
+                
+                ax.set_xticks(x_pos)
+                ax.set_xticklabels(set_data['motif'], fontsize=9, rotation=90, ha='right')
+                # Only add y-axis label to first column
+                if idx == 0:
+                    ax.set_ylabel('-log10(p_welch)', fontsize=10)
+                # Add panel letter (bold) with set name (not bold), continuing from first row
+                panel_letter = chr(97 + 4 + idx)  # e, f, g, h...
+                ax.set_title(f'$\\mathbf{{{panel_letter}.}}$ {set_name}', fontsize=11)
+                ax.grid(axis='y', alpha=0.3)
+                if idx == 0:  # Add legend to first subplot
+                    ax.legend(fontsize=8, loc='best')
+                
+            # Hide unused subplots in second row
+            for idx in range(len(mdd_sets), 4):
+                axes[1, idx].set_visible(False)
+            
+            plt.tight_layout()
+            plt.savefig(manuscript_figpath, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"Figure saved to {manuscript_figpath}")
+            
 
         def ttest_case_control(per_pb, condition_col="condition", value_col="z", set_col="set",
                             case_label="Case", control_label="Control"):
