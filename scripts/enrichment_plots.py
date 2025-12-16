@@ -901,12 +901,14 @@ def save_proper_magma_results():
 
 #magma_results_df = pd.read_csv('data/magma_results/magma_results_mdd_dn_pathways.txt', sep='\t')
 from eclare.post_hoc_utils import magma_dicts_to_df
-magma_results_dict = save_proper_magma_results()
+#magma_results_dict = save_proper_magma_results()
+#magma_results_df = magma_dicts_to_df(magma_results_dict)
+#magma_results_df = magma_results_df.groupby(['sex', 'celltype']).nth(2).reset_index()
+
 magma_results_df = magma_dicts_to_df(magma_results_dict)
-magma_results_df = magma_results_df.groupby(['sex', 'celltype']).nth(2).reset_index()
 magma_results_df = magma_results_df.reset_index()
 magma_results_df['mlog10_pvalue'] = -np.log10(magma_results_df['P'])
-magma_results_df['size_mlog10_pvalue'] = np.log1p(magma_results_df['mlog10_pvalue']) * 1000
+magma_results_df['size_mlog10_pvalue'] = np.log1p(magma_results_df['mlog10_pvalue']) * 500
 
 plot_magma(magma_results_df)
 
