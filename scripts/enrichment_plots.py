@@ -787,7 +787,7 @@ def plot_magma(magma_results_df, ax=None):
 
     # Add colorbar for tstat
     cbar = plt.colorbar(scatter, ax=ax)
-    cbar.ax.set_title('BETA', pad=10, fontsize=9)
+    cbar.ax.set_title('BETA', pad=5, fontsize=9, x=1.5)  # Slightly beyond the right edge
 
     # Add size legend for mlog10_pvalue
     sizes_describe = magma_results_df[['size_mlog10_pvalue','mlog10_pvalue']].loc[magma_results_df['mlog10_pvalue']>0].describe()
@@ -813,9 +813,9 @@ def plot_magma(magma_results_df, ax=None):
     ax.set_xticklabels(celltype_order, rotation=45, ha='right')
 
     fig.tight_layout()
-    fig.suptitle('MAGMA results for MDD GWAS')
+    fig.suptitle('H-MAGMA for MDD GWAS')
 
-    return ax
+    return fig, ax
 
 def save_proper_magma_results():
     import pandas as pd
@@ -910,7 +910,12 @@ magma_results_df = magma_results_df.reset_index()
 magma_results_df['mlog10_pvalue'] = -np.log10(magma_results_df['P'])
 magma_results_df['size_mlog10_pvalue'] = np.log1p(magma_results_df['mlog10_pvalue']) * 500
 
-plot_magma(magma_results_df)
+fig, ax = plot_magma(magma_results_df)
+
+def mdd_figS5(fig, manuscript_figpath=os.path.join(output_dir, 'mdd_figS5.pdf')):
+    fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    print(f'Saving figure to {manuscript_figpath}')
+    plt.close()
 
 #%% GREAT results
 
