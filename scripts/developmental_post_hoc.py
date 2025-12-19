@@ -2907,6 +2907,18 @@ def dev_fig1(eclare_adata, manuscript_figpath=os.path.join(os.environ['OUTPATH']
 
 #%% trajectory analysis metrics
 
+def import_latents():
+    subsampled_eclare_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata_Cortex_Velmeshev.h5ad'))
+    scJoint_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'scJoint_adata.h5ad'))
+    glue_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'glue_adata.h5ad'))
+
+    dev_group_key = 'Age_Range'
+
+    return subsampled_eclare_adata, scJoint_adata, glue_adata, dev_group_key
+
+## import already analyzed latents
+subsampled_eclare_adata, scJoint_adata, glue_adata, dev_group_key = import_latents()
+
 methods_list = ['ECLARE', 'scJoint', 'scGLUE']
 
 ## multi-modal
