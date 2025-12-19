@@ -351,41 +351,6 @@ atac_adata = sc.AnnData(
 )
 '''
 
-#%% Import latents from other models
-
-## create ordinal_pseudotime Series and merge with sub_cell_type
-ordinal_pseudotime_adata = pd.concat([student_rna_sub.obs['ordinal_pseudotime'], student_atac_sub.obs['ordinal_pseudotime']])
-obs_df = pd.merge(ordinal_pseudotime_adata, student_rna_sub.obs['sub_cell_type'], left_index=True, right_index=True, how='left')
-
-## specify job IDs
-scJoint_job_id  = '20250905_125142'
-glue_job_id     = '20250906_003832'
-
-## add to dictionary
-methods_id_dict['scJoint'] = scJoint_job_id
-methods_id_dict['scGLUE'] = glue_job_id
-
-## scJoint
-scJoint_path = os.path.join(os.environ['OUTPATH'], 'scJoint_data_tmp', scJoint_job_id, 'scJoint_latents.h5ad')
-scJoint_adata = sc.read_h5ad(scJoint_path)
-scJoint_adata.obs = scJoint_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
-
-## scGLUE
-glue_path = os.path.join(os.environ['OUTPATH'], 'glue', glue_job_id, 'glue_latents.h5ad')
-glue_adata = sc.read_h5ad(glue_path)
-glue_adata.obs = glue_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
-
-## find overlapping cell IDs between ECLARE and scJoint/scGLUE
-valid_ids = set(subsampled_eclare_adata.obs_names) & set(glue_adata.obs_names) & set(scJoint_adata.obs_names)
-
-## keep only overlapping cells
-subsampled_eclare_adata = subsampled_eclare_adata[subsampled_eclare_adata.obs_names.isin(valid_ids)]
-
-for source_dataset in source_datasets:
-    subsampled_kd_clip_adatas[source_dataset] = subsampled_kd_clip_adatas[source_dataset][subsampled_kd_clip_adatas[source_dataset].obs_names.isin(valid_ids)]
-
-scJoint_adata = scJoint_adata[scJoint_adata.obs_names.isin(valid_ids)]
-glue_adata = glue_adata[glue_adata.obs_names.isin(valid_ids)]
 
 #%% create adatas for teacher data
 subsampled_clip_adatas = {}
@@ -597,6 +562,16 @@ student_atac = paga_analysis(student_atac)
 '''
 #%% draw graphs for all methods
 
+def import_latents():
+    subsampled_eclare_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata_Cortex_Velmeshev.h5ad'))
+    scJoint_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'scJoint_adata.h5ad'))
+    glue_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'glue_adata.h5ad'))
+    return subsampled_eclare_adata, scJoint_adata, glue_adata
+
+## import already analyzed latents
+subsampled_eclare_adata, scJoint_adata, glue_adata = import_latents()
+
+## permute cell IDs
 permute_idxs = np.random.permutation(len(subsampled_eclare_adata))
 colors = ['modality','Lineage', 'dpt_pseudotime', 'ordinal_pseudotime','Age_Range']
 
@@ -610,6 +585,9 @@ methods_data = [
     ('scJoint', scJoint_adata[permute_idxs]),
     ('scGLUE', glue_adata[permute_idxs])
 ]
+
+# Enable vector-friendly mode to rasterize scatter points while keeping text/axes as vectors
+sc.settings.set_figure_params(vector_friendly=True, dpi_save=300)
 
 fig, axes = plt.subplots(len(methods_data), len(colors), figsize=(6*len(colors), 4*len(methods_data)))
 
@@ -631,11 +609,6 @@ for row_idx, (method_name, adata) in enumerate(methods_data):
 
 plt.tight_layout()
 plt.show()
-
-## plots for KD-CLIP and CLIP
-for source_dataset in source_datasets:
-    sc.pl.draw_graph(subsampled_kd_clip_adatas[source_dataset][permute_idxs], color=colors, wspace=0.5, ncols=len(colors)); print(f'↑ subsampled_kd_clip_adatas[{source_dataset}] ↑')
-    sc.pl.draw_graph(subsampled_clip_adatas[source_dataset][permute_idxs], color=colors, wspace=0.5, ncols=len(colors)); print(f'↑ subsampled_clip_adatas[{source_dataset}] ↑')
 
 def dev_figS2(fig, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_figS2.pdf')):
     fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
