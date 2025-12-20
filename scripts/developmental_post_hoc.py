@@ -18,6 +18,7 @@ import warnings
 import anndata
 import magic
 import graphtools as gt
+from tqdm import tqdm
 
 from eclare.post_hoc_utils import metric_boxplots, download_mlflow_runs, extract_target_source_replicate, tree, load_model_and_metadata
 from eclare.setup_utils import return_setup_func_from_dataset
@@ -632,7 +633,7 @@ for source_dataset in [source_datasets[0]]:
 ## install scib from github, see scib documentation for details
 from scib.metrics.lisi import clisi_graph, ilisi_graph
 from scib.metrics import nmi, ari
-from scipy.stats import pearsonr, spearmanr, kendalltau
+from scipy.stats import pearsonr, spearmanr, kendalltau, bootstrap
 import random
 
 def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', correct_imbalance=False, do_fa=True, random_seed=0):
@@ -780,13 +781,13 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
 
     return adata
 
-def trajectory_metrics(adata, modality=None):
+def trajectory_metrics(adata, modality=None, n_resamples=100, confidence_level=0.95, random_state=0, drop_bootstrap=['lineage_clisi', 'modality_ilisi', 'ct_nmi', 'ct_ari', 'age_range_nmi', 'age_range_ari']):
 
     if modality:
         adata = adata[adata.obs['modality'].str.upper() == modality.upper()]
 
     pt_adata = adata.obs[[dev_group_key, 'ordinal_pseudotime', 'dpt_pseudotime']]
-    pt_adata[dev_group_key] = pt_adata[dev_group_key].cat.codes.to_numpy()
+    pt_adata.loc[:, dev_group_key] = pt_adata[dev_group_key].cat.codes.to_numpy()
 
     pearson_corr_matrix     = pt_adata.corr(method=lambda x, y: pearsonr(x, y)[0])
     spearman_corr_matrix    = pt_adata.corr(method=lambda x, y: spearmanr(x, y)[0])
@@ -799,6 +800,63 @@ def trajectory_metrics(adata, modality=None):
     ], axis=1)
     metrics_adata.columns = ['pearson', 'spearman', 'kendall']
 
+    # Define statistic functions for bootstrap
+    def pearson_stat(x, y): return pearsonr(x, y)[0]
+    def spearman_stat(x, y): return spearmanr(x, y)[0]
+    def kendall_stat(x, y): return kendalltau(x, y)[0]
+    
+    # Compute bootstrap confidence intervals for each correlation
+    ci_columns = []
+    for col_name in pt_adata.columns[:-1]:  # Exclude 'dpt_pseudotime' itself
+        x = pt_adata[col_name].to_numpy()
+        y = pt_adata['dpt_pseudotime'].to_numpy()
+        
+        # Pearson CI
+        pearson_res = bootstrap(
+            data=(x, y),
+            statistic=pearson_stat,
+            n_resamples=n_resamples,
+            method="percentile",
+            confidence_level=confidence_level,
+            paired=True,
+            random_state=random_state,
+        )
+        
+        # Spearman CI
+        spearman_res = bootstrap(
+            data=(x, y),
+            statistic=spearman_stat,
+            n_resamples=n_resamples,
+            method="percentile",
+            confidence_level=confidence_level,
+            paired=True,
+            random_state=random_state,
+        )
+        
+        # Kendall CI
+        kendall_res = bootstrap(
+            data=(x, y),
+            statistic=kendall_stat,
+            n_resamples=n_resamples,
+            method="percentile",
+            confidence_level=confidence_level,
+            paired=True,
+            random_state=random_state,
+        )
+        
+        # Add CI columns to metrics
+        ci_columns.append(pd.Series({
+            'pearson_ci_low': pearson_res.confidence_interval.low,
+            'pearson_ci_high': pearson_res.confidence_interval.high,
+            'spearman_ci_low': spearman_res.confidence_interval.low,
+            'spearman_ci_high': spearman_res.confidence_interval.high,
+            'kendall_ci_low': kendall_res.confidence_interval.low,
+            'kendall_ci_high': kendall_res.confidence_interval.high,
+        }, name=col_name))
+    
+    ci_adata = pd.concat(ci_columns, axis=1).T
+    metrics_adata = pd.concat([metrics_adata, ci_adata], axis=1)
+
     ## perform Leiden again, weith lower resolution
     res = 0.25
     sc.tl.leiden(adata, resolution=res, key_added=f'leiden_res{res}')
@@ -806,26 +864,147 @@ def trajectory_metrics(adata, modality=None):
     ## integration metrics
     lineage_clisi = clisi_graph(adata, label_key='Lineage', type_='knn', scale=True, n_cores=1)
     modality_ilisi = ilisi_graph(adata, batch_key='modality', type_='knn', scale=True, n_cores=1)
-    lineage_nmi = nmi(adata, cluster_key=f'leiden_res{res}', label_key='sub_cell_type')
-    lineage_ari = ari(adata, cluster_key=f'leiden_res{res}', label_key='sub_cell_type')
+    ct_nmi = nmi(adata, cluster_key=f'leiden_res{res}', label_key='sub_cell_type')
+    ct_ari = ari(adata, cluster_key=f'leiden_res{res}', label_key='sub_cell_type')
     age_range_nmi = nmi(adata, cluster_key=f'leiden_res{res}', label_key='Age_Range')
     age_range_ari = ari(adata, cluster_key=f'leiden_res{res}', label_key='Age_Range')
     integration_adata = pd.DataFrame(
-        np.stack([lineage_clisi, modality_ilisi, lineage_nmi, lineage_ari, age_range_nmi, age_range_ari])[None],
+        np.stack([lineage_clisi, modality_ilisi, ct_nmi, ct_ari, age_range_nmi, age_range_ari])[None],
         columns=['lineage_clisi', 'modality_ilisi', 'ct_nmi', 'ct_ari', 'age_range_nmi', 'age_range_ari'])
+
+    # Define statistic functions for integration metrics bootstrap
+    def lineage_clisi_stat(indices):
+        adata_sub = adata[indices, :].copy()
+        sc.pp.neighbors(adata_sub, use_rep='X_pca', n_neighbors=30)
+        return clisi_graph(adata_sub, label_key='Lineage', type_='knn', scale=True, n_cores=1)
+    
+    def modality_ilisi_stat(indices):
+        adata_sub = adata[indices, :].copy()
+        sc.pp.neighbors(adata_sub, use_rep='X_pca', n_neighbors=30)
+        return ilisi_graph(adata_sub, batch_key='modality', type_='knn', scale=True, n_cores=1)
+    
+    def ct_nmi_stat(indices):
+        adata_sub = adata[indices, :].copy()
+        sc.pp.neighbors(adata_sub, use_rep='X_pca', n_neighbors=30)
+        sc.tl.leiden(adata_sub, resolution=res, key_added=f'leiden_res{res}')
+        return nmi(adata_sub, cluster_key=f'leiden_res{res}', label_key='sub_cell_type')
+    
+    def ct_ari_stat(indices):
+        adata_sub = adata[indices, :].copy()
+        sc.pp.neighbors(adata_sub, use_rep='X_pca', n_neighbors=30)
+        sc.tl.leiden(adata_sub, resolution=res, key_added=f'leiden_res{res}')
+        return ari(adata_sub, cluster_key=f'leiden_res{res}', label_key='sub_cell_type')
+    
+    def age_range_nmi_stat(indices):
+        adata_sub = adata[indices, :].copy()
+        sc.pp.neighbors(adata_sub, use_rep='X_pca', n_neighbors=30)
+        sc.tl.leiden(adata_sub, resolution=res, key_added=f'leiden_res{res}')
+        return nmi(adata_sub, cluster_key=f'leiden_res{res}', label_key='Age_Range')
+    
+    def age_range_ari_stat(indices):
+        adata_sub = adata[indices, :].copy()
+        sc.pp.neighbors(adata_sub, use_rep='X_pca', n_neighbors=30)
+        sc.tl.leiden(adata_sub, resolution=res, key_added=f'leiden_res{res}')
+        return ari(adata_sub, cluster_key=f'leiden_res{res}', label_key='Age_Range')
+    
+    # Compute bootstrap confidence intervals for integration metrics
+    n_obs = adata.n_obs
+    rng = np.random.RandomState(random_state)
+    
+    integration_cis = {}
+    integration_metrics = {
+        'lineage_clisi': lineage_clisi_stat,
+        'modality_ilisi': modality_ilisi_stat,
+        'ct_nmi': ct_nmi_stat,
+        'ct_ari': ct_ari_stat,
+        'age_range_nmi': age_range_nmi_stat,
+        'age_range_ari': age_range_ari_stat
+    }
+    
+    for metric_name, metric_func in integration_metrics.items():
+        bootstrap_values = []
+
+        if metric_name not in drop_bootstrap:
+            for _ in tqdm(range(n_resamples), desc=f'Computing {metric_name} bootstrap confidence intervals'):
+                # Resample with replacement
+                resample_indices = rng.choice(n_obs, size=n_obs, replace=True)
+                try:
+                    bootstrap_values.append(metric_func(resample_indices))
+                except Exception as e:
+                    # In case of failure (e.g., not enough diversity in resample), skip
+                    warnings.warn(f"Bootstrap iteration failed for {metric_name}: {e}")
+                    continue
+        
+        # Compute percentile confidence intervals
+        if bootstrap_values:
+            bootstrap_values = np.array(bootstrap_values)
+            alpha = 1 - confidence_level
+            lower_percentile = (alpha / 2) * 100
+            upper_percentile = (1 - alpha / 2) * 100
+            integration_cis[f'{metric_name}_ci_low'] = np.percentile(bootstrap_values, lower_percentile)
+            integration_cis[f'{metric_name}_ci_high'] = np.percentile(bootstrap_values, upper_percentile)
+        else:
+            integration_cis[f'{metric_name}_ci_low'] = np.nan
+            integration_cis[f'{metric_name}_ci_high'] = np.nan
+    
+    # Add CIs to integration dataframe
+    for key, value in integration_cis.items():
+        integration_adata[key] = value
 
     return metrics_adata, integration_adata
 
 def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metrics=['pearson', 'kendall']):
 
-    metrics_df = pd.concat([df.T.stack().to_frame() for df in metrics_dfs], axis=1)
+    # Separate correlation values from CI columns
+    corr_metrics = ['pearson', 'spearman', 'kendall']
+    
+    # Extract correlations
+    metrics_df = pd.concat([df[corr_metrics].T.stack().to_frame() for df in metrics_dfs], axis=1)
     metrics_df.columns = methods_list
+    
+    # Extract confidence intervals
+    ci_dfs = []
+    for df in metrics_dfs:
+        ci_cols = [col for col in df.columns if '_ci_' in col]
+        ci_df = df[ci_cols].copy()
+        ci_dfs.append(ci_df)
 
     if drop_metrics:
         metrics_df = metrics_df.drop(index=drop_metrics)
 
     metrics_df_melted = metrics_df.reset_index().melt(id_vars=['level_0', 'level_1'], var_name='method', value_name='correlation')
     metrics_df_melted = metrics_df_melted.rename(columns={'level_0': 'metric', 'level_1': 'reference'})
+
+    # Process confidence intervals
+    ci_data = []
+    for method_idx, (method, ci_df) in enumerate(zip(methods_list, ci_dfs)):
+        for ref_idx, reference in enumerate(ci_df.index):
+            for metric in corr_metrics:
+                if drop_metrics and metric in drop_metrics:
+                    continue
+                ci_low_col = f'{metric}_ci_low'
+                ci_high_col = f'{metric}_ci_high'
+                if ci_low_col in ci_df.columns and ci_high_col in ci_df.columns:
+                    ci_data.append({
+                        'method': method,
+                        'reference': reference,
+                        'metric': metric,
+                        'ci_low': ci_df.loc[reference, ci_low_col],
+                        'ci_high': ci_df.loc[reference, ci_high_col]
+                    })
+    
+    ci_df_melted = pd.DataFrame(ci_data)
+    
+    # Merge correlations with CIs
+    metrics_df_melted = metrics_df_melted.merge(
+        ci_df_melted, 
+        on=['method', 'reference', 'metric'], 
+        how='left'
+    )
+    
+    # Calculate error bar sizes (distance from point estimate to CI bounds)
+    metrics_df_melted['yerr_low'] = metrics_df_melted['correlation'] - metrics_df_melted['ci_low']
+    metrics_df_melted['yerr_high'] = metrics_df_melted['ci_high'] - metrics_df_melted['correlation']
 
     ## rename reference variables
     metrics_df_melted['reference'] = metrics_df_melted['reference'].replace({
@@ -846,9 +1025,30 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
             hue='method',
             kind='bar',
             height=5,
-            aspect=.75
+            aspect=.75,
+            errorbar=None  # Disable seaborn's automatic error bars
         )
-        for ax in g.axes.flat:
+        
+        # Add custom error bars
+        for ax_idx, ax in enumerate(g.axes.flat):
+            metric_name = metrics_df_melted['metric'].unique()[ax_idx]
+            plot_data = metrics_df_melted[metrics_df_melted['metric'] == metric_name]
+            
+            # Get actual bar positions from patches
+            bar_positions = [patch.get_x() + patch.get_width() / 2 for patch in ax.patches]
+            n_references = plot_data['reference'].nunique()
+            n_methods = plot_data['method'].nunique()
+            
+            for method_idx, method in enumerate(methods_list):
+                method_data = plot_data[plot_data['method'] == method].sort_values('reference')
+                # Extract the bar positions for this method (every n_methods-th bar starting at method_idx)
+                method_bar_positions = bar_positions[method_idx::n_methods]
+                
+                if not method_data.empty and 'yerr_low' in method_data.columns:
+                    yerr = [method_data['yerr_low'].values, method_data['yerr_high'].values]
+                    ax.errorbar(method_bar_positions, method_data['correlation'].values, 
+                               yerr=yerr, fmt='none', c='black', capsize=3, capthick=1.5, linewidth=1.5)
+            
             for label in ax.get_xticklabels():
                 label.set_rotation(30)
 
@@ -864,8 +1064,26 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
             hue='method',
             palette='Set2',
             linewidth=2, edgecolor='.5',
+            errorbar=None,  # Disable seaborn's automatic error bars
             ax=ax
         )
+        
+        # Add custom error bars
+        # Get actual bar positions from patches
+        bar_positions = [patch.get_x() + patch.get_width() / 2 for patch in ax.patches]
+        n_references = metrics_df_melted['reference'].nunique()
+        n_methods = metrics_df_melted['method'].nunique()
+        
+        for method_idx, method in enumerate(methods_list):
+            method_data = metrics_df_melted[metrics_df_melted['method'] == method].sort_values('reference')
+            # Extract the bar positions for this method (every n_methods-th bar starting at method_idx)
+            method_bar_positions = bar_positions[method_idx::n_methods]
+            
+            if not method_data.empty and 'yerr_low' in method_data.columns:
+                yerr = [method_data['yerr_low'].values, method_data['yerr_high'].values]
+                ax.errorbar(method_bar_positions, method_data['correlation'].values, 
+                           yerr=yerr, fmt='none', c='black', capsize=3, capthick=1.5, linewidth=1.5)
+        
         plt.xticks(rotation=20)
         plt.xlabel('reference variable')
         plt.ylabel(f'{corr_type} corr.')
@@ -883,7 +1101,26 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
 
 def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_columns=None):
 
-    integration_df = pd.concat(integration_dfs, axis=0)
+    # Separate metric values from CI columns
+    metric_names = ['lineage_clisi', 'modality_ilisi', 'ct_nmi', 'ct_ari', 'age_range_nmi', 'age_range_ari']
+    
+    # Extract metric values
+    integration_values = []
+    integration_cis = []
+    
+    for df in integration_dfs:
+        # Get metric values
+        metric_values = df[metric_names].copy() if all(m in df.columns for m in metric_names) else df[[c for c in df.columns if not '_ci_' in c]].copy()
+        integration_values.append(metric_values)
+        
+        # Get CI values
+        ci_cols = [c for c in df.columns if '_ci_' in c]
+        if ci_cols:
+            integration_cis.append(df[ci_cols].copy())
+        else:
+            integration_cis.append(None)
+    
+    integration_df = pd.concat(integration_values, axis=0)
     integration_df.index = methods_list
 
     if drop_columns:
@@ -891,6 +1128,35 @@ def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_c
 
     integration_df_melted = integration_df.reset_index().melt(id_vars=['index'], var_name='method', value_name='score')
     integration_df_melted.rename(columns={'index': 'method', 'method': 'metric'}, inplace=True)
+    
+    # Process confidence intervals
+    ci_data = []
+    for method, ci_df in zip(methods_list, integration_cis):
+        if ci_df is not None:
+            for metric in metric_names:
+                if drop_columns and metric in drop_columns:
+                    continue
+                ci_low_col = f'{metric}_ci_low'
+                ci_high_col = f'{metric}_ci_high'
+                if ci_low_col in ci_df.columns and ci_high_col in ci_df.columns:
+                    ci_data.append({
+                        'method': method,
+                        'metric': metric,
+                        'ci_low': ci_df[ci_low_col].values[0],
+                        'ci_high': ci_df[ci_high_col].values[0]
+                    })
+    
+    # Merge with CIs if available
+    if ci_data:
+        ci_df_melted = pd.DataFrame(ci_data)
+        integration_df_melted = integration_df_melted.merge(
+            ci_df_melted,
+            on=['method', 'metric'],
+            how='left'
+        )
+        # Calculate error bar sizes
+        integration_df_melted['yerr_low'] = integration_df_melted['score'] - integration_df_melted['ci_low']
+        integration_df_melted['yerr_high'] = integration_df_melted['ci_high'] - integration_df_melted['score']
 
     integration_df_melted.replace({
         'lineage_clisi': 'cLISI - lineage',
@@ -912,14 +1178,35 @@ def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_c
         col='metric',
         kind='bar',
         sharex=False,
-        sharey=False
+        sharey=False,
+        errorbar=None  # Disable automatic error bars
     )
 
     # Set the same number of evenly spaced yticklabels for each subplot,
     # and ensure the last yticklabel is a multiple of 0.10 for each subplot
     n_yticks = 5  # or choose another number as appropriate
-    for ax in g.axes.flat:
+    for col_idx, ax in enumerate(g.axes.flat):
         if ax is not None:
+            # Get the metric name from the data
+            metric_names_renamed = integration_df_melted['metric'].unique()
+            if col_idx < len(metric_names_renamed):
+                metric_name = metric_names_renamed[col_idx]
+                plot_data = integration_df_melted[integration_df_melted['metric'] == metric_name]
+                
+                # Add custom error bars if CI data exists
+                if ci_data and 'yerr_low' in plot_data.columns:
+                    # Get actual bar positions from the bar patches
+                    bar_positions = [patch.get_x() + patch.get_width() / 2 for patch in ax.patches]
+                    n_methods = plot_data['method'].nunique()
+                    
+                    for method_idx, method in enumerate(methods_list):
+                        method_data = plot_data[plot_data['method'] == method]
+                        if not method_data.empty and not method_data['yerr_low'].isna().all():
+                            yerr = [method_data['yerr_low'].values, method_data['yerr_high'].values]
+                            # Use the actual bar position instead of method_idx
+                            ax.errorbar([bar_positions[method_idx]], method_data['score'].values,
+                                       yerr=yerr, fmt='none', c='black', capsize=3, capthick=1.5, linewidth=1.5)
+            
             y_min, y_max = ax.get_ylim()
             # Find the next highest multiple of 0.10 for the top ytick
             y_max_mult010 = np.ceil(y_max * 10) / 10
@@ -930,8 +1217,8 @@ def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_c
             ax.set_yticks(yticks)
             ax.set_yticklabels([f"{y:.2f}" for y in yticks])
             # Get the metric name from the subplot title or column
-            metric_name = ax.get_title().split(' = ')[-1] if ' = ' in ax.get_title() else ax.get_title()
-            ax.set_xticklabels([metric_name])
+            metric_name_title = ax.get_title().split(' = ')[-1] if ' = ' in ax.get_title() else ax.get_title()
+            ax.set_xticklabels([metric_name_title])
             ax.set_xlabel('')  # Remove the default x-label
             ax.set_title('')
 
@@ -2908,27 +3195,43 @@ def dev_fig1(eclare_adata, manuscript_figpath=os.path.join(os.environ['OUTPATH']
 #%% trajectory analysis metrics
 
 def import_latents():
+
+    ## load latents
     subsampled_eclare_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata_Cortex_Velmeshev.h5ad'))
     scJoint_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'scJoint_adata.h5ad'))
     glue_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'glue_adata.h5ad'))
 
+    ## find overlapping cell IDs between ECLARE and scJoint/scGLUE
     dev_group_key = 'Age_Range'
+    overlap_nuclei = list(set(subsampled_eclare_adata.obs_names) & set(scJoint_adata.obs_names) & set(glue_adata.obs_names))
+
+    ## keep only overlapping cells
+    subsampled_eclare_adata = subsampled_eclare_adata[subsampled_eclare_adata.obs_names.isin(overlap_nuclei)]
+    scJoint_adata = scJoint_adata[scJoint_adata.obs_names.isin(overlap_nuclei)]
+    glue_adata = glue_adata[glue_adata.obs_names.isin(overlap_nuclei)]
+
+    ## drop all columns and merge with obs_df
+    replace_columns = ['Age_Range', 'Lineage', 'sub_cell_type']
+    scJoint_adata.obs.drop(columns=replace_columns, inplace=True)
+    glue_adata.obs.drop(columns=replace_columns, inplace=True)
+
+    obs_df = subsampled_eclare_adata.obs[replace_columns].copy()
+    scJoint_adata.obs = scJoint_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
+    glue_adata.obs = glue_adata.obs.merge(obs_df, left_index=True, right_index=True, how='left')
 
     return subsampled_eclare_adata, scJoint_adata, glue_adata, dev_group_key
 
 ## import already analyzed latents
 subsampled_eclare_adata, scJoint_adata, glue_adata, dev_group_key = import_latents()
-
 methods_list = ['ECLARE', 'scJoint', 'scGLUE']
 
 ## multi-modal
-sub_eclare_metrics, sub_eclare_integration = trajectory_metrics(subsampled_eclare_adata)
+sub_eclare_metrics, sub_eclare_integration = trajectory_metrics(subsampled_eclare_adata, n_resamples=3)
+scJoint_metrics, scJoint_integration = trajectory_metrics(scJoint_adata, n_resamples=3)
+glue_metrics, glue_integration = trajectory_metrics(glue_adata, n_resamples=3)
 
-scJoint_metrics, scJoint_integration = trajectory_metrics(scJoint_adata)
-glue_metrics, glue_integration = trajectory_metrics(glue_adata)
-
-sub_eclare_metrics_fig, sub_eclare_metrics_fig = trajectory_metrics_all([sub_eclare_metrics, scJoint_metrics, glue_metrics], methods_list, suptitle=None)
-_, integration_fig = integration_metrics_all([sub_eclare_integration, scJoint_integration, glue_integration], methods_list, suptitle=None, drop_columns=['ct_ari', 'age_range_ari'])
+corrs_fig, corrs_fig = trajectory_metrics_all([sub_eclare_metrics, scJoint_metrics, glue_metrics], methods_list, suptitle=None)
+_, scib_fig = integration_metrics_all([sub_eclare_integration, scJoint_integration, glue_integration], methods_list, suptitle=None, drop_columns=['ct_ari', 'age_range_ari'])
 
 ## multimodal - ECLARE vs KD-CLIP vs CLIP
 methods_list = ['ECLARE'] + [f'KD-CLIP_{source_dataset}' for source_dataset in source_datasets] + [f'CLIP_{source_dataset}' for source_dataset in source_datasets]  
