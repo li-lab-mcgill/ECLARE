@@ -781,7 +781,7 @@ def paga_analysis(adata, dev_group_key='dev_stage', cell_group_key='Lineage', co
 
     return adata
 
-def trajectory_metrics(adata, modality=None, n_resamples=100, confidence_level=0.95, random_state=0, drop_bootstrap=['lineage_clisi', 'modality_ilisi', 'ct_nmi', 'ct_ari', 'age_range_nmi', 'age_range_ari']):
+def trajectory_metrics(adata, modality=None, n_resamples=100, confidence_level=0.95, random_state=0, drop_bootstrap=['ct_ari', 'age_range_ari']):
 
     if modality:
         adata = adata[adata.obs['modality'].str.upper() == modality.upper()]
@@ -1013,7 +1013,20 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
     })
 
     ## order reference variables such that appear in proper order in plot
-    metrics_df_melted['reference'] = pd.Categorical(metrics_df_melted['reference'], categories=['ordinal pseud.', 'age range'], ordered=True)
+    metrics_df_melted['reference'] = pd.Categorical(
+        metrics_df_melted['reference'], 
+        categories=['ordinal pseud.', 'age range'], 
+        ordered=True
+    )
+    
+    # Ensure method ordering is categorical too for consistent seaborn ordering
+    metrics_df_melted['method'] = pd.Categorical(
+        metrics_df_melted['method'], 
+        categories=methods_list, 
+        ordered=True
+    )
+
+    assert metrics_df_melted.dropna(subset=['yerr_low', 'yerr_high']).loc[:, ['yerr_low', 'yerr_high']].ge(0).all().all(), "Some error bars are negative, probably need more bootstrap resamples"
 
     if metrics_df_melted['metric'].nunique() > 1:
 
@@ -1026,7 +1039,9 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
             kind='bar',
             height=5,
             aspect=.75,
-            errorbar=None  # Disable seaborn's automatic error bars
+            errorbar=None,  # Disable seaborn's automatic error bars
+            hue_order=methods_list,  # Explicitly set hue order
+            order=['ordinal pseud.', 'age range']  # Explicitly set x order
         )
         
         # Add custom error bars
@@ -1034,20 +1049,52 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
             metric_name = metrics_df_melted['metric'].unique()[ax_idx]
             plot_data = metrics_df_melted[metrics_df_melted['metric'] == metric_name]
             
-            # Get actual bar positions from patches
-            bar_positions = [patch.get_x() + patch.get_width() / 2 for patch in ax.patches]
-            n_references = plot_data['reference'].nunique()
-            n_methods = plot_data['method'].nunique()
+            # Get valid patches and SORT by x-position
+            valid_patches = [p for p in ax.patches if p.get_width() > 1e-6]
+            valid_patches.sort(key=lambda p: p.get_x())  # Sort by x-position!
             
-            for method_idx, method in enumerate(methods_list):
+            # Build a mapping: (reference, method) -> patch position
+            # After sorting, patches are ordered left-to-right
+            patch_positions = {}
+            patch_idx = 0
+            for ref_cat in ['ordinal pseud.', 'age range']:
+                for method in methods_list:
+                    if patch_idx < len(valid_patches):
+                        patch = valid_patches[patch_idx]
+                        x_center = patch.get_x() + patch.get_width() / 2
+                        patch_positions[(ref_cat, method)] = x_center
+                        patch_idx += 1
+            
+            # Add error bars for each method
+            for method in methods_list:
                 method_data = plot_data[plot_data['method'] == method].sort_values('reference')
-                # Extract the bar positions for this method (every n_methods-th bar starting at method_idx)
-                method_bar_positions = bar_positions[method_idx::n_methods]
                 
                 if not method_data.empty and 'yerr_low' in method_data.columns:
-                    yerr = [method_data['yerr_low'].values, method_data['yerr_high'].values]
-                    ax.errorbar(method_bar_positions, method_data['correlation'].values, 
-                               yerr=yerr, fmt='none', c='black', capsize=3, capthick=1.5, linewidth=1.5)
+                    # Get positions and values in matching order
+                    positions = []
+                    correlations = []
+                    yerr_low = []
+                    yerr_high = []
+                    
+                    for _, row in method_data.iterrows():
+                        ref = row['reference']
+                        if (ref, method) in patch_positions:
+                            positions.append(patch_positions[(ref, method)])
+                            correlations.append(row['correlation'])
+                            yerr_low.append(row['yerr_low'])
+                            yerr_high.append(row['yerr_high'])
+                    
+                    if positions:  # Only add error bars if we have valid positions
+                        yerr = [yerr_low, yerr_high]
+                        ax.errorbar(
+                            positions, correlations, 
+                            yerr=yerr, 
+                            fmt='none', 
+                            c='black', 
+                            capsize=3, 
+                            capthick=1.5, 
+                            linewidth=1.5
+                        )
             
             for label in ax.get_xticklabels():
                 label.set_rotation(30)
@@ -1063,26 +1110,60 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
             y='correlation',
             hue='method',
             palette='Set2',
-            linewidth=2, edgecolor='.5',
+            linewidth=2, 
+            edgecolor='.5',
             errorbar=None,  # Disable seaborn's automatic error bars
+            hue_order=methods_list,  # Explicitly set hue order
+            order=['ordinal pseud.', 'age range'],  # Explicitly set x order
             ax=ax
         )
         
         # Add custom error bars
-        # Get actual bar positions from patches
-        bar_positions = [patch.get_x() + patch.get_width() / 2 for patch in ax.patches]
-        n_references = metrics_df_melted['reference'].nunique()
-        n_methods = metrics_df_melted['method'].nunique()
+        # Get valid patches and SORT by x-position
+        valid_patches = [p for p in ax.patches if p.get_width() > 1e-6]
+        valid_patches.sort(key=lambda p: p.get_x())  # Sort by x-position!
         
-        for method_idx, method in enumerate(methods_list):
+        # Build a mapping: (reference, method) -> patch position
+        patch_positions = {}
+        patch_idx = 0
+        for ref_cat in ['ordinal pseud.', 'age range']:
+            for method in methods_list:
+                if patch_idx < len(valid_patches):
+                    patch = valid_patches[patch_idx]
+                    x_center = patch.get_x() + patch.get_width() / 2
+                    patch_positions[(ref_cat, method)] = x_center
+                    patch_idx += 1
+        
+        # Add error bars for each method
+        for method in methods_list:
             method_data = metrics_df_melted[metrics_df_melted['method'] == method].sort_values('reference')
-            # Extract the bar positions for this method (every n_methods-th bar starting at method_idx)
-            method_bar_positions = bar_positions[method_idx::n_methods]
             
             if not method_data.empty and 'yerr_low' in method_data.columns:
-                yerr = [method_data['yerr_low'].values, method_data['yerr_high'].values]
-                ax.errorbar(method_bar_positions, method_data['correlation'].values, 
-                           yerr=yerr, fmt='none', c='black', capsize=3, capthick=1.5, linewidth=1.5)
+                # Get positions and values in matching order
+                positions = []
+                correlations = []
+                yerr_low = []
+                yerr_high = []
+                
+                for _, row in method_data.iterrows():
+                    ref = row['reference']
+                    if (ref, method) in patch_positions:
+                        positions.append(patch_positions[(ref, method)])
+                        correlations.append(row['correlation'])
+                        yerr_low.append(row['yerr_low'])
+                        yerr_high.append(row['yerr_high'])
+                
+                if positions:  # Only add error bars if we have valid positions
+                    yerr = [yerr_low, yerr_high]
+                    ax.errorbar(
+                        positions, correlations, 
+                        yerr=yerr, 
+                        fmt='none', 
+                        c='black', 
+                        capsize=3, 
+                        capthick=1.5, 
+                        linewidth=1.5
+                    )
         
         plt.xticks(rotation=20)
         plt.xlabel('reference variable')
@@ -1097,9 +1178,9 @@ def trajectory_metrics_all(metrics_dfs, methods_list, suptitle=None, drop_metric
 
     #plt.tight_layout()
 
-    return metrics_df, fig
+    return metrics_df, fig if metrics_df_melted['metric'].nunique() == 1 else g
 
-def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_columns=None):
+def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_columns=None, allow_negative_yerr=False):
 
     # Separate metric values from CI columns
     metric_names = ['lineage_clisi', 'modality_ilisi', 'ct_nmi', 'ct_ari', 'age_range_nmi', 'age_range_ari']
@@ -1166,6 +1247,14 @@ def integration_metrics_all(integration_dfs, methods_list, suptitle=None, drop_c
         'age_range_nmi': 'NMI - age range',
         'age_range_ari': 'ARI - age range',
         }, inplace=True)
+
+    if allow_negative_yerr:
+        num_negative_yerr = integration_df_melted.loc[:, ['yerr_low', 'yerr_high']].lt(0).sum().sum()
+        if num_negative_yerr > 0:
+            warnings.warn(f"N={num_negative_yerr} bars are negative, probably need more bootstrap resamples.\nOverwriting with 0.")
+        integration_df_melted[['yerr_low', 'yerr_high']] = integration_df_melted[['yerr_low', 'yerr_high']].applymap(lambda x: np.max([x, 0]))
+    else:
+        assert integration_df_melted.dropna(subset=['yerr_low', 'yerr_high']).loc[:, ['yerr_low', 'yerr_high']].ge(0).all().all(), "Some error bars are negative, probably need more bootstrap resamples"
 
     # Create catplot which returns a FacetGrid
     g = sns.catplot(
@@ -3176,13 +3265,18 @@ for source_dataset in source_datasets:
     sc.pl.draw_graph(subsampled_clip_adatas[source_dataset][permute_idxs], color=colors, wspace=0.5, ncols=len(colors)); print(f'↑ subsampled_clip_adatas[{source_dataset}] ↑')
 
 def dev_fig1(eclare_adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'dev_fig1.svg')):
+
+    sc.settings._vector_friendly = True
+    sc.settings.figdir = manuscript_figpath
+    sc.settings.dpi = 300
+
     #eclare_adata = subsampled_eclare_adata.copy()
     permute_idxs = np.random.permutation(len(eclare_adata))
     eclare_adata.obs = eclare_adata.obs.rename(columns={
         'Lineage': 'lineage',
         'dpt_pseudotime': 'DPT pseudotime',
         'ordinal_pseudotime': 'ordinal pseudotime',
-        'dev_stage': 'age range',
+        'Age_Range': 'age range',
         'sub_cell_type': 'cell type'
         })
     eclare_adata.uns['lineage_colors'] = ['purple','orange']
@@ -3226,12 +3320,13 @@ subsampled_eclare_adata, scJoint_adata, glue_adata, dev_group_key = import_laten
 methods_list = ['ECLARE', 'scJoint', 'scGLUE']
 
 ## multi-modal
-sub_eclare_metrics, sub_eclare_integration = trajectory_metrics(subsampled_eclare_adata, n_resamples=3)
-scJoint_metrics, scJoint_integration = trajectory_metrics(scJoint_adata, n_resamples=3)
-glue_metrics, glue_integration = trajectory_metrics(glue_adata, n_resamples=3)
+sub_eclare_metrics, sub_eclare_integration = trajectory_metrics(subsampled_eclare_adata, n_resamples=200)
+scJoint_metrics, scJoint_integration = trajectory_metrics(scJoint_adata, n_resamples=200)
+glue_metrics, glue_integration = trajectory_metrics(glue_adata, n_resamples=200)
 
 corrs_fig, corrs_fig = trajectory_metrics_all([sub_eclare_metrics, scJoint_metrics, glue_metrics], methods_list, suptitle=None)
-_, scib_fig = integration_metrics_all([sub_eclare_integration, scJoint_integration, glue_integration], methods_list, suptitle=None, drop_columns=['ct_ari', 'age_range_ari'])
+_, scib_fig = integration_metrics_all([sub_eclare_integration, scJoint_integration, glue_integration], methods_list, suptitle=None, drop_columns=['ct_ari', 'age_range_ari'],
+    allow_negative_yerr=True)
 
 ## multimodal - ECLARE vs KD-CLIP vs CLIP
 methods_list = ['ECLARE'] + [f'KD-CLIP_{source_dataset}' for source_dataset in source_datasets] + [f'CLIP_{source_dataset}' for source_dataset in source_datasets]  
@@ -3401,6 +3496,24 @@ plt.axis('on')
 ## density plots
 sc.tl.embedding_density(subsampled_eclare_adata, basis=basis, groupby='modality')
 sc.pl.embedding_density(subsampled_eclare_adata, basis=basis, key=f'{basis}_density_modality')
+
+sc.tl.embedding_density(subsampled_eclare_adata, basis=basis, groupby=dev_group_key)
+sc.pl.embedding_density(subsampled_eclare_adata, basis=basis, key=f'{basis}_density_{dev_group_key}')
+
+def dev_figS3(subsampled_eclare_adata, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results')):
+
+    sc.settings._vector_friendly = True
+    sc.settings.figdir = manuscript_figpath
+    sc.settings.dpi = 300
+
+    sc.tl.embedding_density(subsampled_eclare_adata, basis=basis, groupby='modality')
+    sc.pl.embedding_density(subsampled_eclare_adata, basis=basis, key=f'{basis}_density_modality', save='dev_figS3.pdf')
+
+    sc.tl.embedding_density(subsampled_eclare_adata, basis=basis, groupby=dev_group_key)
+    sc.pl.embedding_density(subsampled_eclare_adata, basis=basis, key=f'{basis}_density_{dev_group_key}', save=f'dev_figS3.pdf')
+
+    plt.close()
+    return None
 
 #%% save results
 

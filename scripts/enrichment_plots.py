@@ -110,6 +110,7 @@ pydeseq2_match_length_genes_hits_df = pd.read_csv(os.path.join(output_dir, 'pyde
 pydeseq2_match_length_genes_tfs_multiple_hits = pd.read_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_tfs_multiple_hits.csv'))
 
 #%% Load GREAT results from R script output
+# ECLARE/scripts/rGREAT_analysis.R
 
 great_csv_outputs_path = os.path.join(output_dir, 'great_csv_outputs')
 great_csv_outputs_files = os.listdir(great_csv_outputs_path)
