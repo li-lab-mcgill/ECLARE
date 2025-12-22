@@ -751,11 +751,11 @@ legend = ax_legend.legend(
 )
 
 # Remove axes, and save tight around the legend
-fig_legend.subplots_adjust(left=0, right=1, top=1, bottom=0)
-fig_legend.savefig(os.path.join(output_dir, 'grn_legend_only.png'), 
-                   bbox_inches='tight', 
-                   pad_inches=0.1,
-                   dpi=300)
+#fig_legend.subplots_adjust(left=0, right=1, top=1, bottom=0)
+#fig_legend.savefig(os.path.join(output_dir, 'grn_legend_only.png'), 
+#                   bbox_inches='tight', 
+#                   pad_inches=0.1,
+#                   dpi=300)
 
 #DEFUNCT nx.write_graphml(G, os.path.join(output_dir, "ABHD17B_GRN.graphml"))
 #nx.write_gexf(G, os.path.join(output_dir, "ABHD17B_GRN.gexf")) #<--- the good one

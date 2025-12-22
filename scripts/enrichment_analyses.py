@@ -409,6 +409,20 @@ for sex in unique_sexes:
 with open(os.path.join(output_dir, 'mean_grn_df_filtered_pruned_dict.pkl'), 'wb') as f:
     pickle.dump(mean_grn_df_filtered_pruned_dict, f)
 
+## save the different GRN results as separate tabs of an Excel file
+keep_cols = ['TF', 'enhancer', 'TG', 'LR', 'LR_grns']
+with pd.ExcelWriter(os.path.join(output_dir, 'grn_results.xlsx')) as writer:
+    for sex in unique_sexes:
+        sex = sex.lower()
+        for celltype in unique_celltypes:
+            mean_grn_df_filtered_pruned = mean_grn_df_filtered_pruned_dict[sex][celltype]
+            mean_grn_df_filtered_pruned = mean_grn_df_filtered_pruned[keep_cols]
+            mean_grn_df_filtered_pruned = mean_grn_df_filtered_pruned.reindex(columns=['TG', 'enhancer', 'TF', 'LR', 'LR_grns'])
+            mean_grn_df_filtered_pruned.to_excel(writer, sheet_name=f'{sex}_{celltype}', index=False)
+            print(f'Saved {sex}_{celltype} to Excel file')
+            #writer.save()
+print(f'Saved GRN results to Excel file to {os.path.join(output_dir, "grn_results.xlsx")}')
+
 
 ## save peak BED files for GREAT analysis (R script)
 os.makedirs(os.path.join(output_dir, 'peak_bed_files'), exist_ok=True)
@@ -465,6 +479,7 @@ for TF in shared_TF_TG_pairs_df_grouped_filtered.index:
     TF_TG_pairs_series.attrs = {'sex':'all', 'celltype':'all', 'type': 'TF-TG pairs'}
 
     enrichr_results_sig = do_enrichr(TF_TG_pairs_series, 'ChEA_2022', filter_var='P-value', outdir=None) # only looking for specific TF, so no need to correct for multiple testing
+    plt.close('all')
 
     if enrichr_results_sig is not None:
 
