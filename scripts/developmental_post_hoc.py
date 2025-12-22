@@ -9,6 +9,7 @@ os.environ['OMP_NUM_THREADS'] = '1'
 import torch
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from types import SimpleNamespace
 from glob import glob
 from sklearn.model_selection import StratifiedKFold
@@ -253,7 +254,6 @@ ordinal_source_dataset = ordinal_model_metadata.metadata['source_dataset']
 
 #%% extract student latents for analysis
 from eclare.post_hoc_utils import create_celltype_palette
-import matplotlib.pyplot as plt
 from imblearn.under_sampling import RandomUnderSampler
 from collections import Counter
 from skimage.exposure import match_histograms
@@ -2890,6 +2890,14 @@ def scenic_plus_lineplots(target_adata, paths, d_df_dict, p_one_sided_dict, pseu
 
 #%% perform HAC weighted mean tests for each path and plot rolling mean and standard error
 
+'''
+target_adata = sc.read_h5ad(os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'subsampled_eclare_adata_MDD.h5ad'))
+paths = [
+    ('L23', ['0', '1_L23', '2_L23', '3_L23', '4_L23', '5_L23']),
+    ('L46', ['0', '1_L46', '2_L46', '3_L46', '4_L46', '5_L46']),
+]
+'''
+
 ## focus on paths L23 and L46 (in that order)
 paths = [('L23', dict(paths)['L23']), ('L46', dict(paths)['L46'])]
 
@@ -2923,7 +2931,7 @@ for sex in ['both','female','male']:
 
 ## lineplots
 #figs_both = rolling_mean_and_std_err(target_adata, window_len, paths, d_df_dict['both'], p_one_sided_dict['both'], pseudotime_key=pseudotime_key)
-#figs_male = rolling_mean_and_std_err(target_adata[target_adata.obs['Sex']=='male'], window_len, paths, d_df_dict['male'], p_one_sided_dict['male'], pseudotime_key=pseudotime_key)
+figs_male   = rolling_mean_and_std_err(target_adata[target_adata.obs['Sex']=='male'], window_len, paths, d_df_dict['male'], p_one_sided_dict['male'], pseudotime_key=pseudotime_key)
 figs_female = rolling_mean_and_std_err(target_adata[target_adata.obs['Sex']=='female'], window_len, paths, d_df_dict['female'], p_one_sided_dict['female'], pseudotime_key=pseudotime_key)
 
 def devmdd_fig4(lineplots_fig, suffix='', manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_fig4.svg')):
@@ -3320,9 +3328,9 @@ subsampled_eclare_adata, scJoint_adata, glue_adata, dev_group_key = import_laten
 methods_list = ['ECLARE', 'scJoint', 'scGLUE']
 
 ## multi-modal
-sub_eclare_metrics, sub_eclare_integration = trajectory_metrics(subsampled_eclare_adata, n_resamples=200)
-scJoint_metrics, scJoint_integration = trajectory_metrics(scJoint_adata, n_resamples=200)
-glue_metrics, glue_integration = trajectory_metrics(glue_adata, n_resamples=200)
+sub_eclare_metrics, sub_eclare_integration = trajectory_metrics(subsampled_eclare_adata, n_resamples=500)
+scJoint_metrics, scJoint_integration = trajectory_metrics(scJoint_adata, n_resamples=500)
+glue_metrics, glue_integration = trajectory_metrics(glue_adata, n_resamples=500)
 
 corrs_fig, corrs_fig = trajectory_metrics_all([sub_eclare_metrics, scJoint_metrics, glue_metrics], methods_list, suptitle=None)
 _, scib_fig = integration_metrics_all([sub_eclare_integration, scJoint_integration, glue_integration], methods_list, suptitle=None, drop_columns=['ct_ari', 'age_range_ari'],
@@ -3604,20 +3612,142 @@ figs_signatures_both    = scenic_plus_lineplots(signatures, paths, d_df_signatur
 figs_signatures_female  = scenic_plus_lineplots(signatures[signatures.obs['Sex']=='female'], paths, d_df_signatures_dict['EGR1']['female'], p_one_sided_signatures_dict['EGR1']['female'], pseudotime_key='EGR1')
 figs_signatures_male    = scenic_plus_lineplots(signatures[signatures.obs['Sex']=='male'], paths, d_df_signatures_dict['EGR1']['male'], p_one_sided_signatures_dict['EGR1']['male'], pseudotime_key='EGR1')
 
+f'''
+# plot single lineplot spanning both paths together
+all_path = [(
+    'all_path',
+    paths[0][1][5:0:-1] + paths[1][1][1:] # exclude Leiden cluster '0'
+)]
+d_df, p_one_sided = hac_weighted_mean_test(signatures.obs, all_path[0][1], window_len, pseudotime_key='EGR1', two_sided=True)
+figs_signatures_all_path  = scenic_plus_lineplots(signatures, all_path, {'all_path': d_df}, {'all_path': p_one_sided}, pseudotime_key='EGR1')
 '''
-fig, ax = plt.subplots(len(eRegulons), len(paths), figsize=(6, 10), sharex='col', sharey=False)
-for i, (descr, path) in enumerate(paths):
-    path_signatures = signatures[signatures.obs['leiden'].isin(path)]
-    path_signatures.obs['leiden'] = pd.Categorical(path_signatures.obs['leiden'], categories=path, ordered=True)
-    ax[0,i].set_title(descr)
-    for j, eRegulon in enumerate(eRegulons):
-        sns.lineplot(path_signatures.obs[['leiden','Condition',eRegulon]], x='leiden', y=eRegulon, hue='Condition', palette='Pastel1', errorbar='se', marker='o', legend=True if (i,j)==(0,0) else False, ax=ax[j,i])
 
-for a in ax.flat:
-    for label in a.get_xticklabels():
-        label.set_rotation(30)
-plt.tight_layout()
-'''
+def plot_eregulons_lineplots(signatures, paths, d_df_signatures_dict, p_one_sided_signatures_dict, 
+                             eRegulons, sex='both'):
+    """
+    Plot eRegulon cell scores across developmental paths with significance annotations.
+    
+    Parameters
+    ----------
+    signatures : AnnData
+        AnnData object containing eRegulon signatures in .obs
+    paths : list of tuples
+        List of (path_name, leiden_clusters) tuples
+    d_df_signatures_dict : dict
+        Nested dictionary containing per-cluster p-values: [eRegulon][sex][path_name]
+    p_one_sided_signatures_dict : dict
+        Nested dictionary containing overall p-values: [eRegulon][sex][path_name]
+    eRegulons : list
+        List of eRegulon names (TF names) to plot
+    sex : str, optional
+        Sex to filter data: 'both', 'female', or 'male'. Default is 'both'
+    
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The generated figure
+    """
+    
+    # Filter signatures by sex
+    if sex == 'both':
+        signatures_filtered = signatures
+    else:
+        signatures_filtered = signatures[signatures.obs['Sex'] == sex]
+    
+    # Create figure with grid: rows=eRegulons, columns=paths
+    fig, ax = plt.subplots(len(eRegulons), len(paths), figsize=(4*len(paths), 3*len(eRegulons)), 
+                           sharex='col', sharey=False)
+    
+    # Ensure ax is 2D array even with single row or column
+    if len(eRegulons) == 1 and len(paths) == 1:
+        ax = np.array([[ax]])
+    elif len(eRegulons) == 1:
+        ax = ax.reshape(1, -1)
+    elif len(paths) == 1:
+        ax = ax.reshape(-1, 1)
+    
+    # Set up font properties and significance levels
+    from matplotlib.font_manager import FontProperties
+    mono = FontProperties()
+    sig_levels = pd.Series({1.0: 'ns', 0.05: r"$\boldsymbol{\ast}$", 0.01: r"$\boldsymbol{\ast\ast}$", 0.001: r"$\boldsymbol{\ast\ast\!\ast}$"})
+    
+    # Plot each eRegulon (rows) across each path (columns)
+    for j, eRegulon in enumerate(eRegulons):
+        for i, (descr, path) in enumerate(paths):
+            path_signatures = signatures_filtered[signatures_filtered.obs['leiden'].isin(path)]
+            path_signatures.obs['leiden'] = pd.Categorical(path_signatures.obs['leiden'], categories=path, ordered=True)
+            
+            # Get significance level for this path and eRegulon
+            p_one_sided_path = p_one_sided_signatures_dict[eRegulon][sex][descr]
+            sig_level = sig_levels.loc[p_one_sided_path <= sig_levels.index].iloc[-1]
+            
+            # Set title with significance annotation for all subfigures
+            ax[j,i].set_title(f'{descr} [{sig_level}]', fontproperties=mono)
+            
+            # Print significance results
+            print(f'{eRegulon} - {descr} ({sex}): p = {p_one_sided_path:.4f} [{sig_level}]')
+            
+            # Create lineplot
+            sns.lineplot(path_signatures.obs[['leiden','Condition',eRegulon]], 
+                        x='leiden', y=eRegulon, hue='Condition', 
+                        palette='Pastel1', errorbar='se', marker='o', 
+                        legend=False, ax=ax[j,i])
+            
+            # Apply consistent styling to match scenic_plus_lineplots
+            ax[j,i].tick_params(colors='black')
+            ax[j,i].spines['top'].set_color('black')
+            ax[j,i].spines['right'].set_color('black')
+            ax[j,i].spines['bottom'].set_color('black')
+            ax[j,i].spines['left'].set_color('black')
+            
+            # Add daggers for significant differences at individual leiden clusters
+            y_shift = ax[j,i].get_ylim()[1] * 0.03  # 3% of y-range
+            d_df = d_df_signatures_dict[eRegulon][sex][descr]
+            for l, leiden in enumerate(path):
+                if leiden in d_df.index:
+                    p_one_sided_leiden = d_df.loc[leiden, 'p']
+                    if p_one_sided_leiden < 0.05:
+                        # Get the maximum y-value for this leiden cluster
+                        leiden_data = path_signatures.obs[path_signatures.obs['leiden'] == leiden]
+                        if not leiden_data.empty:
+                            max_y = leiden_data.groupby('Condition')[eRegulon].mean().max()
+                            # Add some buffer for the dagger
+                            ax[j,i].text(l, max_y + y_shift, '†', fontsize=14, color='grey', 
+                                       ha='center', va='bottom')
+            
+            # Add y-axis label for leftmost column
+            if i == 0:
+                ax[j,i].set_ylabel(f'{eRegulon} cell score', color='black')
+            
+            # Rotate x-axis labels
+            for label in ax[j,i].get_xticklabels():
+                label.set_rotation(30)
+    
+    # Create a single legend for the entire figure
+    handles, labels = ax[0,0].get_legend_handles_labels()
+    if handles:  # Only if there are legend items
+        fig.legend(handles, labels, loc='center left', bbox_to_anchor=(1.0, 0.5))
+    
+    plt.tight_layout()
+    fig.show()
+    
+    return fig
+
+# Example usage
+eRegulons = ['EGR1', 'ZNF184', 'NFIX', 'BACH2', 'SOX5']
+fig_female = plot_eregulons_lineplots(signatures, paths, d_df_signatures_dict, p_one_sided_signatures_dict, eRegulons, sex='female')
+fig_male = plot_eregulons_lineplots(signatures, paths, d_df_signatures_dict, p_one_sided_signatures_dict, eRegulons, sex='male')
+fig_both = plot_eregulons_lineplots(signatures, paths, d_df_signatures_dict, p_one_sided_signatures_dict, eRegulons, sex='both')
+
+def devmdd_figS5(fig_female, fig_male, fig_both, manuscript_figpath=os.path.join(os.environ['OUTPATH'], 'dev_post_hoc_results', 'devmdd_figS5.svg')):
+    fig_female.savefig(manuscript_figpath.replace('.svg', f'_female.svg'), bbox_inches='tight', dpi=96)
+    fig_male.savefig(manuscript_figpath.replace('.svg', f'_male.svg'), bbox_inches='tight', dpi=96)
+    fig_both.savefig(manuscript_figpath.replace('.svg', f'_both.svg'), bbox_inches='tight', dpi=96)
+    print(f'Saving figure to {os.path.dirname(manuscript_figpath)}')
+    plt.close()
+    return None
+
+#devmdd_figS5(fig_female, fig_male, fig_both)
 
 #%% create PHATE embeddings
 import phate
