@@ -18,6 +18,7 @@ from scanpy.tl import score_genes
 from statsmodels.stats.weightstats import DescrStatsW
 import json
 import scanpy as sc
+import gseapy as gp
 
 # Set matplotlib to use a thread-safe backend
 import matplotlib
@@ -48,6 +49,8 @@ from eclare.post_hoc_utils import \
 
 cuda_available = torch.cuda.is_available()
 device = 'cuda' if cuda_available else 'cpu'
+
+#%% set method IDs and output directory
 
 ## Create dict for methods and job_ids
 methods_id_dict = {
@@ -440,7 +443,59 @@ for sex in unique_sexes:
         peaks_bed.to_csv(os.path.join(output_dir, 'peak_bed_files', f'{sex}_{celltype}_peaks.bed'), sep='\t', header=False, index=False)
 
 
-## find shared TF-TG pairs across all celltypes and sexes
+#%% find shared TF-TG pairs across all celltypes and sexes
+
+'''
+output_dir = os.path.join(os.environ['OUTPATH'], 'enrichment_analyses_16103846_41')
+with open(os.path.join(output_dir, 'mean_grn_df_filtered_pruned_dict.pkl'), 'rb') as f:
+    mean_grn_df_filtered_pruned_dict = pickle.load(f)
+with open(os.path.join(output_dir, 'mean_grn_df_filtered_dict.pkl'), 'rb') as f:
+    mean_grn_df_filtered_dict = pickle.load(f)
+unique_sexes = ['female', 'male']
+unique_celltypes = list(mean_grn_df_filtered_dict[unique_sexes[0]].keys())
+'''
+
+## flatten mean_grn_df_filtered_dict
+mean_grn_df_filtered_dict_flattened = []
+mean_grn_df_filtered_pruned_dict_flattened = []
+
+for sex in unique_sexes:
+    sex = sex.lower()
+    for celltype in unique_celltypes:
+        mean_grn_df_filtered_dict_flattened.append(
+            mean_grn_df_filtered_dict[sex][celltype].assign(group=f'{sex}_{celltype}'))
+        mean_grn_df_filtered_pruned_dict_flattened.append(
+            mean_grn_df_filtered_pruned_dict[sex][celltype].assign(group=f'{sex}_{celltype}'))
+
+mean_grn_df_filtered_dict_flattened = pd.concat(mean_grn_df_filtered_dict_flattened)
+mean_grn_df_filtered_pruned_dict_flattened = pd.concat(mean_grn_df_filtered_pruned_dict_flattened)
+
+## get shared TF-TG pairs across female ExN and Oli
+#female_ExN_Oli = mean_grn_df_filtered_pruned_dict_flattened.loc[mean_grn_df_filtered_pruned_dict_flattened['group'].isin(['female_ExN', 'female_Oli'])]
+female_ExN_Oli = mean_grn_df_filtered_dict_flattened.loc[mean_grn_df_filtered_dict_flattened['group'].isin(['female_ExN', 'female_Oli'])]
+female_ExN_Oli_counts = female_ExN_Oli.groupby(['TF','TG'])['group'].nunique()
+female_ExN_Oli_shared_TF_TG_pairs = female_ExN_Oli_counts.loc[female_ExN_Oli_counts.eq(2)].reset_index('TG').drop(columns='group')
+
+female_ExN_Oli_shared_TF_TG_pairs_grouped = female_ExN_Oli_shared_TF_TG_pairs.reset_index().groupby('TF').agg({
+    'TG': [list, 'nunique']
+}).sort_values(by=('TG', 'nunique'), ascending=False)
+
+female_ExN_Oli_EGR1_SOX2 = np.intersect1d(female_ExN_Oli_shared_TF_TG_pairs_grouped.loc['EGR1', ('TG', 'list')], female_ExN_Oli_shared_TF_TG_pairs_grouped.loc['SOX2', ('TG', 'list')])
+female_ExN_Oli_EGR1_SOX2_NR4A2 = np.intersect1d(female_ExN_Oli_EGR1_SOX2, female_ExN_Oli_shared_TF_TG_pairs_grouped.loc['NR4A2', ('TG', 'list')])
+
+## get shared TF-TG pairs across male ExN and Oli
+male_ExN_Oli = mean_grn_df_filtered_dict_flattened.loc[mean_grn_df_filtered_dict_flattened['group'].isin(['male_ExN', 'male_Oli'])]
+male_ExN_Oli_counts = male_ExN_Oli.groupby(['TF','TG'])['group'].nunique()
+male_ExN_Oli_shared_TF_TG_pairs = male_ExN_Oli_counts.loc[male_ExN_Oli_counts.eq(2)].reset_index('TG').drop(columns='group')
+
+male_ExN_Oli_shared_TF_TG_pairs_grouped = male_ExN_Oli_shared_TF_TG_pairs.reset_index().groupby('TF').agg({
+    'TG': [list, 'nunique']
+}).sort_values(by=('TG', 'nunique'), ascending=False)
+
+male_ExN_Oli_EGR1_SOX2 = np.intersect1d(male_ExN_Oli_shared_TF_TG_pairs_grouped.loc['EGR1', ('TG', 'list')], male_ExN_Oli_shared_TF_TG_pairs_grouped.loc['SOX2', ('TG', 'list')])
+male_ExN_Oli_EGR1_SOX2_NR4A2 = np.intersect1d(male_ExN_Oli_EGR1_SOX2, male_ExN_Oli_shared_TF_TG_pairs_grouped.loc['NR4A2', ('TG', 'list')])
+
+''' FLAWED
 for sex in unique_sexes:
     sex = sex.lower()
     for celltype in unique_celltypes:
@@ -450,17 +505,18 @@ for sex in unique_sexes:
 
         pairs = set(unique_TF_TG_combinations_dict[sex][celltype])
         
-        if not shared_TF_TG_pairs:
-            shared_TF_TG_pairs = pairs
+        if not shared_TF_TG_pairs: # ...if empty set, initialize with current pairs
+            shared_TF_TG_pairs = pairs.copy()
         else:
-            shared_TF_TG_pairs = shared_TF_TG_pairs.intersection(pairs)
-
+            shared_TF_TG_pairs = shared_TF_TG_pairs.intersection(pairs) # returns empty set if no intersection, then hits conditional above...
+            
+        print('Current size of shared TF-TG pairs:', len(shared_TF_TG_pairs))
         all_TF_TG_pairs = all_TF_TG_pairs.union(pairs)
 
 shared_TF_TG_pairs_df = pd.DataFrame(shared_TF_TG_pairs).iloc[:, 0].str.split(' - ', expand=True)
 shared_TF_TG_pairs_df.columns = ['TF', 'TG']
 shared_TF_TG_pairs_df.sort_values(by='TG', inplace=True)
-shared_TF_TG_pairs_df.to_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'), index=False)
+#shared_TF_TG_pairs_df.to_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'), index=False)
 
 print(f'Shared TF-TG pairs (n={len(shared_TF_TG_pairs)} out of {len(all_TF_TG_pairs)}):')
 print(shared_TF_TG_pairs_df)
@@ -468,41 +524,65 @@ print(shared_TF_TG_pairs_df)
 shared_TF_TG_pairs_df_grouped = shared_TF_TG_pairs_df.groupby('TF').agg({
     'TG': [list, 'nunique'],
 }).sort_values(by=('TG', 'nunique'), ascending=False)
+'''
+
+def chea_2022_enrichment(shared_TF_TG_pairs_df_grouped):
+
+    enriched_TF_TG_pairs_dict = dict()
+
+    shared_TF_TG_pairs_df_grouped_filtered = shared_TF_TG_pairs_df_grouped[shared_TF_TG_pairs_df_grouped['TG','nunique'] > 1] # not interesting to find TFs with only one regulon gene
+
+    for TF in shared_TF_TG_pairs_df_grouped_filtered.index:
+
+        TF_TG_pairs = shared_TF_TG_pairs_df_grouped.loc[TF, ('TG', 'list')]
+        TF_TG_pairs_series = pd.Series(TF, index=TF_TG_pairs)
+        TF_TG_pairs_series.attrs = {'sex':'all', 'celltype':'all', 'type': 'TF-TG pairs'}
+
+        try:
+            enr = gp.enrichr(TF_TG_pairs_series.index.to_list(), gene_sets='ChEA_2022', outdir=None)
+            enr.res2d['-log10(fdr)'] = -np.log10(enr.res2d['Adjusted P-value'])
+            enrichr_results_sig = enr.res2d
+        except Exception as e:
+            print(f"Error performing enrichment analysis for {TF}: {e}")
+            continue
+
+        plt.close('all')
+
+        if enrichr_results_sig is not None:
+
+            #enrichr_results_sig = enrichr_results_sig[enrichr_results_sig['P-value'] < 0.05]
+            enriched_tfs = enrichr_results_sig['Term'].str.split(' ').str[0]
+            enriched_species = enrichr_results_sig['Term'].str.split(' ').str[-1]
+            enriched_tfs_match_TF = np.isin(enriched_tfs, TF) & np.isin(enriched_species, 'Human')
+        
+            if enriched_tfs_match_TF.any():
+                genes_of_TF = enrichr_results_sig[enriched_tfs_match_TF]['Genes']
+                if len(genes_of_TF) == 1:
+                    enriched_tfs_match_TF_list = genes_of_TF.str.split(';').item()
+                elif len(genes_of_TF) > 1:
+                    enriched_tfs_match_TF_list = genes_of_TF.str.split(';').explode().tolist()
+
+                if len(enriched_tfs_match_TF_list) >= 2: # at least 2 TFs should be enriched for the same TG to study interesting TFs and their regulons
+                    enriched_TF_TG_pairs_dict[TF] = enriched_tfs_match_TF_list.copy()
+
+    return enriched_TF_TG_pairs_dict
 
 ## Perform enrichment analysis on TG regulons of TFs that are enriched in shared TF-TG pairs
-shared_TF_TG_pairs_df_grouped_filtered = shared_TF_TG_pairs_df_grouped[shared_TF_TG_pairs_df_grouped['TG','nunique'] > 1] # not interesting to find TFs with only one regulon gene
+female_enriched_TF_TG_pairs_dict = chea_2022_enrichment(female_ExN_Oli_shared_TF_TG_pairs_grouped)
+male_enriched_TF_TG_pairs_dict = chea_2022_enrichment(male_ExN_Oli_shared_TF_TG_pairs_grouped)
 
-for TF in shared_TF_TG_pairs_df_grouped_filtered.index:
-
-    TF_TG_pairs = shared_TF_TG_pairs_df_grouped.loc[TF, ('TG', 'list')]
-    TF_TG_pairs_series = pd.Series(TF, index=TF_TG_pairs)
-    TF_TG_pairs_series.attrs = {'sex':'all', 'celltype':'all', 'type': 'TF-TG pairs'}
-
-    enrichr_results_sig = do_enrichr(TF_TG_pairs_series, 'ChEA_2022', filter_var='P-value', outdir=None) # only looking for specific TF, so no need to correct for multiple testing
-    plt.close('all')
-
-    if enrichr_results_sig is not None:
-
-        #enrichr_results_sig = enrichr_results_sig[enrichr_results_sig['P-value'] < 0.05]
-        enriched_tfs = enrichr_results_sig['Term'].str.split(' ').str[0]
-        enriched_species = enrichr_results_sig['Term'].str.split(' ').str[-1]
-        enriched_tfs_match_TF = np.isin(enriched_tfs, TF) & np.isin(enriched_species, 'Human')
-    
-        if enriched_tfs_match_TF.any():
-            enriched_tfs_match_TF_list = enrichr_results_sig[enriched_tfs_match_TF]['Genes'].str.split(';').item()
-
-            if len(enriched_tfs_match_TF_list) >= 2: # at least 2 TFs should be enriched for the same TG to study interesting TFs and their regulons
-                enriched_TF_TG_pairs_dict[TF] = enriched_tfs_match_TF_list
+np.intersect1d(list(female_enriched_TF_TG_pairs_dict.keys()), list(male_enriched_TF_TG_pairs_dict.keys()))
 
 ## write enriched_TF_TG_pairs_dict to json
 with open(os.path.join(output_dir, 'enriched_TF_TG_pairs_dict.json'), 'w') as f:
     json.dump(enriched_TF_TG_pairs_dict, f)
 
-
-
 #%% plot genome track around
 
 import scglue
+
+#with open(os.path.join(output_dir, f"mean_grn_df_filtered_dict.pkl"), "rb") as f:
+#    mean_grn_df_filtered_dict = pickle.load(f)
 
 female_exn_grn = mean_grn_df_filtered_dict['female']['ExN']
 
