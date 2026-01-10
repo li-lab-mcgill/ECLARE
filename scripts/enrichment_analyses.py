@@ -19,6 +19,7 @@ from statsmodels.stats.weightstats import DescrStatsW
 import json
 import scanpy as sc
 import gseapy as gp
+import networkx as nx
 
 # Set matplotlib to use a thread-safe backend
 import matplotlib
@@ -41,6 +42,7 @@ from types import SimpleNamespace
 from joblib import Parallel, delayed
 from multiprocessing import cpu_count
 import threading
+from tqdm import tqdm
 
 from eclare.post_hoc_utils import \
     extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, compute_LR_grns, do_enrichr, find_hits_overlap, \
@@ -400,10 +402,21 @@ all_TF_TG_pairs = set()
 for sex in unique_sexes:
     sex = sex.lower()
 
+    # Create progress bar
+    pbar = tqdm(total=len(unique_celltypes), desc=f"Computing LR GRNs ({sex})")
+    
+    # Wrapper function to update progress bar
+    def compute_with_progress(*args, **kwargs):
+        result = compute_LR_grns(*args, **kwargs)
+        pbar.update(1)
+        return result
+    
     results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
-        delayed(compute_LR_grns)(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac_dict, output_dir=output_dir)
+        delayed(compute_with_progress)(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac_dict, output_dir=output_dir)
         for celltype in unique_celltypes
     )
+    
+    pbar.close()
 
     for celltype, result in zip(unique_celltypes, results):
         mean_grn_df_filtered_pruned_dict[sex][celltype] = result
@@ -494,6 +507,422 @@ male_ExN_Oli_shared_TF_TG_pairs_grouped = male_ExN_Oli_shared_TF_TG_pairs.reset_
 
 male_ExN_Oli_EGR1_SOX2 = np.intersect1d(male_ExN_Oli_shared_TF_TG_pairs_grouped.loc['EGR1', ('TG', 'list')], male_ExN_Oli_shared_TF_TG_pairs_grouped.loc['SOX2', ('TG', 'list')])
 male_ExN_Oli_EGR1_SOX2_NR4A2 = np.intersect1d(male_ExN_Oli_EGR1_SOX2, male_ExN_Oli_shared_TF_TG_pairs_grouped.loc['NR4A2', ('TG', 'list')])
+
+## get shared TF-TG pairs across ExN and Oli across sexes
+ExN_Oli_EGR1_SOX2 = np.intersect1d(female_ExN_Oli_EGR1_SOX2, male_ExN_Oli_EGR1_SOX2)
+ExN_Oli_EGR1_SOX2_NR4A2 = np.intersect1d(ExN_Oli_EGR1_SOX2, female_ExN_Oli_EGR1_SOX2_NR4A2, male_ExN_Oli_EGR1_SOX2_NR4A2)
+
+'''
+with open(os.path.join(output_dir, 'broad_gene_series_dict.pkl'), 'rb') as f: res_dict = pickle.load(f)
+enrs_mdd_dn_genes_series = res_dict['enrs_mdd_dn_genes_series']
+
+nr4a2_exn_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
+    mean_grn_df_filtered_pruned_dict_flattened['TF'].isin(['NR4A2']) &
+    mean_grn_df_filtered_pruned_dict_flattened['group'].str.contains('ExN')
+    ].loc[:,['TF','TG','group']].set_index('group')
+
+assert (nr4a2_exn_hits_df['TG'].unique().item() == 'ABHD17B') # show that only ABHD17B as target for NR4A2 in ExN
+assert (nr4a2_exn_hits_df.index.unique().item() == 'female_ExN') # show that only female ExN
+
+abhd17b_exn_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
+    mean_grn_df_filtered_pruned_dict_flattened['TG'].isin(['ABHD17B']) &
+    mean_grn_df_filtered_pruned_dict_flattened['group'].eq('female_ExN')
+    ].loc[:,['TF','TG','group','enhancer']].set_index('group')
+
+abhd17b_exn_skip1_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
+    mean_grn_df_filtered_pruned_dict_flattened['TF'].isin(abhd17b_exn_hits_df['TF']) &
+    mean_grn_df_filtered_pruned_dict_flattened['group'].eq('female_ExN')
+    ].loc[:,['TF','TG','group','enhancer']].set_index('group')
+
+adjacency_matrix = pd.get_dummies(abhd17b_exn_skip1_hits_df.set_index('TF')['TG']).astype(int)
+adjacency_matrix = adjacency_matrix.groupby(adjacency_matrix.index).sum()
+adjacency_matrix_binary = adjacency_matrix.applymap(lambda x: 1 if x > 0 else 0)
+
+#adjacency_matrix_binary_trunc = adjacency_matrix_binary.loc[:, adjacency_matrix_binary.columns.isin(['ABHD17B'] + mdd_genes)]
+adjacency_matrix_binary_trunc = adjacency_matrix_binary.copy()
+adjacency_matrix_binary_trunc = adjacency_matrix_binary_trunc.loc[adjacency_matrix_binary_trunc.sum(1).ge(2) | adjacency_matrix_binary_trunc.index.isin(['NR3C1','NR4A2'])]
+adjacency_matrix_binary_trunc = adjacency_matrix_binary_trunc.loc[:,adjacency_matrix_binary_trunc.sum(0).ge(2)]
+
+def protected_k_core(G, k, whitelist):
+    """
+    Standard k-core algorithm that refuses to delete nodes in the whitelist.
+    """
+    H = G.copy()
+    whitelist = set(whitelist)
+    
+    while True:
+        # Find nodes to remove: degree < k AND not in whitelist
+        nodes_to_remove = [
+            n for n, d in H.degree() 
+            if d < k and n not in whitelist
+        ]
+        
+        if not nodes_to_remove:
+            break
+            
+        H.remove_nodes_from(nodes_to_remove)
+        
+    return H
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import networkx as nx
+from sklearn.cluster import SpectralCoclustering
+from networkx.algorithms import bipartite
+from scipy.sparse.linalg import svds
+
+def cluster_bipartite_graph(G, n_clusters=8, degree_threshold=0.9):
+    # 1. Get sets and matrix (original, full)
+    sets = bipartite.sets(G)
+    top_nodes, bottom_nodes = list(sets[0]), list(sets[1])
+    matrix = bipartite.biadjacency_matrix(
+        G, row_order=top_nodes, column_order=bottom_nodes
+    ).toarray()
+
+    n_rows, n_cols = matrix.shape
+
+    # 2. Identify dense columns (a.k.a. "full vertical bars")
+    col_densities = matrix.sum(axis=0) / n_rows
+    dense_cols_mask = col_densities > degree_threshold
+
+    dense_col_idx = np.flatnonzero(dense_cols_mask)       # indices in ORIGINAL matrix
+    keep_col_idx  = np.flatnonzero(~dense_cols_mask)
+
+    # Filter columns (for fitting only)
+    matrix_filtered = matrix[:, keep_col_idx]
+
+    # Rows that become empty after removing dense columns ("singleton rows")
+    row_sums = matrix_filtered.sum(axis=1)
+    valid_rows_mask = row_sums > 0
+
+    singleton_row_idx = np.flatnonzero(~valid_rows_mask)  # indices in ORIGINAL matrix
+    keep_row_idx      = np.flatnonzero(valid_rows_mask)
+
+    # Final matrix for fitting (no dense cols, no empty rows)
+    matrix_final = matrix[np.ix_(keep_row_idx, keep_col_idx)]
+
+    print(f"Removed {dense_col_idx.size} dense columns.")
+    print(f"Removed {singleton_row_idx.size} rows that became empty.")
+
+    # plot singular values
+    u, s, vt = svds(matrix_final.astype(float), k=min(matrix_final.shape) - 1)
+    plt.plot(sorted(s, reverse=True), "o-")
+    plt.title("Singular Values (Look for the Elbow)")
+    plt.show()
+
+    # 3. Perform Co-Clustering (on filtered matrix)
+    model = SpectralCoclustering(n_clusters=n_clusters, random_state=42)
+    model.fit(matrix_final)
+
+    # Build node->cluster maps in ORIGINAL node space
+    # cluster id -1 means "special": singleton rows or dense columns (excluded from fit)
+    top_cluster = np.full(len(top_nodes), -1, dtype=int)
+    bottom_cluster = np.full(len(bottom_nodes), -1, dtype=int)
+
+    top_cluster[keep_row_idx] = model.row_labels_.astype(int)
+    bottom_cluster[keep_col_idx] = model.column_labels_.astype(int)
+
+    tf_cluster_map = {top_nodes[i]: int(top_cluster[i]) for i in range(len(top_nodes))}
+    tg_cluster_map = {bottom_nodes[j]: int(bottom_cluster[j]) for j in range(len(bottom_nodes))}
+
+    # 4. Cluster-based ordering (ONLY for the kept rows/cols)
+    ordered_keep_rows = keep_row_idx[np.argsort(model.row_labels_)]
+    ordered_keep_cols = keep_col_idx[np.argsort(model.column_labels_)]
+
+    # Optional: order dense columns by density (most dense first). Otherwise keep original order.
+    dense_col_idx = dense_col_idx[np.argsort(-col_densities[dense_col_idx])]
+
+    # 5. Reintegrate: build FULL row/col order in ORIGINAL index space
+    row_order_full = np.concatenate([singleton_row_idx, ordered_keep_rows])
+    col_order_full = np.concatenate([dense_col_idx, ordered_keep_cols])
+
+    final_matrix = matrix[np.ix_(row_order_full, col_order_full)]
+
+    # Node labels in the new order
+    final_row_nodes = [top_nodes[i] for i in row_order_full]
+    final_col_nodes = [bottom_nodes[j] for j in col_order_full]
+
+    # 6. Plot (original vs reintegrated+reordered)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    ax1.spy(matrix, aspect="auto")
+    ax1.set_title(f"Original Matrix\n({matrix.shape[0]}x{matrix.shape[1]})")
+    ax2.spy(final_matrix, aspect="auto")
+    ax2.set_title("Final Matrix (Singleton rows first, Dense cols first,\nthen co-clustered remainder)")
+    plt.tight_layout()
+    plt.show()
+
+    # cast adjacency matrix to DataFrame
+    final_matrix = pd.DataFrame(final_matrix, index=final_row_nodes, columns=final_col_nodes)
+
+    # cast as NetworkX graph (and ATTACH cluster labels to nodes)
+    G2 = nx.DiGraph()
+    for tf in final_matrix.index:
+        G2.add_node(tf, node_type="TF", cluster=tf_cluster_map.get(tf, -1))
+    for tg in final_matrix.columns:
+        G2.add_node(tg, node_type="TG", cluster=tg_cluster_map.get(tg, -1))
+
+    for tf in final_matrix.index:
+        for tg in final_matrix.columns:
+            if final_matrix.loc[tf, tg] == 1:
+                G2.add_edge(tf, tg)
+
+    return G2
+
+# -----------------------------
+# Build initial graph from adjacency matrices
+# -----------------------------
+G = nx.DiGraph()
+for tf in adjacency_matrix_binary_trunc.index:
+    G.add_node(tf, node_type="TF")
+for tg in adjacency_matrix_binary_trunc.columns:
+    G.add_node(tg, node_type="TG")
+for tf in adjacency_matrix_binary_trunc.index:
+    for tg in adjacency_matrix_binary_trunc.columns:
+        if adjacency_matrix_binary.loc[tf, tg] == 1:
+            G.add_edge(tf, tg)
+
+# Shrink graph
+print(f"Original: {G.number_of_nodes()} nodes")
+G = protected_k_core(G, k=5, whitelist=["NR3C1", "NR4A2"])
+print(f"Shrunken: {G.number_of_nodes()} nodes")
+
+# Cluster bipartite graph (clusters stored as node attribute "cluster")
+n_clusters = 4
+G = cluster_bipartite_graph(G, n_clusters=n_clusters)
+
+# Separate nodes by type (for MARKER SHAPES)
+tf_nodes = [n for n, d in G.nodes(data=True) if d.get("node_type") == "TF"]
+tg_nodes_all = [n for n, d in G.nodes(data=True) if d.get("node_type") == "TG"]
+
+# Exception node
+special_tg = "ABHD17B"
+tg_special = [special_tg] if special_tg in tg_nodes_all else []
+tg_nodes = [n for n in tg_nodes_all if n != special_tg]
+
+# Layout
+pos = nx.shell_layout(G, nlist=[[special_tg], tf_nodes, tg_nodes], rotate=24.5)
+
+# -----------------------------
+# Node colors by cluster assignment
+# -----------------------------
+all_clusters = [d.get("cluster", -1) for _, d in G.nodes(data=True)]
+k_eff = max([c for c in all_clusters if c is not None] + [-1]) + 1  # number of non-negative clusters
+k_eff = max(k_eff, 1)
+
+cmap = plt.cm.get_cmap("tab20", k_eff)
+
+def node_color(n):
+    c = G.nodes[n].get("cluster", -1)
+    if c is None or c < 0:
+        return (0.7, 0.7, 0.7, 0.9)  # special / excluded nodes
+    return cmap(int(c))
+
+tf_colors = [node_color(n) for n in tf_nodes]
+tg_colors = [node_color(n) for n in tg_nodes]
+tg_special_colors = [node_color(n) for n in tg_special]
+
+# -----------------------------
+# Edge colors by cocluster membership (within-bicluster edges colored; others gray)
+# -----------------------------
+edges = list(G.edges())
+edge_colors = []
+for u, v in edges:
+    cu = G.nodes[u].get("cluster", -1)
+    cv = G.nodes[v].get("cluster", -1)
+    if cu is not None and cv is not None and cu >= 0 and cu == cv:
+        edge_colors.append(cmap(int(cu)))
+    else:
+        edge_colors.append((0.6, 0.6, 0.6, 0.25))  # inter-cluster / special
+
+# -----------------------------
+# Plot
+# Shapes: TF=diamond, TG=circle, ABHD17B=square
+# Colors: cluster-based
+# -----------------------------
+fig, ax = plt.subplots(figsize=(12, 10))
+
+nx.draw_networkx_nodes(
+    G, pos,
+    nodelist=tf_nodes,
+    node_color=tf_colors,
+    node_shape="D",          # diamond
+    node_size=900,
+    alpha=0.95,
+    linewidths=1.0,
+    ax=ax,
+    label="TF (diamond)"
+)
+
+nx.draw_networkx_nodes(
+    G, pos,
+    nodelist=tg_nodes,
+    node_color=tg_colors,
+    node_shape="o",          # circle
+    node_size=800,
+    alpha=0.95,
+    linewidths=1.0,
+    ax=ax,
+    label="TG (circle)"
+)
+
+if tg_special:
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=tg_special,
+        node_color=tg_special_colors,
+        node_shape="s",      # square
+        node_size=900,
+        alpha=0.98,
+        linewidths=1.2,
+        ax=ax,
+        label="ABHD17B (square)"
+    )
+
+nx.draw_networkx_edges(
+    G, pos,
+    edgelist=edges,
+    edge_color=edge_colors,
+    arrows=True,
+    arrowsize=10,
+    connectionstyle="arc3,rad=0.2",
+    alpha=0.7,
+    ax=ax
+)
+
+nx.draw_networkx_labels(G, pos, font_size=8, ax=ax)
+
+ax.legend(loc="best")
+ax.set_title("TF–TG Network Graph (node shape by type, node/edge color by cocluster)", fontsize=14, fontweight="bold")
+ax.axis("off")
+plt.tight_layout()
+plt.show()
+
+
+## save graph files for Figure 3e
+filename_key = f"mdd_grn_fig3e_{len(G.nodes)}_nodes"
+
+edge_df = nx.to_pandas_edgelist(G)
+edge_df_path = os.path.join(os.environ['OUTPATH'], f"{filename_key}.csv")
+edge_df.to_csv(edge_df_path, index=False)
+
+# Save the graph in GraphML format for import in Cytoscape
+graphml_path = os.path.join(os.environ['OUTPATH'], f"{filename_key}.graphml")
+nx.write_graphml(G, graphml_path)
+
+print(f"Saved graph files as:\n {edge_df_path} \n {graphml_path}")
+print("Filename key:", filename_key)
+
+
+'''
+
+'''
+dat = mean_grn_df_filtered_dict_flattened.copy()
+candidate_groups_canonical = ['female_ExN', 'female_Oli', 'male_ExN', 'male_Oli']
+candidate_groups_mdd_hits = candidate_groups_canonical + ['female_End', 'male_End', 'female_InN']
+candidate_groups_mdd_nominal = candidate_groups_mdd_hits + ['female_Ast', 'male_InN', 'male_OPC']
+
+dat_candidate_groups = dat[dat['group'].isin(candidate_groups_mdd_nominal)]
+tf_tg_group = dat_candidate_groups.groupby(['TF','TG']).agg({'group': ['unique', 'nunique']})
+tf_tg_group_sorted = tf_tg_group.sort_values(by=('group','nunique'), ascending=False)
+#tf_tg_group_sorted_candidate_groups = tf_tg_group_sorted.loc[tf_tg_group_sorted['group','unique'].apply(lambda x: any(np.isin(x, candidate_groups)))]
+#tf_tg_group_sorted_candidate_groups.index.get_level_values(0).value_counts().head(20)
+
+dat_candidate_groups_genes = dat[dat['group'].isin(candidate_groups_mdd_nominal) & dat['TG'].isin(enrs_mdd_dn_genes_series)]
+dat_candidate_groups_genes_grouped = dat_candidate_groups_genes.groupby(['TF','TG']).agg({'group': ['unique', 'nunique']})
+dat_candidate_groups_genes_grouped_sorted = dat_candidate_groups_genes_grouped.sort_values(by=('group','nunique'), ascending=False)
+dat_candidate_groups_genes_grouped_sorted.index.get_level_values(0).value_counts().head(20)
+
+mdd_genes = brain_gmt_cortical['ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
+dat_mdd = dat[dat['TG'].isin(mdd_genes)]
+dat_mdd_hits = dat_mdd[dat_mdd['group'].isin(candidate_groups_mdd_hits)]
+dat_mdd_grouped = dat_mdd_hits.groupby(['TF','TG']).agg({'group': ['unique', 'nunique']})
+dat_mdd_grouped_sorted = dat_mdd_grouped.sort_values(by=('group','nunique'), ascending=False)
+dat_mdd_grouped_sorted.index.get_level_values(0).value_counts().head(20)
+
+
+tf_tg_group_filtered = mean_grn_df_filtered_dict_flattened.groupby(['TF','TG']).agg({'group': ['unique', 'nunique']})
+tf_tg_group_sorted_filtered = tf_tg_group_filtered.sort_values(by=('group','nunique'), ascending=False)
+tf_tg_group_sorted_filtered_candidate_groups = tf_tg_group_sorted_filtered.loc[tf_tg_group_sorted_filtered[('group','unique')].apply(lambda x: all(np.isin(candidate_groups_canonical, x)))]
+#tf_tg_group_sorted_filtered_tops = tf_tg_group_sorted_filtered.loc[tf_tg_group_sorted_filtered['group','nunique'].eq(tf_tg_group_sorted_filtered['group','nunique'].max())]
+
+tmp1 = tf_tg_group_sorted_filtered_candidate_groups.index.get_level_values(0).value_counts(); tmp1.name = 'num'
+tmp2 = mean_grn_df['TF'].value_counts(); tmp2.name = 'denom'
+tmp = pd.merge(tmp1, tmp2, left_index=True, right_index=True)
+tf_rank = (tmp['num'] / np.log1p(tmp['denom'])).sort_values(ascending=False).to_frame()
+tf_rank['rank'] = np.arange(len(tf_rank))
+#LAPLACE: ((tmp['num'] + 1) / (len(mean_grn_df_filtered_dict_flattened) + mean_grn_df_filtered_dict_flattened['TF'].nunique())).sort_values(ascending=False).to_frame().head(12)
+
+tf_tg_group_filtered_pruned = mean_grn_df_filtered_pruned_dict_flattened.groupby(['TF','TG']).agg({'group': ['unique', 'nunique']})
+tf_tg_group_sorted_filtered_pruned = tf_tg_group_filtered_pruned.sort_values(by=('group','nunique'), ascending=False)
+tf_tg_group_sorted_filtered_pruned_candidate_groups = tf_tg_group_sorted_filtered_pruned.loc[tf_tg_group_sorted_filtered_pruned[('group','unique')].apply(lambda x: any(np.isin(candidate_groups_canonical, x)))]
+
+westside_hits = tf_tg_group_sorted_filtered_candidate_groups.loc[
+    tf_tg_group_sorted_filtered_candidate_groups.index.isin(tf_tg_group_sorted_filtered_pruned_candidate_groups.index)
+]
+westside_hits_wtf_not = westside_hits.reset_index().droplevel(1, axis=1).loc[:,['TF','TG']].groupby('TG').agg({
+    'TF': ('unique', 'nunique')
+}).sort_values(by=('TF', 'nunique'), ascending=False)
+
+# Convert to adjacency matrix (TF x TG)
+tf_unique_col = westside_hits_wtf_not[('TF', 'unique')]
+all_tfs = sorted(set([tf for tf_list in tf_unique_col for tf in tf_list]))
+all_tgs = westside_hits_wtf_not.index.tolist()
+
+adjacency_matrix = pd.DataFrame(0, index=all_tfs, columns=all_tgs)
+for tg in all_tgs:
+    tfs = tf_unique_col[tg]
+    adjacency_matrix.loc[tfs, tg] = 1
+
+
+
+# Plot adjacency matrix as network graph
+G = nx.DiGraph()
+# Add nodes with node type attribute
+for tf in all_tfs:
+    G.add_node(tf, node_type='TF')
+for tg in all_tgs:
+    G.add_node(tg, node_type='TG')
+# Add edges from adjacency matrix
+for tf in all_tfs:
+    for tg in all_tgs:
+        if adjacency_matrix.loc[tf, tg] == 1:
+            G.add_edge(tf, tg)
+
+# Weakly connected components (treats graph as undirected for connectivity)
+components = list(nx.weakly_connected_components(G))
+
+# Keep only the largest component
+largest = max(components, key=len)
+G = G.subgraph(largest).copy()
+
+# Create layout
+pos = nx.fruchterman_reingold_layout(G, k=1, iterations=50, seed=42)
+#pos = nx.nx_agraph.graphviz_layout(G, prog="twopi", args="")
+
+# Plot network
+fig, ax = plt.subplots(figsize=(16, 12))
+# Draw nodes with different colors for TFs and TGs
+tf_nodes = [n for n, d in G.nodes(data=True) if d['node_type'] == 'TF']
+tg_nodes = [n for n, d in G.nodes(data=True) if d['node_type'] == 'TG']
+nx.draw_networkx_nodes(G, pos, nodelist=tf_nodes, node_color='lightblue', 
+                       node_size=500, alpha=0.9, ax=ax, label='TF')
+nx.draw_networkx_nodes(G, pos, nodelist=tg_nodes, node_color='lightcoral', 
+                       node_size=500, alpha=0.9, ax=ax, label='TG')
+# Draw edges
+nx.draw_networkx_edges(G, pos, alpha=0.3, arrows=True, arrowsize=10, 
+                       edge_color='gray', ax=ax)
+# Draw labels (optional - can be commented out if too cluttered)
+nx.draw_networkx_labels(G, pos, font_size=8, ax=ax)
+ax.legend()
+ax.set_title('TF-TG Network Graph', fontsize=14, fontweight='bold')
+ax.axis('off')
+plt.tight_layout()
+
+plt.savefig(os.path.join(os.environ.get('OUTPATH', '.'), 'westside_hits_network.png'), 
+            dpi=300, bbox_inches='tight')
+plt.close()
+'''
 
 ''' FLAWED
 for sex in unique_sexes:
