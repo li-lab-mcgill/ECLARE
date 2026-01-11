@@ -688,7 +688,7 @@ G = protected_k_core(G, k=5, whitelist=["NR3C1", "NR4A2"])
 print(f"Shrunken: {G.number_of_nodes()} nodes")
 
 # Cluster bipartite graph (clusters stored as node attribute "cluster")
-n_clusters = 4
+n_clusters = 3
 G = cluster_bipartite_graph(G, n_clusters=n_clusters)
 
 # Separate nodes by type (for MARKER SHAPES)
@@ -785,7 +785,7 @@ nx.draw_networkx_edges(
     edge_color=edge_colors,
     arrows=True,
     arrowsize=10,
-    connectionstyle="arc3,rad=0.2",
+    connectionstyle="arc3,rad=-0.2",
     alpha=0.7,
     ax=ax
 )
@@ -798,22 +798,37 @@ ax.axis("off")
 plt.tight_layout()
 plt.show()
 
+# -----------------------------
+# Save graph data for HoloViews visualization
+# -----------------------------
+# Save all needed objects for the holoviews_grn_graph.py script
+graph_data = {
+    'G': G,
+    'pos': pos,
+    'tf_nodes': tf_nodes,
+    'tg_nodes': tg_nodes,
+    'tg_special': tg_special,
+    'special_tg': special_tg
+}
+graph_pickle_path = os.path.join(os.environ['OUTPATH'], 'grn_graph_data.pkl')
+with open(graph_pickle_path, 'wb') as f:
+    pickle.dump(graph_data, f)
+print(f"Saved graph data for HoloViews to: {graph_pickle_path}")
+print(f"Run: python holoviews_grn_graph.py --input {graph_pickle_path}")
 
-## save graph files for Figure 3e
-filename_key = f"mdd_grn_fig3e_{len(G.nodes)}_nodes"
+## get hits by enhancer for NR4A2-ABHD17B
+hits_by_enhancer = (
+    abhd17b_exn_skip1_hits_df
+    .assign(TF_TG=lambda d: d['TF'].astype(str) + '-' + d['TG'].astype(str))
+    .groupby('enhancer').agg({
+        'TF_TG': ['unique', 'nunique']
+    })
+).sort_values(('TF_TG','nunique'), ascending=False)
 
-edge_df = nx.to_pandas_edgelist(G)
-edge_df_path = os.path.join(os.environ['OUTPATH'], f"{filename_key}.csv")
-edge_df.to_csv(edge_df_path, index=False)
-
-# Save the graph in GraphML format for import in Cytoscape
-graphml_path = os.path.join(os.environ['OUTPATH'], f"{filename_key}.graphml")
-nx.write_graphml(G, graphml_path)
-
-print(f"Saved graph files as:\n {edge_df_path} \n {graphml_path}")
-print("Filename key:", filename_key)
-
-
+hits_nr4a2_abhd17b_enhancer = \
+hits_by_enhancer.loc[
+    abhd17b_exn_skip1_hits_df.set_index('TF').loc['NR4A2'].iloc[1]
+].loc[('TF_TG',  'unique')]
 '''
 
 '''
