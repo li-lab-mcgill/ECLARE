@@ -513,36 +513,6 @@ ExN_Oli_EGR1_SOX2 = np.intersect1d(female_ExN_Oli_EGR1_SOX2, male_ExN_Oli_EGR1_S
 ExN_Oli_EGR1_SOX2_NR4A2 = np.intersect1d(ExN_Oli_EGR1_SOX2, female_ExN_Oli_EGR1_SOX2_NR4A2, male_ExN_Oli_EGR1_SOX2_NR4A2)
 
 '''
-with open(os.path.join(output_dir, 'broad_gene_series_dict.pkl'), 'rb') as f: res_dict = pickle.load(f)
-enrs_mdd_dn_genes_series = res_dict['enrs_mdd_dn_genes_series']
-
-nr4a2_exn_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
-    mean_grn_df_filtered_pruned_dict_flattened['TF'].isin(['NR4A2']) &
-    mean_grn_df_filtered_pruned_dict_flattened['group'].str.contains('ExN')
-    ].loc[:,['TF','TG','group']].set_index('group')
-
-assert (nr4a2_exn_hits_df['TG'].unique().item() == 'ABHD17B') # show that only ABHD17B as target for NR4A2 in ExN
-assert (nr4a2_exn_hits_df.index.unique().item() == 'female_ExN') # show that only female ExN
-
-abhd17b_exn_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
-    mean_grn_df_filtered_pruned_dict_flattened['TG'].isin(['ABHD17B']) &
-    mean_grn_df_filtered_pruned_dict_flattened['group'].eq('female_ExN')
-    ].loc[:,['TF','TG','group','enhancer']].set_index('group')
-
-abhd17b_exn_skip1_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
-    mean_grn_df_filtered_pruned_dict_flattened['TF'].isin(abhd17b_exn_hits_df['TF']) &
-    mean_grn_df_filtered_pruned_dict_flattened['group'].eq('female_ExN')
-    ].loc[:,['TF','TG','group','enhancer']].set_index('group')
-
-adjacency_matrix = pd.get_dummies(abhd17b_exn_skip1_hits_df.set_index('TF')['TG']).astype(int)
-adjacency_matrix = adjacency_matrix.groupby(adjacency_matrix.index).sum()
-adjacency_matrix_binary = adjacency_matrix.applymap(lambda x: 1 if x > 0 else 0)
-
-#adjacency_matrix_binary_trunc = adjacency_matrix_binary.loc[:, adjacency_matrix_binary.columns.isin(['ABHD17B'] + mdd_genes)]
-adjacency_matrix_binary_trunc = adjacency_matrix_binary.copy()
-adjacency_matrix_binary_trunc = adjacency_matrix_binary_trunc.loc[adjacency_matrix_binary_trunc.sum(1).ge(2) | adjacency_matrix_binary_trunc.index.isin(['NR3C1','NR4A2'])]
-adjacency_matrix_binary_trunc = adjacency_matrix_binary_trunc.loc[:,adjacency_matrix_binary_trunc.sum(0).ge(2)]
-
 def protected_k_core(G, k, whitelist):
     """
     Standard k-core algorithm that refuses to delete nodes in the whitelist.
@@ -668,6 +638,34 @@ def cluster_bipartite_graph(G, n_clusters=8, degree_threshold=0.9):
                 G2.add_edge(tf, tg)
 
     return G2
+
+with open(os.path.join(output_dir, 'broad_gene_series_dict.pkl'), 'rb') as f: res_dict = pickle.load(f)
+enrs_mdd_dn_genes_series = res_dict['enrs_mdd_dn_genes_series']
+
+nr4a2_exn_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
+    mean_grn_df_filtered_pruned_dict_flattened['TF'].isin(['NR4A2']) &
+    mean_grn_df_filtered_pruned_dict_flattened['group'].str.contains('ExN')
+    ].loc[:,['TF','TG','group']].set_index('group')
+
+assert (nr4a2_exn_hits_df['TG'].unique().item() == 'ABHD17B') # show that only ABHD17B as target for NR4A2 in ExN
+assert (nr4a2_exn_hits_df.index.unique().item() == 'female_ExN') # show that only female ExN
+
+abhd17b_exn_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
+    mean_grn_df_filtered_pruned_dict_flattened['TG'].isin(['ABHD17B']) &
+    mean_grn_df_filtered_pruned_dict_flattened['group'].eq('female_ExN')
+    ].loc[:,['TF','TG','group','enhancer']].set_index('group')
+
+abhd17b_exn_skip1_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
+    mean_grn_df_filtered_pruned_dict_flattened['TF'].isin(abhd17b_exn_hits_df['TF']) &
+    mean_grn_df_filtered_pruned_dict_flattened['group'].eq('female_ExN')
+    ].loc[:,['TF','TG','group','enhancer']].set_index('group')
+
+adjacency_matrix = pd.get_dummies(abhd17b_exn_skip1_hits_df.set_index('TF')['TG']).astype(int)
+adjacency_matrix = adjacency_matrix.groupby(adjacency_matrix.index).sum()
+adjacency_matrix_binary = adjacency_matrix.applymap(lambda x: 1 if x > 0 else 0)
+
+adjacency_matrix_binary_trunc = adjacency_matrix_binary.loc[adjacency_matrix_binary.sum(1).ge(2) | adjacency_matrix_binary.index.isin(['NR3C1','NR4A2'])]
+adjacency_matrix_binary_trunc = adjacency_matrix_binary_trunc.loc[:,adjacency_matrix_binary_trunc.sum(0).ge(2)]
 
 # -----------------------------
 # Build initial graph from adjacency matrices
@@ -816,9 +814,22 @@ with open(graph_pickle_path, 'wb') as f:
 print(f"Saved graph data for HoloViews to: {graph_pickle_path}")
 print(f"Run: python holoviews_grn_graph.py --input {graph_pickle_path}")
 
-## get hits by enhancer for NR4A2-ABHD17B
+## get hits by enhancer for NR4A2-ABHD17B (before pruning...)
+abhd17b_exn_hits_df_after_pruning = abhd17b_exn_hits_df.loc[
+    abhd17b_exn_hits_df['TF'].isin(G.nodes)
+    ]
+
+abhd17b_skip1_hits_df_after_pruning = abhd17b_exn_skip1_hits_df.loc[
+    abhd17b_exn_skip1_hits_df['TF'].isin(G.nodes)
+    ]
+
+abhd17b_nr4a2_enhancer_hits = abhd17b_exn_hits_df_after_pruning.value_counts('enhancer', normalize=False).loc[
+    abhd17b_exn_hits_df_after_pruning.set_index('TF').loc['NR4A2'].iloc[1]
+]
+print(f"{abhd17b_nr4a2_enhancer_hits} of {len(abhd17b_exn_hits_df_after_pruning)} TFs share same enhancer as NR4A2 - ABHD17B edges after k-core pruning")
+
 hits_by_enhancer = (
-    abhd17b_exn_skip1_hits_df
+    abhd17b_skip1_hits_df_after_pruning
     .assign(TF_TG=lambda d: d['TF'].astype(str) + '-' + d['TG'].astype(str))
     .groupby('enhancer').agg({
         'TF_TG': ['unique', 'nunique']
@@ -827,8 +838,11 @@ hits_by_enhancer = (
 
 hits_nr4a2_abhd17b_enhancer = \
 hits_by_enhancer.loc[
-    abhd17b_exn_skip1_hits_df.set_index('TF').loc['NR4A2'].iloc[1]
+    abhd17b_skip1_hits_df_after_pruning.set_index('TF').loc['NR4A2'].iloc[1]
 ].loc[('TF_TG',  'unique')]
+
+print(f"Edges of NR4A2 - ABHD17B that share same enhancer after k-core pruning: {hits_nr4a2_abhd17b_enhancer}")
+
 '''
 
 '''
