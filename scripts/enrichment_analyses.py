@@ -512,7 +512,8 @@ male_ExN_Oli_EGR1_SOX2_NR4A2 = np.intersect1d(male_ExN_Oli_EGR1_SOX2, male_ExN_O
 ExN_Oli_EGR1_SOX2 = np.intersect1d(female_ExN_Oli_EGR1_SOX2, male_ExN_Oli_EGR1_SOX2)
 ExN_Oli_EGR1_SOX2_NR4A2 = np.intersect1d(ExN_Oli_EGR1_SOX2, female_ExN_Oli_EGR1_SOX2_NR4A2, male_ExN_Oli_EGR1_SOX2_NR4A2)
 
-'''
+#%% ABHD17B sugraph in female ExN
+
 def protected_k_core(G, k, whitelist):
     """
     Standard k-core algorithm that refuses to delete nodes in the whitelist.
@@ -843,147 +844,7 @@ hits_by_enhancer.loc[
 
 print(f"Edges of NR4A2 - ABHD17B that share same enhancer after k-core pruning: {hits_nr4a2_abhd17b_enhancer}")
 
-'''
-
-'''
-dat = mean_grn_df_filtered_dict_flattened.copy()
-candidate_groups_canonical = ['female_ExN', 'female_Oli', 'male_ExN', 'male_Oli']
-candidate_groups_mdd_hits = candidate_groups_canonical + ['female_End', 'male_End', 'female_InN']
-candidate_groups_mdd_nominal = candidate_groups_mdd_hits + ['female_Ast', 'male_InN', 'male_OPC']
-
-dat_candidate_groups = dat[dat['group'].isin(candidate_groups_mdd_nominal)]
-tf_tg_group = dat_candidate_groups.groupby(['TF','TG']).agg({'group': ['unique', 'nunique']})
-tf_tg_group_sorted = tf_tg_group.sort_values(by=('group','nunique'), ascending=False)
-#tf_tg_group_sorted_candidate_groups = tf_tg_group_sorted.loc[tf_tg_group_sorted['group','unique'].apply(lambda x: any(np.isin(x, candidate_groups)))]
-#tf_tg_group_sorted_candidate_groups.index.get_level_values(0).value_counts().head(20)
-
-dat_candidate_groups_genes = dat[dat['group'].isin(candidate_groups_mdd_nominal) & dat['TG'].isin(enrs_mdd_dn_genes_series)]
-dat_candidate_groups_genes_grouped = dat_candidate_groups_genes.groupby(['TF','TG']).agg({'group': ['unique', 'nunique']})
-dat_candidate_groups_genes_grouped_sorted = dat_candidate_groups_genes_grouped.sort_values(by=('group','nunique'), ascending=False)
-dat_candidate_groups_genes_grouped_sorted.index.get_level_values(0).value_counts().head(20)
-
-mdd_genes = brain_gmt_cortical['ASTON_MAJOR_DEPRESSIVE_DISORDER_DN']
-dat_mdd = dat[dat['TG'].isin(mdd_genes)]
-dat_mdd_hits = dat_mdd[dat_mdd['group'].isin(candidate_groups_mdd_hits)]
-dat_mdd_grouped = dat_mdd_hits.groupby(['TF','TG']).agg({'group': ['unique', 'nunique']})
-dat_mdd_grouped_sorted = dat_mdd_grouped.sort_values(by=('group','nunique'), ascending=False)
-dat_mdd_grouped_sorted.index.get_level_values(0).value_counts().head(20)
-
-
-tf_tg_group_filtered = mean_grn_df_filtered_dict_flattened.groupby(['TF','TG']).agg({'group': ['unique', 'nunique']})
-tf_tg_group_sorted_filtered = tf_tg_group_filtered.sort_values(by=('group','nunique'), ascending=False)
-tf_tg_group_sorted_filtered_candidate_groups = tf_tg_group_sorted_filtered.loc[tf_tg_group_sorted_filtered[('group','unique')].apply(lambda x: all(np.isin(candidate_groups_canonical, x)))]
-#tf_tg_group_sorted_filtered_tops = tf_tg_group_sorted_filtered.loc[tf_tg_group_sorted_filtered['group','nunique'].eq(tf_tg_group_sorted_filtered['group','nunique'].max())]
-
-tmp1 = tf_tg_group_sorted_filtered_candidate_groups.index.get_level_values(0).value_counts(); tmp1.name = 'num'
-tmp2 = mean_grn_df['TF'].value_counts(); tmp2.name = 'denom'
-tmp = pd.merge(tmp1, tmp2, left_index=True, right_index=True)
-tf_rank = (tmp['num'] / np.log1p(tmp['denom'])).sort_values(ascending=False).to_frame()
-tf_rank['rank'] = np.arange(len(tf_rank))
-#LAPLACE: ((tmp['num'] + 1) / (len(mean_grn_df_filtered_dict_flattened) + mean_grn_df_filtered_dict_flattened['TF'].nunique())).sort_values(ascending=False).to_frame().head(12)
-
-tf_tg_group_filtered_pruned = mean_grn_df_filtered_pruned_dict_flattened.groupby(['TF','TG']).agg({'group': ['unique', 'nunique']})
-tf_tg_group_sorted_filtered_pruned = tf_tg_group_filtered_pruned.sort_values(by=('group','nunique'), ascending=False)
-tf_tg_group_sorted_filtered_pruned_candidate_groups = tf_tg_group_sorted_filtered_pruned.loc[tf_tg_group_sorted_filtered_pruned[('group','unique')].apply(lambda x: any(np.isin(candidate_groups_canonical, x)))]
-
-westside_hits = tf_tg_group_sorted_filtered_candidate_groups.loc[
-    tf_tg_group_sorted_filtered_candidate_groups.index.isin(tf_tg_group_sorted_filtered_pruned_candidate_groups.index)
-]
-westside_hits_wtf_not = westside_hits.reset_index().droplevel(1, axis=1).loc[:,['TF','TG']].groupby('TG').agg({
-    'TF': ('unique', 'nunique')
-}).sort_values(by=('TF', 'nunique'), ascending=False)
-
-# Convert to adjacency matrix (TF x TG)
-tf_unique_col = westside_hits_wtf_not[('TF', 'unique')]
-all_tfs = sorted(set([tf for tf_list in tf_unique_col for tf in tf_list]))
-all_tgs = westside_hits_wtf_not.index.tolist()
-
-adjacency_matrix = pd.DataFrame(0, index=all_tfs, columns=all_tgs)
-for tg in all_tgs:
-    tfs = tf_unique_col[tg]
-    adjacency_matrix.loc[tfs, tg] = 1
-
-
-
-# Plot adjacency matrix as network graph
-G = nx.DiGraph()
-# Add nodes with node type attribute
-for tf in all_tfs:
-    G.add_node(tf, node_type='TF')
-for tg in all_tgs:
-    G.add_node(tg, node_type='TG')
-# Add edges from adjacency matrix
-for tf in all_tfs:
-    for tg in all_tgs:
-        if adjacency_matrix.loc[tf, tg] == 1:
-            G.add_edge(tf, tg)
-
-# Weakly connected components (treats graph as undirected for connectivity)
-components = list(nx.weakly_connected_components(G))
-
-# Keep only the largest component
-largest = max(components, key=len)
-G = G.subgraph(largest).copy()
-
-# Create layout
-pos = nx.fruchterman_reingold_layout(G, k=1, iterations=50, seed=42)
-#pos = nx.nx_agraph.graphviz_layout(G, prog="twopi", args="")
-
-# Plot network
-fig, ax = plt.subplots(figsize=(16, 12))
-# Draw nodes with different colors for TFs and TGs
-tf_nodes = [n for n, d in G.nodes(data=True) if d['node_type'] == 'TF']
-tg_nodes = [n for n, d in G.nodes(data=True) if d['node_type'] == 'TG']
-nx.draw_networkx_nodes(G, pos, nodelist=tf_nodes, node_color='lightblue', 
-                       node_size=500, alpha=0.9, ax=ax, label='TF')
-nx.draw_networkx_nodes(G, pos, nodelist=tg_nodes, node_color='lightcoral', 
-                       node_size=500, alpha=0.9, ax=ax, label='TG')
-# Draw edges
-nx.draw_networkx_edges(G, pos, alpha=0.3, arrows=True, arrowsize=10, 
-                       edge_color='gray', ax=ax)
-# Draw labels (optional - can be commented out if too cluttered)
-nx.draw_networkx_labels(G, pos, font_size=8, ax=ax)
-ax.legend()
-ax.set_title('TF-TG Network Graph', fontsize=14, fontweight='bold')
-ax.axis('off')
-plt.tight_layout()
-
-plt.savefig(os.path.join(os.environ.get('OUTPATH', '.'), 'westside_hits_network.png'), 
-            dpi=300, bbox_inches='tight')
-plt.close()
-'''
-
-''' FLAWED
-for sex in unique_sexes:
-    sex = sex.lower()
-    for celltype in unique_celltypes:
-        unique_TF_TG_combinations_df = mean_grn_df_filtered_pruned_dict[sex][celltype][['TF', 'TG']].drop_duplicates()
-        unique_TF_TG_combinations_str = unique_TF_TG_combinations_df.apply(lambda x: ' - '.join(x), axis=1).values
-        unique_TF_TG_combinations_dict[sex][celltype] = unique_TF_TG_combinations_str
-
-        pairs = set(unique_TF_TG_combinations_dict[sex][celltype])
-        
-        if not shared_TF_TG_pairs: # ...if empty set, initialize with current pairs
-            shared_TF_TG_pairs = pairs.copy()
-        else:
-            shared_TF_TG_pairs = shared_TF_TG_pairs.intersection(pairs) # returns empty set if no intersection, then hits conditional above...
-            
-        print('Current size of shared TF-TG pairs:', len(shared_TF_TG_pairs))
-        all_TF_TG_pairs = all_TF_TG_pairs.union(pairs)
-
-shared_TF_TG_pairs_df = pd.DataFrame(shared_TF_TG_pairs).iloc[:, 0].str.split(' - ', expand=True)
-shared_TF_TG_pairs_df.columns = ['TF', 'TG']
-shared_TF_TG_pairs_df.sort_values(by='TG', inplace=True)
-#shared_TF_TG_pairs_df.to_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'), index=False)
-
-print(f'Shared TF-TG pairs (n={len(shared_TF_TG_pairs)} out of {len(all_TF_TG_pairs)}):')
-print(shared_TF_TG_pairs_df)
-
-shared_TF_TG_pairs_df_grouped = shared_TF_TG_pairs_df.groupby('TF').agg({
-    'TG': [list, 'nunique'],
-}).sort_values(by=('TG', 'nunique'), ascending=False)
-'''
-
+#%% enrichment analysis on shared TF-TG pairs
 def chea_2022_enrichment(shared_TF_TG_pairs_df_grouped):
 
     enriched_TF_TG_pairs_dict = dict()
