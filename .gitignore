@@ -8,6 +8,7 @@ magma_*/
 benchmark_*/**/*_env
 **/.git
 slurm-*.out
+ECLARE_v*.pdf
 
 *.zip
 *.tmp
