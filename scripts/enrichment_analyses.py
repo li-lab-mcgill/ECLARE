@@ -18,6 +18,8 @@ from scanpy.tl import score_genes
 from statsmodels.stats.weightstats import DescrStatsW
 import json
 import scanpy as sc
+import gseapy as gp
+import networkx as nx
 
 # Set matplotlib to use a thread-safe backend
 import matplotlib
@@ -40,6 +42,7 @@ from types import SimpleNamespace
 from joblib import Parallel, delayed
 from multiprocessing import cpu_count
 import threading
+from tqdm import tqdm
 
 from eclare.post_hoc_utils import \
     extract_target_source_replicate, initialize_dicts, assign_to_dicts, perform_gene_set_enrichment, differential_grn_analysis, process_celltype, load_model_and_metadata, get_brain_gmt, magma_dicts_to_df, get_next_version_dir, compute_LR_grns, do_enrichr, find_hits_overlap, \
@@ -48,6 +51,8 @@ from eclare.post_hoc_utils import \
 
 cuda_available = torch.cuda.is_available()
 device = 'cuda' if cuda_available else 'cpu'
+
+#%% set method IDs and output directory
 
 ## Create dict for methods and job_ids
 methods_id_dict = {
@@ -397,10 +402,21 @@ all_TF_TG_pairs = set()
 for sex in unique_sexes:
     sex = sex.lower()
 
+    # Create progress bar
+    pbar = tqdm(total=len(unique_celltypes), desc=f"Computing LR GRNs ({sex})")
+    
+    # Wrapper function to update progress bar
+    def compute_with_progress(*args, **kwargs):
+        result = compute_LR_grns(*args, **kwargs)
+        pbar.update(1)
+        return result
+    
     results = Parallel(n_jobs=min(cpu_count(), len(unique_celltypes)), backend='threading')(
-        delayed(compute_LR_grns)(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac_dict, output_dir=output_dir)
+        delayed(compute_with_progress)(sex, celltype, mean_grn_df_filtered_dict, X_rna_dict, X_atac_dict, output_dir=output_dir)
         for celltype in unique_celltypes
     )
+    
+    pbar.close()
 
     for celltype, result in zip(unique_celltypes, results):
         mean_grn_df_filtered_pruned_dict[sex][celltype] = result
@@ -408,6 +424,20 @@ for sex in unique_sexes:
 ## save mean_grn_df_filtered_pruned_dict
 with open(os.path.join(output_dir, 'mean_grn_df_filtered_pruned_dict.pkl'), 'wb') as f:
     pickle.dump(mean_grn_df_filtered_pruned_dict, f)
+
+## save the different GRN results as separate tabs of an Excel file
+keep_cols = ['TF', 'enhancer', 'TG', 'LR', 'LR_grns']
+with pd.ExcelWriter(os.path.join(output_dir, 'grn_results.xlsx')) as writer:
+    for sex in unique_sexes:
+        sex = sex.lower()
+        for celltype in unique_celltypes:
+            mean_grn_df_filtered_pruned = mean_grn_df_filtered_pruned_dict[sex][celltype]
+            mean_grn_df_filtered_pruned = mean_grn_df_filtered_pruned[keep_cols]
+            mean_grn_df_filtered_pruned = mean_grn_df_filtered_pruned.reindex(columns=['TG', 'enhancer', 'TF', 'LR', 'LR_grns'])
+            mean_grn_df_filtered_pruned.to_excel(writer, sheet_name=f'{sex}_{celltype}', index=False)
+            print(f'Saved {sex}_{celltype} to Excel file')
+            #writer.save()
+print(f'Saved GRN results to Excel file to {os.path.join(output_dir, "grn_results.xlsx")}')
 
 
 ## save peak BED files for GREAT analysis (R script)
@@ -426,68 +456,452 @@ for sex in unique_sexes:
         peaks_bed.to_csv(os.path.join(output_dir, 'peak_bed_files', f'{sex}_{celltype}_peaks.bed'), sep='\t', header=False, index=False)
 
 
-## find shared TF-TG pairs across all celltypes and sexes
+#%% find shared TF-TG pairs across all celltypes and sexes
+
+'''
+output_dir = os.path.join(os.environ['OUTPATH'], 'enrichment_analyses_16103846_41')
+with open(os.path.join(output_dir, 'mean_grn_df_filtered_pruned_dict.pkl'), 'rb') as f:
+    mean_grn_df_filtered_pruned_dict = pickle.load(f)
+with open(os.path.join(output_dir, 'mean_grn_df_filtered_dict.pkl'), 'rb') as f:
+    mean_grn_df_filtered_dict = pickle.load(f)
+unique_sexes = ['female', 'male']
+unique_celltypes = list(mean_grn_df_filtered_dict[unique_sexes[0]].keys())
+'''
+
+## flatten mean_grn_df_filtered_dict
+mean_grn_df_filtered_dict_flattened = []
+mean_grn_df_filtered_pruned_dict_flattened = []
+
 for sex in unique_sexes:
     sex = sex.lower()
     for celltype in unique_celltypes:
-        unique_TF_TG_combinations_df = mean_grn_df_filtered_pruned_dict[sex][celltype][['TF', 'TG']].drop_duplicates()
-        unique_TF_TG_combinations_str = unique_TF_TG_combinations_df.apply(lambda x: ' - '.join(x), axis=1).values
-        unique_TF_TG_combinations_dict[sex][celltype] = unique_TF_TG_combinations_str
+        mean_grn_df_filtered_dict_flattened.append(
+            mean_grn_df_filtered_dict[sex][celltype].assign(group=f'{sex}_{celltype}'))
+        mean_grn_df_filtered_pruned_dict_flattened.append(
+            mean_grn_df_filtered_pruned_dict[sex][celltype].assign(group=f'{sex}_{celltype}'))
 
-        pairs = set(unique_TF_TG_combinations_dict[sex][celltype])
-        
-        if not shared_TF_TG_pairs:
-            shared_TF_TG_pairs = pairs
-        else:
-            shared_TF_TG_pairs = shared_TF_TG_pairs.intersection(pairs)
+mean_grn_df_filtered_dict_flattened = pd.concat(mean_grn_df_filtered_dict_flattened)
+mean_grn_df_filtered_pruned_dict_flattened = pd.concat(mean_grn_df_filtered_pruned_dict_flattened)
 
-        all_TF_TG_pairs = all_TF_TG_pairs.union(pairs)
+## get shared TF-TG pairs across female ExN and Oli
+#female_ExN_Oli = mean_grn_df_filtered_pruned_dict_flattened.loc[mean_grn_df_filtered_pruned_dict_flattened['group'].isin(['female_ExN', 'female_Oli'])]
+female_ExN_Oli = mean_grn_df_filtered_dict_flattened.loc[mean_grn_df_filtered_dict_flattened['group'].isin(['female_ExN', 'female_Oli'])]
+female_ExN_Oli_counts = female_ExN_Oli.groupby(['TF','TG'])['group'].nunique()
+female_ExN_Oli_shared_TF_TG_pairs = female_ExN_Oli_counts.loc[female_ExN_Oli_counts.eq(2)].reset_index('TG').drop(columns='group')
 
-shared_TF_TG_pairs_df = pd.DataFrame(shared_TF_TG_pairs).iloc[:, 0].str.split(' - ', expand=True)
-shared_TF_TG_pairs_df.columns = ['TF', 'TG']
-shared_TF_TG_pairs_df.sort_values(by='TG', inplace=True)
-shared_TF_TG_pairs_df.to_csv(os.path.join(output_dir, 'shared_TF_TG_pairs.csv'), index=False)
-
-print(f'Shared TF-TG pairs (n={len(shared_TF_TG_pairs)} out of {len(all_TF_TG_pairs)}):')
-print(shared_TF_TG_pairs_df)
-
-shared_TF_TG_pairs_df_grouped = shared_TF_TG_pairs_df.groupby('TF').agg({
-    'TG': [list, 'nunique'],
+female_ExN_Oli_shared_TF_TG_pairs_grouped = female_ExN_Oli_shared_TF_TG_pairs.reset_index().groupby('TF').agg({
+    'TG': [list, 'nunique']
 }).sort_values(by=('TG', 'nunique'), ascending=False)
 
-## Perform enrichment analysis on TG regulons of TFs that are enriched in shared TF-TG pairs
-shared_TF_TG_pairs_df_grouped_filtered = shared_TF_TG_pairs_df_grouped[shared_TF_TG_pairs_df_grouped['TG','nunique'] > 1] # not interesting to find TFs with only one regulon gene
+female_ExN_Oli_EGR1_SOX2 = np.intersect1d(female_ExN_Oli_shared_TF_TG_pairs_grouped.loc['EGR1', ('TG', 'list')], female_ExN_Oli_shared_TF_TG_pairs_grouped.loc['SOX2', ('TG', 'list')])
+female_ExN_Oli_EGR1_SOX2_NR4A2 = np.intersect1d(female_ExN_Oli_EGR1_SOX2, female_ExN_Oli_shared_TF_TG_pairs_grouped.loc['NR4A2', ('TG', 'list')])
 
-for TF in shared_TF_TG_pairs_df_grouped_filtered.index:
+## get shared TF-TG pairs across male ExN and Oli
+male_ExN_Oli = mean_grn_df_filtered_dict_flattened.loc[mean_grn_df_filtered_dict_flattened['group'].isin(['male_ExN', 'male_Oli'])]
+male_ExN_Oli_counts = male_ExN_Oli.groupby(['TF','TG'])['group'].nunique()
+male_ExN_Oli_shared_TF_TG_pairs = male_ExN_Oli_counts.loc[male_ExN_Oli_counts.eq(2)].reset_index('TG').drop(columns='group')
 
-    TF_TG_pairs = shared_TF_TG_pairs_df_grouped.loc[TF, ('TG', 'list')]
-    TF_TG_pairs_series = pd.Series(TF, index=TF_TG_pairs)
-    TF_TG_pairs_series.attrs = {'sex':'all', 'celltype':'all', 'type': 'TF-TG pairs'}
+male_ExN_Oli_shared_TF_TG_pairs_grouped = male_ExN_Oli_shared_TF_TG_pairs.reset_index().groupby('TF').agg({
+    'TG': [list, 'nunique']
+}).sort_values(by=('TG', 'nunique'), ascending=False)
 
-    enrichr_results_sig = do_enrichr(TF_TG_pairs_series, 'ChEA_2022', filter_var='P-value', outdir=None) # only looking for specific TF, so no need to correct for multiple testing
+male_ExN_Oli_EGR1_SOX2 = np.intersect1d(male_ExN_Oli_shared_TF_TG_pairs_grouped.loc['EGR1', ('TG', 'list')], male_ExN_Oli_shared_TF_TG_pairs_grouped.loc['SOX2', ('TG', 'list')])
+male_ExN_Oli_EGR1_SOX2_NR4A2 = np.intersect1d(male_ExN_Oli_EGR1_SOX2, male_ExN_Oli_shared_TF_TG_pairs_grouped.loc['NR4A2', ('TG', 'list')])
 
-    if enrichr_results_sig is not None:
+## get shared TF-TG pairs across ExN and Oli across sexes
+ExN_Oli_EGR1_SOX2 = np.intersect1d(female_ExN_Oli_EGR1_SOX2, male_ExN_Oli_EGR1_SOX2)
+ExN_Oli_EGR1_SOX2_NR4A2 = np.intersect1d(ExN_Oli_EGR1_SOX2, female_ExN_Oli_EGR1_SOX2_NR4A2, male_ExN_Oli_EGR1_SOX2_NR4A2)
 
-        #enrichr_results_sig = enrichr_results_sig[enrichr_results_sig['P-value'] < 0.05]
-        enriched_tfs = enrichr_results_sig['Term'].str.split(' ').str[0]
-        enriched_species = enrichr_results_sig['Term'].str.split(' ').str[-1]
-        enriched_tfs_match_TF = np.isin(enriched_tfs, TF) & np.isin(enriched_species, 'Human')
+#%% ABHD17B sugraph in female ExN
+
+def protected_k_core(G, k, whitelist):
+    """
+    Standard k-core algorithm that refuses to delete nodes in the whitelist.
+    """
+    H = G.copy()
+    whitelist = set(whitelist)
     
-        if enriched_tfs_match_TF.any():
-            enriched_tfs_match_TF_list = enrichr_results_sig[enriched_tfs_match_TF]['Genes'].str.split(';').item()
+    while True:
+        # Find nodes to remove: degree < k AND not in whitelist
+        nodes_to_remove = [
+            n for n, d in H.degree() 
+            if d < k and n not in whitelist
+        ]
+        
+        if not nodes_to_remove:
+            break
+            
+        H.remove_nodes_from(nodes_to_remove)
+        
+    return H
 
-            if len(enriched_tfs_match_TF_list) >= 2: # at least 2 TFs should be enriched for the same TG to study interesting TFs and their regulons
-                enriched_TF_TG_pairs_dict[TF] = enriched_tfs_match_TF_list
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import networkx as nx
+from sklearn.cluster import SpectralCoclustering
+from networkx.algorithms import bipartite
+from scipy.sparse.linalg import svds
+
+def cluster_bipartite_graph(G, n_clusters=8, degree_threshold=0.9):
+    # 1. Get sets and matrix (original, full)
+    sets = bipartite.sets(G)
+    top_nodes, bottom_nodes = list(sets[0]), list(sets[1])
+    matrix = bipartite.biadjacency_matrix(
+        G, row_order=top_nodes, column_order=bottom_nodes
+    ).toarray()
+
+    n_rows, n_cols = matrix.shape
+
+    # 2. Identify dense columns (a.k.a. "full vertical bars")
+    col_densities = matrix.sum(axis=0) / n_rows
+    dense_cols_mask = col_densities > degree_threshold
+
+    dense_col_idx = np.flatnonzero(dense_cols_mask)       # indices in ORIGINAL matrix
+    keep_col_idx  = np.flatnonzero(~dense_cols_mask)
+
+    # Filter columns (for fitting only)
+    matrix_filtered = matrix[:, keep_col_idx]
+
+    # Rows that become empty after removing dense columns ("singleton rows")
+    row_sums = matrix_filtered.sum(axis=1)
+    valid_rows_mask = row_sums > 0
+
+    singleton_row_idx = np.flatnonzero(~valid_rows_mask)  # indices in ORIGINAL matrix
+    keep_row_idx      = np.flatnonzero(valid_rows_mask)
+
+    # Final matrix for fitting (no dense cols, no empty rows)
+    matrix_final = matrix[np.ix_(keep_row_idx, keep_col_idx)]
+
+    print(f"Removed {dense_col_idx.size} dense columns.")
+    print(f"Removed {singleton_row_idx.size} rows that became empty.")
+
+    # plot singular values
+    u, s, vt = svds(matrix_final.astype(float), k=min(matrix_final.shape) - 1)
+    plt.plot(sorted(s, reverse=True), "o-")
+    plt.title("Singular Values (Look for the Elbow)")
+    plt.show()
+
+    # 3. Perform Co-Clustering (on filtered matrix)
+    model = SpectralCoclustering(n_clusters=n_clusters, random_state=42)
+    model.fit(matrix_final)
+
+    # Build node->cluster maps in ORIGINAL node space
+    # cluster id -1 means "special": singleton rows or dense columns (excluded from fit)
+    top_cluster = np.full(len(top_nodes), -1, dtype=int)
+    bottom_cluster = np.full(len(bottom_nodes), -1, dtype=int)
+
+    top_cluster[keep_row_idx] = model.row_labels_.astype(int)
+    bottom_cluster[keep_col_idx] = model.column_labels_.astype(int)
+
+    tf_cluster_map = {top_nodes[i]: int(top_cluster[i]) for i in range(len(top_nodes))}
+    tg_cluster_map = {bottom_nodes[j]: int(bottom_cluster[j]) for j in range(len(bottom_nodes))}
+
+    # 4. Cluster-based ordering (ONLY for the kept rows/cols)
+    ordered_keep_rows = keep_row_idx[np.argsort(model.row_labels_)]
+    ordered_keep_cols = keep_col_idx[np.argsort(model.column_labels_)]
+
+    # Optional: order dense columns by density (most dense first). Otherwise keep original order.
+    dense_col_idx = dense_col_idx[np.argsort(-col_densities[dense_col_idx])]
+
+    # 5. Reintegrate: build FULL row/col order in ORIGINAL index space
+    row_order_full = np.concatenate([singleton_row_idx, ordered_keep_rows])
+    col_order_full = np.concatenate([dense_col_idx, ordered_keep_cols])
+
+    final_matrix = matrix[np.ix_(row_order_full, col_order_full)]
+
+    # Node labels in the new order
+    final_row_nodes = [top_nodes[i] for i in row_order_full]
+    final_col_nodes = [bottom_nodes[j] for j in col_order_full]
+
+    # 6. Plot (original vs reintegrated+reordered)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    ax1.spy(matrix, aspect="auto")
+    ax1.set_title(f"Original Matrix\n({matrix.shape[0]}x{matrix.shape[1]})")
+    ax2.spy(final_matrix, aspect="auto")
+    ax2.set_title("Final Matrix (Singleton rows first, Dense cols first,\nthen co-clustered remainder)")
+    plt.tight_layout()
+    plt.show()
+
+    # cast adjacency matrix to DataFrame
+    final_matrix = pd.DataFrame(final_matrix, index=final_row_nodes, columns=final_col_nodes)
+
+    # cast as NetworkX graph (and ATTACH cluster labels to nodes)
+    G2 = nx.DiGraph()
+    for tf in final_matrix.index:
+        G2.add_node(tf, node_type="TF", cluster=tf_cluster_map.get(tf, -1))
+    for tg in final_matrix.columns:
+        G2.add_node(tg, node_type="TG", cluster=tg_cluster_map.get(tg, -1))
+
+    for tf in final_matrix.index:
+        for tg in final_matrix.columns:
+            if final_matrix.loc[tf, tg] == 1:
+                G2.add_edge(tf, tg)
+
+    return G2
+
+with open(os.path.join(output_dir, 'broad_gene_series_dict.pkl'), 'rb') as f: res_dict = pickle.load(f)
+enrs_mdd_dn_genes_series = res_dict['enrs_mdd_dn_genes_series']
+
+nr4a2_exn_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
+    mean_grn_df_filtered_pruned_dict_flattened['TF'].isin(['NR4A2']) &
+    mean_grn_df_filtered_pruned_dict_flattened['group'].str.contains('ExN')
+    ].loc[:,['TF','TG','group']].set_index('group')
+
+assert (nr4a2_exn_hits_df['TG'].unique().item() == 'ABHD17B') # show that only ABHD17B as target for NR4A2 in ExN
+assert (nr4a2_exn_hits_df.index.unique().item() == 'female_ExN') # show that only female ExN
+
+abhd17b_exn_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
+    mean_grn_df_filtered_pruned_dict_flattened['TG'].isin(['ABHD17B']) &
+    mean_grn_df_filtered_pruned_dict_flattened['group'].eq('female_ExN')
+    ].loc[:,['TF','TG','group','enhancer']].set_index('group')
+
+abhd17b_exn_skip1_hits_df = mean_grn_df_filtered_pruned_dict_flattened.loc[
+    mean_grn_df_filtered_pruned_dict_flattened['TF'].isin(abhd17b_exn_hits_df['TF']) &
+    mean_grn_df_filtered_pruned_dict_flattened['group'].eq('female_ExN')
+    ].loc[:,['TF','TG','group','enhancer']].set_index('group')
+
+adjacency_matrix = pd.get_dummies(abhd17b_exn_skip1_hits_df.set_index('TF')['TG']).astype(int)
+adjacency_matrix = adjacency_matrix.groupby(adjacency_matrix.index).sum()
+adjacency_matrix_binary = adjacency_matrix.applymap(lambda x: 1 if x > 0 else 0)
+
+adjacency_matrix_binary_trunc = adjacency_matrix_binary.loc[adjacency_matrix_binary.sum(1).ge(2) | adjacency_matrix_binary.index.isin(['NR3C1','NR4A2'])]
+adjacency_matrix_binary_trunc = adjacency_matrix_binary_trunc.loc[:,adjacency_matrix_binary_trunc.sum(0).ge(2)]
+
+# -----------------------------
+# Build initial graph from adjacency matrices
+# -----------------------------
+G = nx.DiGraph()
+for tf in adjacency_matrix_binary_trunc.index:
+    G.add_node(tf, node_type="TF")
+for tg in adjacency_matrix_binary_trunc.columns:
+    G.add_node(tg, node_type="TG")
+for tf in adjacency_matrix_binary_trunc.index:
+    for tg in adjacency_matrix_binary_trunc.columns:
+        if adjacency_matrix_binary.loc[tf, tg] == 1:
+            G.add_edge(tf, tg)
+
+# Shrink graph
+print(f"Original: {G.number_of_nodes()} nodes")
+G = protected_k_core(G, k=5, whitelist=["NR3C1", "NR4A2"])
+print(f"Shrunken: {G.number_of_nodes()} nodes")
+
+# Cluster bipartite graph (clusters stored as node attribute "cluster")
+n_clusters = 3
+G = cluster_bipartite_graph(G, n_clusters=n_clusters)
+
+# Separate nodes by type (for MARKER SHAPES)
+tf_nodes = [n for n, d in G.nodes(data=True) if d.get("node_type") == "TF"]
+tg_nodes_all = [n for n, d in G.nodes(data=True) if d.get("node_type") == "TG"]
+
+# Exception node
+special_tg = "ABHD17B"
+tg_special = [special_tg] if special_tg in tg_nodes_all else []
+tg_nodes = [n for n in tg_nodes_all if n != special_tg]
+
+# Layout
+pos = nx.shell_layout(G, nlist=[[special_tg], tf_nodes, tg_nodes], rotate=24.5)
+
+# -----------------------------
+# Node colors by cluster assignment
+# -----------------------------
+all_clusters = [d.get("cluster", -1) for _, d in G.nodes(data=True)]
+k_eff = max([c for c in all_clusters if c is not None] + [-1]) + 1  # number of non-negative clusters
+k_eff = max(k_eff, 1)
+
+cmap = plt.cm.get_cmap("tab20", k_eff)
+
+def node_color(n):
+    c = G.nodes[n].get("cluster", -1)
+    if c is None or c < 0:
+        return (0.7, 0.7, 0.7, 0.9)  # special / excluded nodes
+    return cmap(int(c))
+
+tf_colors = [node_color(n) for n in tf_nodes]
+tg_colors = [node_color(n) for n in tg_nodes]
+tg_special_colors = [node_color(n) for n in tg_special]
+
+# -----------------------------
+# Edge colors by cocluster membership (within-bicluster edges colored; others gray)
+# -----------------------------
+edges = list(G.edges())
+edge_colors = []
+for u, v in edges:
+    cu = G.nodes[u].get("cluster", -1)
+    cv = G.nodes[v].get("cluster", -1)
+    if cu is not None and cv is not None and cu >= 0 and cu == cv:
+        edge_colors.append(cmap(int(cu)))
+    else:
+        edge_colors.append((0.6, 0.6, 0.6, 0.25))  # inter-cluster / special
+
+# -----------------------------
+# Plot
+# Shapes: TF=diamond, TG=circle, ABHD17B=square
+# Colors: cluster-based
+# -----------------------------
+fig, ax = plt.subplots(figsize=(12, 10))
+
+nx.draw_networkx_nodes(
+    G, pos,
+    nodelist=tf_nodes,
+    node_color=tf_colors,
+    node_shape="D",          # diamond
+    node_size=900,
+    alpha=0.95,
+    linewidths=1.0,
+    ax=ax,
+    label="TF (diamond)"
+)
+
+nx.draw_networkx_nodes(
+    G, pos,
+    nodelist=tg_nodes,
+    node_color=tg_colors,
+    node_shape="o",          # circle
+    node_size=800,
+    alpha=0.95,
+    linewidths=1.0,
+    ax=ax,
+    label="TG (circle)"
+)
+
+if tg_special:
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=tg_special,
+        node_color=tg_special_colors,
+        node_shape="s",      # square
+        node_size=900,
+        alpha=0.98,
+        linewidths=1.2,
+        ax=ax,
+        label="ABHD17B (square)"
+    )
+
+nx.draw_networkx_edges(
+    G, pos,
+    edgelist=edges,
+    edge_color=edge_colors,
+    arrows=True,
+    arrowsize=10,
+    connectionstyle="arc3,rad=-0.2",
+    alpha=0.7,
+    ax=ax
+)
+
+nx.draw_networkx_labels(G, pos, font_size=8, ax=ax)
+
+ax.legend(loc="best")
+ax.set_title("TF–TG Network Graph (node shape by type, node/edge color by cocluster)", fontsize=14, fontweight="bold")
+ax.axis("off")
+plt.tight_layout()
+plt.show()
+
+# -----------------------------
+# Save graph data for HoloViews visualization
+# -----------------------------
+# Save all needed objects for the holoviews_grn_graph.py script
+graph_data = {
+    'G': G,
+    'pos': pos,
+    'tf_nodes': tf_nodes,
+    'tg_nodes': tg_nodes,
+    'tg_special': tg_special,
+    'special_tg': special_tg
+}
+graph_pickle_path = os.path.join(os.environ['OUTPATH'], 'grn_graph_data.pkl')
+with open(graph_pickle_path, 'wb') as f:
+    pickle.dump(graph_data, f)
+print(f"Saved graph data for HoloViews to: {graph_pickle_path}")
+print(f"Run: python holoviews_grn_graph.py --input {graph_pickle_path}")
+
+## get hits by enhancer for NR4A2-ABHD17B (before pruning...)
+abhd17b_exn_hits_df_after_pruning = abhd17b_exn_hits_df.loc[
+    abhd17b_exn_hits_df['TF'].isin(G.nodes)
+    ]
+
+abhd17b_skip1_hits_df_after_pruning = abhd17b_exn_skip1_hits_df.loc[
+    abhd17b_exn_skip1_hits_df['TF'].isin(G.nodes)
+    ]
+
+abhd17b_nr4a2_enhancer_hits = abhd17b_exn_hits_df_after_pruning.value_counts('enhancer', normalize=False).loc[
+    abhd17b_exn_hits_df_after_pruning.set_index('TF').loc['NR4A2'].iloc[1]
+]
+print(f"{abhd17b_nr4a2_enhancer_hits} of {len(abhd17b_exn_hits_df_after_pruning)} TFs share same enhancer as NR4A2 - ABHD17B edges after k-core pruning")
+
+hits_by_enhancer = (
+    abhd17b_skip1_hits_df_after_pruning
+    .assign(TF_TG=lambda d: d['TF'].astype(str) + '-' + d['TG'].astype(str))
+    .groupby('enhancer').agg({
+        'TF_TG': ['unique', 'nunique']
+    })
+).sort_values(('TF_TG','nunique'), ascending=False)
+
+hits_nr4a2_abhd17b_enhancer = \
+hits_by_enhancer.loc[
+    abhd17b_skip1_hits_df_after_pruning.set_index('TF').loc['NR4A2'].iloc[1]
+].loc[('TF_TG',  'unique')]
+
+print(f"Edges of NR4A2 - ABHD17B that share same enhancer after k-core pruning: {hits_nr4a2_abhd17b_enhancer}")
+
+#%% enrichment analysis on shared TF-TG pairs
+def chea_2022_enrichment(shared_TF_TG_pairs_df_grouped):
+
+    enriched_TF_TG_pairs_dict = dict()
+
+    shared_TF_TG_pairs_df_grouped_filtered = shared_TF_TG_pairs_df_grouped[shared_TF_TG_pairs_df_grouped['TG','nunique'] > 1] # not interesting to find TFs with only one regulon gene
+
+    for TF in shared_TF_TG_pairs_df_grouped_filtered.index:
+
+        TF_TG_pairs = shared_TF_TG_pairs_df_grouped.loc[TF, ('TG', 'list')]
+        TF_TG_pairs_series = pd.Series(TF, index=TF_TG_pairs)
+        TF_TG_pairs_series.attrs = {'sex':'all', 'celltype':'all', 'type': 'TF-TG pairs'}
+
+        try:
+            enr = gp.enrichr(TF_TG_pairs_series.index.to_list(), gene_sets='ChEA_2022', outdir=None)
+            enr.res2d['-log10(fdr)'] = -np.log10(enr.res2d['Adjusted P-value'])
+            enrichr_results_sig = enr.res2d
+        except Exception as e:
+            print(f"Error performing enrichment analysis for {TF}: {e}")
+            continue
+
+        plt.close('all')
+
+        if enrichr_results_sig is not None:
+
+            #enrichr_results_sig = enrichr_results_sig[enrichr_results_sig['P-value'] < 0.05]
+            enriched_tfs = enrichr_results_sig['Term'].str.split(' ').str[0]
+            enriched_species = enrichr_results_sig['Term'].str.split(' ').str[-1]
+            enriched_tfs_match_TF = np.isin(enriched_tfs, TF) & np.isin(enriched_species, 'Human')
+        
+            if enriched_tfs_match_TF.any():
+                genes_of_TF = enrichr_results_sig[enriched_tfs_match_TF]['Genes']
+                if len(genes_of_TF) == 1:
+                    enriched_tfs_match_TF_list = genes_of_TF.str.split(';').item()
+                elif len(genes_of_TF) > 1:
+                    enriched_tfs_match_TF_list = genes_of_TF.str.split(';').explode().tolist()
+
+                if len(enriched_tfs_match_TF_list) >= 2: # at least 2 TFs should be enriched for the same TG to study interesting TFs and their regulons
+                    enriched_TF_TG_pairs_dict[TF] = enriched_tfs_match_TF_list.copy()
+
+    return enriched_TF_TG_pairs_dict
+
+## Perform enrichment analysis on TG regulons of TFs that are enriched in shared TF-TG pairs
+female_enriched_TF_TG_pairs_dict = chea_2022_enrichment(female_ExN_Oli_shared_TF_TG_pairs_grouped)
+male_enriched_TF_TG_pairs_dict = chea_2022_enrichment(male_ExN_Oli_shared_TF_TG_pairs_grouped)
+
+np.intersect1d(list(female_enriched_TF_TG_pairs_dict.keys()), list(male_enriched_TF_TG_pairs_dict.keys()))
 
 ## write enriched_TF_TG_pairs_dict to json
 with open(os.path.join(output_dir, 'enriched_TF_TG_pairs_dict.json'), 'w') as f:
     json.dump(enriched_TF_TG_pairs_dict, f)
 
-
-
 #%% plot genome track around
 
 import scglue
+
+#with open(os.path.join(output_dir, f"mean_grn_df_filtered_dict.pkl"), "rb") as f:
+#    mean_grn_df_filtered_dict = pickle.load(f)
 
 female_exn_grn = mean_grn_df_filtered_dict['female']['ExN']
 

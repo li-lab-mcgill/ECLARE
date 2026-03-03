@@ -118,6 +118,89 @@ Figure 1 from manuscript: Overview of ECLARE
 </details>
 
 <details>
+<summary>Manuscript figure/code map</summary>
+
+Main figures:
+
+1. Figure 1 (overview schematic)
+   - Core model/losses: `src/eclare/models.py`, `src/eclare/losses_and_distances_utils.py`
+   - Training loop + orchestration: `src/eclare/run_utils.py`, `scripts/eclare_scripts/eclare_run.py`
+
+2. Figure 2 (benchmarking metrics; paired + unpaired MDD)
+   - ECLARE/KD-CLIP/CLIP training: `scripts/eclare_scripts/eclare_run.py`, `scripts/kd_clip_scripts`, `scripts/clip_scripts/clip_run.py`
+   - Baselines: `scripts/benchmark_diagonal`, `scripts/benchmark_vertical`
+   - Metrics + plots: `src/eclare/eval_utils.py`, `scripts/plot_figures.py`
+
+3. Figure 3 (MDD embeddings + enrichment + GRN subnetwork)
+   - MDD embedding + enrichment: `scripts/enrichment_analyses.py`
+   - Enrichment plotting: `scripts/enrichment_plots.py`
+   - GREAT validation: `scripts/rGREAT_analysis.R`
+
+4. Figure 4 (developmental integration)
+   - ECLARE developmental analysis: `scripts/developmental_post_hoc.py`
+   - Ordinal pseudotime + DPT: `scripts/ordinal_post_hoc.py`
+   - SCENIC+ eRegulon scoring: `scripts/scenicplus_post_hoc.py`
+
+5. Figure 5 (longitudinal MDD co-embedding)
+   - Co-embedding, label transfer, PAGA: `scripts/developmental_post_hoc.py`
+   - Ordinal model training: `scripts/ordinal_scripts/ordinal_run.py`
+   - DE + EnrichR for longitudinal hits: `scripts/pydeseq2_developmental_analysis.py`, `scripts/enrichment_plots.py`
+
+Supplementary figures:
+
+1. Figure S1 (Brain.GMT enrichment, sc-compReg vs pyDESeq2)
+   - `scripts/enrichment_analyses.py`, `scripts/enrichment_plots.py`
+
+2. Figure S2 (GREAT enrichment)
+   - `scripts/rGREAT_analysis.R`, `scripts/enrichment_plots.py`
+
+3. Figure S3 (H-MAGMA enrichment)
+   - `scripts/enrichment_analyses.py`, `scripts/enrichment_plots.py`
+
+4. Figure S4 (module-score DE for Brain.GMT sets)
+   - `scripts/enrichment_analyses.py`, `scripts/enrichment_plots.py`
+
+5. Figure S5 (ABHD17B external expression evidence)
+   - External sources (GTEx/psychSCREEN); no generation script in this repo
+
+6. Figure S6 (ECLARE vs scJoint vs GLUE embeddings with DPT)
+   - ECLARE: `scripts/developmental_post_hoc.py`
+   - scJoint: `scripts/benchmark_diagonal/scJoint/scJoint_latents.py`
+   - GLUE: `scripts/benchmark_vertical/glue/glue_latents.py`
+
+7. Figure S7 (CORAL ordinal embeddings: PFC_V1_Wang -> Cortex_Velmeshev)
+   - `scripts/ordinal_post_hoc.py`, `scripts/ordinal_scripts/ordinal_run.py`
+
+8. Figure S8 (Velmeshev density in ECLARE embedding)
+   - `scripts/developmental_post_hoc.py`
+
+9. Figure S9 (CORAL ordinal embeddings: PFC_Zhu -> MDD)
+   - `scripts/ordinal_post_hoc.py`, `scripts/ordinal_scripts/ordinal_run.py`
+
+10. Figure S10 (balancing donor age by modality/condition)
+    - `scripts/developmental_post_hoc.py`
+
+11. Figure S11 (co-embedding density: PFC_Zhu vs MDD)
+    - `scripts/developmental_post_hoc.py`
+
+12. Figure S12 (male-specific pseudotime branch analysis)
+    - `scripts/developmental_post_hoc.py`
+
+13. Figure S13 (pseudotemporal gene clusters)
+    - `scripts/cluster_dev_genes_by_km.py`
+
+14. Figure S14 (EnrichR for km3_mdd + EGR1 regulon overlap)
+    - `scripts/pydeseq2_developmental_analysis.py`, `scripts/enrichment_plots.py`
+
+15. Figure S15 (pychromVAR differential accessibility)
+    - `scripts/pydeseq2_developmental_analysis.py`
+
+16. Figure S16 (EGR1 eRegulon scores, male donors)
+    - `scripts/developmental_post_hoc.py`, `scripts/scenicplus_post_hoc.py`
+
+</details>
+
+<details>
 <summary>Demo: analysis on sample paired datasets</summary>
 
 
@@ -128,4 +211,3 @@ This analysis is based on using DLPFC_Anderson and DLPFC_Ma as source datasets a
 Sample data is available from Zenodo at https://doi.org/10.5281/zenodo.14794845. Instructions for downloading the data are available in the notebook.
 
 </details>
-

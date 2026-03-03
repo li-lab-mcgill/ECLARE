@@ -110,6 +110,7 @@ pydeseq2_match_length_genes_hits_df = pd.read_csv(os.path.join(output_dir, 'pyde
 pydeseq2_match_length_genes_tfs_multiple_hits = pd.read_csv(os.path.join(output_dir, 'pydeseq2_match_length_genes_tfs_multiple_hits.csv'))
 
 #%% Load GREAT results from R script output
+# ECLARE/scripts/rGREAT_analysis.R
 
 great_csv_outputs_path = os.path.join(output_dir, 'great_csv_outputs')
 great_csv_outputs_files = os.listdir(great_csv_outputs_path)
@@ -750,11 +751,11 @@ legend = ax_legend.legend(
 )
 
 # Remove axes, and save tight around the legend
-fig_legend.subplots_adjust(left=0, right=1, top=1, bottom=0)
-fig_legend.savefig(os.path.join(output_dir, 'grn_legend_only.png'), 
-                   bbox_inches='tight', 
-                   pad_inches=0.1,
-                   dpi=300)
+#fig_legend.subplots_adjust(left=0, right=1, top=1, bottom=0)
+#fig_legend.savefig(os.path.join(output_dir, 'grn_legend_only.png'), 
+#                   bbox_inches='tight', 
+#                   pad_inches=0.1,
+#                   dpi=300)
 
 #DEFUNCT nx.write_graphml(G, os.path.join(output_dir, "ABHD17B_GRN.graphml"))
 #nx.write_gexf(G, os.path.join(output_dir, "ABHD17B_GRN.gexf")) #<--- the good one
@@ -787,7 +788,7 @@ def plot_magma(magma_results_df, ax=None):
 
     # Add colorbar for tstat
     cbar = plt.colorbar(scatter, ax=ax)
-    cbar.ax.set_title('BETA', pad=10, fontsize=9)
+    cbar.ax.set_title('BETA', pad=5, fontsize=9, x=1.5)  # Slightly beyond the right edge
 
     # Add size legend for mlog10_pvalue
     sizes_describe = magma_results_df[['size_mlog10_pvalue','mlog10_pvalue']].loc[magma_results_df['mlog10_pvalue']>0].describe()
@@ -813,9 +814,9 @@ def plot_magma(magma_results_df, ax=None):
     ax.set_xticklabels(celltype_order, rotation=45, ha='right')
 
     fig.tight_layout()
-    fig.suptitle('MAGMA results for MDD GWAS')
+    fig.suptitle('H-MAGMA for MDD GWAS')
 
-    return ax
+    return fig, ax
 
 def save_proper_magma_results():
     import pandas as pd
@@ -901,14 +902,21 @@ def save_proper_magma_results():
 
 #magma_results_df = pd.read_csv('data/magma_results/magma_results_mdd_dn_pathways.txt', sep='\t')
 from eclare.post_hoc_utils import magma_dicts_to_df
-magma_results_dict = save_proper_magma_results()
+#magma_results_dict = save_proper_magma_results()
+#magma_results_df = magma_dicts_to_df(magma_results_dict)
+#magma_results_df = magma_results_df.groupby(['sex', 'celltype']).nth(2).reset_index()
+
 magma_results_df = magma_dicts_to_df(magma_results_dict)
-magma_results_df = magma_results_df.groupby(['sex', 'celltype']).nth(2).reset_index()
 magma_results_df = magma_results_df.reset_index()
 magma_results_df['mlog10_pvalue'] = -np.log10(magma_results_df['P'])
-magma_results_df['size_mlog10_pvalue'] = np.log1p(magma_results_df['mlog10_pvalue']) * 1000
+magma_results_df['size_mlog10_pvalue'] = np.log1p(magma_results_df['mlog10_pvalue']) * 500
 
-plot_magma(magma_results_df)
+fig, ax = plot_magma(magma_results_df)
+
+def mdd_figS5(fig, manuscript_figpath=os.path.join(output_dir, 'mdd_figS5.pdf')):
+    fig.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    print(f'Saving figure to {manuscript_figpath}')
+    plt.close()
 
 #%% GREAT results
 
