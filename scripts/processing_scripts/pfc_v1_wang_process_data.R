@@ -73,13 +73,13 @@ find_best_coord_pair <- function(df, candidates) {
 
 get_counts_matrix <- function(seurat_obj, assay) {
   mat <- tryCatch(
-    GetAssayData(seurat_obj, assay = assay, layer = "counts"),
+    SeuratObject::GetAssayData(seurat_obj, assay = assay, slot = "counts"),
     error = function(e) NULL
   )
 
   if (is.null(mat) || length(mat) == 0) {
     mat <- tryCatch(
-      GetAssayData(seurat_obj, assay = assay, slot = "counts"),
+      SeuratObject::GetAssayData(seurat_obj, assay = assay, layer = "counts"),
       error = function(e) NULL
     )
   }
@@ -126,7 +126,14 @@ extract_image_coordinates <- function(seurat_obj) {
 
     if (is.null(img_coords) || nrow(img_coords) == 0) next
     img_coords <- as.data.frame(img_coords)
-    if (is.null(rownames(img_coords))) next
+
+    cell_ids_for_coords <- NULL
+    if ("cell" %in% colnames(img_coords)) {
+      cell_ids_for_coords <- as.character(img_coords$cell)
+    } else if (!is.null(rownames(img_coords))) {
+      cell_ids_for_coords <- rownames(img_coords)
+    }
+    if (is.null(cell_ids_for_coords)) next
 
     pair <- find_best_coord_pair(img_coords, coord_candidates)
     if (is.null(pair)) next
@@ -135,7 +142,7 @@ extract_image_coordinates <- function(seurat_obj) {
     y <- suppressWarnings(as.numeric(img_coords[[pair[2]]]))
 
     coord_df <- data.frame(
-      cell_id = rownames(img_coords),
+      cell_id = cell_ids_for_coords,
       x = x,
       y = y,
       image_name = img,
@@ -221,9 +228,13 @@ if (ncol(obj) == 0 || nrow(obj) == 0) {
   stopf("Seurat object is empty: %d cells, %d features.", ncol(obj), nrow(obj))
 }
 
-available_assays <- Assays(obj)
+available_assays <- SeuratObject::Assays(obj)
 if (is.null(assay_name)) {
-  assay_name <- DefaultAssay(obj)
+  if ("Vizgen" %in% available_assays) {
+    assay_name <- "Vizgen"
+  } else {
+    assay_name <- DefaultAssay(obj)
+  }
 }
 if (!(assay_name %in% available_assays)) {
   stopf(
@@ -243,7 +254,17 @@ md <- md[cell_ids, , drop = FALSE]
 cat(sprintf("Using assay: %s\n", assay_name))
 
 image_coords <- extract_image_coordinates(obj)
+metadata_coord_info <- NULL
 coord_info <- NULL
+
+if (is.null(coord_cols)) {
+  metadata_coord_info <- tryCatch(
+    resolve_metadata_coords(md, coord_cols = NULL),
+    error = function(e) NULL
+  )
+} else {
+  metadata_coord_info <- resolve_metadata_coords(md, coord_cols = coord_cols)
+}
 
 if (!is.null(image_coords)) {
   aligned <- data.frame(
@@ -258,17 +279,26 @@ if (!is.null(image_coords)) {
   common_cells <- intersect(cell_ids, image_coords$cell_id)
   if (length(common_cells) > 0) {
     aligned[common_cells, c("x", "y", "image_name")] <- image_coords[common_cells, c("x", "y", "image_name")]
-    coord_info <- list(
-      coords = aligned,
-      source = "images",
-      x_col = "x_from_image",
-      y_col = "y_from_image"
-    )
+
+    source <- "images"
+    x_col <- "x_from_image"
+    y_col <- "y_from_image"
+
+    missing <- !(is.finite(aligned$x) & is.finite(aligned$y))
+    if (any(missing) && !is.null(metadata_coord_info)) {
+      fill_cells <- rownames(aligned)[missing]
+      aligned[fill_cells, c("x", "y")] <- metadata_coord_info$coords[fill_cells, c("x", "y"), drop = FALSE]
+      source <- sprintf("images+%s", metadata_coord_info$source)
+      x_col <- sprintf("x_from_image_or_%s", metadata_coord_info$x_col)
+      y_col <- sprintf("y_from_image_or_%s", metadata_coord_info$y_col)
+    }
+
+    coord_info <- list(coords = aligned, source = source, x_col = x_col, y_col = y_col)
   }
 }
 
 if (is.null(coord_info)) {
-  coord_info <- resolve_metadata_coords(md, coord_cols)
+  coord_info <- metadata_coord_info
 }
 
 if (is.null(coord_info)) {
@@ -295,9 +325,10 @@ if (!is.null(sample_col)) {
   sample_key <- sample_col
   sample_values <- as.character(md[[sample_col]])
 } else {
+  # Upstream MERFISH processing script uses Sample_ID and fov annotations.
   sample_candidates <- c(
-    "sample", "sample_id", "orig.ident", "section", "slice",
-    "library_id", "replicate", "subject"
+    "Sample_ID", "sample_id", "sample", "orig.ident", "fov", "FOV",
+    "section", "slice", "library_id", "replicate", "subject"
   )
   detected_sample_col <- match_existing_col(colnames(md), sample_candidates)
   if (!is.null(detected_sample_col)) {
@@ -362,7 +393,7 @@ for (i in seq_along(sample_levels)) {
     stopf("Output already exists and overwrite=FALSE: %s", out_file)
   }
 
-  write_args <- list(x = sce, file = out_file)
+  write_args <- list(sce = sce, file = out_file)
   if ("X_name" %in% write_args_supported) {
     write_args$X_name <- "counts"
   }
