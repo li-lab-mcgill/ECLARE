@@ -1,7 +1,11 @@
 README.md
 setup.py
+src/ECLARE.egg-info/PKG-INFO
+src/ECLARE.egg-info/SOURCES.txt
+src/ECLARE.egg-info/dependency_links.txt
+src/ECLARE.egg-info/requires.txt
+src/ECLARE.egg-info/top_level.txt
 src/eclare/__init__.py
-src/eclare/custom_annloader.py
 src/eclare/data_utils.py
 src/eclare/eval_utils.py
 src/eclare/losses_and_distances_utils.py
