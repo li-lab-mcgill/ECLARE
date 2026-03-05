@@ -118,7 +118,7 @@ class ConfigLoader:
         except Exception as e:
             print(f"Warning: Failed to save active environment to {self.config_file}: {e}")
 
-    def get_directories(self) -> Dict[str, Path]:
+    def get_directories(self, override_with_env: bool = False) -> Dict[str, Path]:
         """
         Retrieve directory paths for the active environment, applying any environment variable overrides.
         """
@@ -127,7 +127,8 @@ class ConfigLoader:
             raise ValueError(f"No directories found for environment '{self.active_env}'.")
 
         # Override with environment variables if set
-        directories = self.override_with_env(directories)
+        if override_with_env:
+            directories = self.override_with_env(directories)
 
         # Convert all paths to absolute Path objects
         for key, path in directories.items():
