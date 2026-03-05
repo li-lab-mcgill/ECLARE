@@ -1,0 +1,107 @@
+# Combined manuscript-facing environment for ECLARE.
+# Scope:
+# - core ECLARE training/evaluation scripts
+# - manuscript post-hoc / enrichment / plotting scripts
+# - manuscript R preprocessing + GREAT scripts
+# - `scripts/scenicplus_post_hoc.py` and its SCENIC+/pycisTopic workflow
+#
+# Intentionally excluded:
+# - vendored benchmark environments under `scripts/benchmark_*`
+# - ontology-specific utilities such as `scripts/processing_scripts/biccn_dend_to_matrix.py`
+#
+# Create this env from the repository root so the editable install resolves:
+#   conda env create -f environment.yml
+#
+# Python 3.10 is used here as the cross-stack compromise for ECLARE + SCENIC+.
+# If the SCENIC+ pip solve later proves too strict on your machine, the next
+# fallback is Python 3.11.
+#
+# The R stack is pinned to 4.0 because `r-seuratdisk` on conda-forge is only
+# available against older `r-spatstat` builds; newer R pins such as 4.2 make
+# the combined Seurat/Signac/SeuratDisk solve unsatisfiable.
+
+name: eclare_minimal
+channels:
+  - pytorch
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.10
+  - pip
+  - numpy<2
+  - pandas
+  - scipy
+  - scikit-learn
+  - statsmodels
+  - pytorch>=2.4,<2.6
+  - anndata>=0.10,<0.13
+  - scanpy>=1.10,<1.12
+  - mudata
+  - muon
+  - scglue
+  - celltypist
+  - python-igraph
+  - leidenalg
+  - umap-learn
+  - numba
+  - h5py
+  - matplotlib-base
+  - seaborn
+  - networkx
+  - joblib
+  - tqdm
+  - ipython
+  - openpyxl
+  - xlrd
+  - mlflow
+  - optuna
+  - jax
+  - jaxlib
+  - pot
+  - pybedtools
+  - bedtools
+  - gseapy
+  - pydeseq2
+  - phate
+  - graphtools
+  - magic-impute
+  - imbalanced-learn
+  - scikit-image
+  - matplotlib-venn
+  - libpysal
+  - esda
+  - pygam
+  - pyjaspar
+  - ray-default
+  - biopython
+  - pybiomart
+  - geoparse
+  - requests
+  - beautifulsoup4
+  - pyranges
+  - pysam
+  - r-base=4.0
+  - r-seurat
+  - r-seuratdisk
+  - r-signac
+  - r-matrix
+  - bioconductor-singlecellexperiment
+  - bioconductor-zellkonverter
+  - bioconductor-gseabase
+  - bioconductor-genomicranges
+  - bioconductor-iranges
+  - bioconductor-summarizedexperiment
+  - bioconductor-rgreat
+  - bioconductor-org.hs.eg.db
+  - pip:
+      - coral-pytorch
+      - mygene
+      - scib
+      - scib-metrics
+      - SEACells
+      - venn
+      - pychromvar
+      - rds2py
+      - scenicplus==1.0a2
+      - -e . --no-deps
