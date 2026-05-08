@@ -946,7 +946,12 @@ great_results_mdd_dn_df['ngenes'] = great_results_mdd_dn_df['ngenes'].fillna(0)
 great_results_mdd_dn_df['size_ngenes'] = (great_results_mdd_dn_df['ngenes']/great_results_mdd_dn_df['ngenes'].max())**2 * 500
 
 
-plot_enrichment_significance(great_results_mdd_dn_df, title='GREAT results for MDD-DN pathway')
+fig_great, ax_great = plot_enrichment_significance(great_results_mdd_dn_df, title='GREAT results for ASTON_MAJOR_DEPRESSIVE_DISORDER_DN')
+
+def mdd_figS3(fig_great, manuscript_figpath=os.path.join(output_dir, 'mdd_figS3.pdf')):
+    fig_great.savefig(manuscript_figpath, bbox_inches='tight', dpi=300)
+    print(f'Saving figure to {manuscript_figpath}')
+    plt.close()
 
 #%% Compare number of enriched pathways per type of gene set
 
