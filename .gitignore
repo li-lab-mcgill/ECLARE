@@ -1,6 +1,7 @@
 config/config.yaml
 *slurm.sh
 MCB_bash_scripts/
+scripts/misc/
 build/
 mlruns/
 magma_*/

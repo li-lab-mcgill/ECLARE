@@ -994,8 +994,7 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
     keep_group=[''], dev_group_key='dev_stage', dev_stages = ['EaFet', 'LaFet', 'Inf', 'Child', 'Adol', 'Adult']):
 
     datapath = os.path.join(os.environ['DATAPATH'], 'PFC_Zhu')
-    rna_datapath = os.path.join(datapath, 'rna')
-    atac_datapath = os.path.join(datapath, 'atac')
+    rna_datapath = atac_datapath = datapath
 
     EN_cell_type_branches = {
         "RG": "0",
@@ -1173,19 +1172,22 @@ def pfc_zhu_setup(args, cell_group='Cell type', batch_group='Donor ID', hvg_only
         atac.obs['dev_stage'] = atac.obs['Donor ID'].apply(lambda x: x[:-1])
 
     ## Count number of cells per dev stage
-    dev_stage_counts_df = pd.merge(
-        rna.obs[dev_group_key].value_counts().to_frame(), atac.obs[dev_group_key].value_counts().to_frame(),
-        left_index=True, right_index=True, how='outer')
-    dev_stage_counts_df.columns = ['rna_n_cells', 'atac_n_cells']
-    dev_stage_counts_df.index = pd.Categorical(dev_stage_counts_df.index, categories=dev_stages, ordered=True)
-    dev_stage_counts_df = dev_stage_counts_df.sort_index()
+    try:
+        dev_stage_counts_df = pd.merge(
+            rna.obs[dev_group_key].value_counts().to_frame(), atac.obs[dev_group_key].value_counts().to_frame(),
+            left_index=True, right_index=True, how='outer')
+        dev_stage_counts_df.columns = ['rna_n_cells', 'atac_n_cells']
+        dev_stage_counts_df.index = pd.Categorical(dev_stage_counts_df.index, categories=dev_stages, ordered=True)
+        dev_stage_counts_df = dev_stage_counts_df.sort_index()
+
+        ## ensure that developmental stages are in the correct order
+        atac.obs[dev_group_key] = pd.Categorical(atac.obs[dev_group_key], categories=dev_stages, ordered=True)
+        rna.obs[dev_group_key] = pd.Categorical(rna.obs[dev_group_key], categories=dev_stages, ordered=True)
+    except:
+        dev_stage_counts_df = None
 
     n_peaks, n_genes = atac.n_vars, rna.n_vars
     print(f'Number of peaks and genes remaining: {n_peaks} peaks & {n_genes} genes')
-
-    ## ensure that developmental stages are in the correct order
-    atac.obs[dev_group_key] = pd.Categorical(atac.obs[dev_group_key], categories=dev_stages, ordered=True)
-    rna.obs[dev_group_key] = pd.Categorical(rna.obs[dev_group_key], categories=dev_stages, ordered=True)
 
     ## Set split type and key
     split_key = 'cell_type'
@@ -1209,8 +1211,7 @@ def cortex_velmeshev_setup(args, cell_group='Lineage', batch_group='subject', hv
     keep_group=[''], dev_group_key='Age_Range', dev_stages=['2nd trimester', '3rd trimester', '0-1 years', '1-2 years', '2-4 years', '4-10 years', '10-20 years', 'Adult']):
     
     datapath = os.path.join(os.environ['DATAPATH'], 'Cortex_Velmeshev')
-    atac_datapath = os.path.join(datapath, 'atac')
-    rna_datapath = os.path.join(datapath, 'rna')
+    atac_datapath = rna_datapath = datapath
 
     adult_celltypist_model_path = os.path.join(os.environ['DATAPATH'], 'Adult_Human_PrefrontalCortex.pkl')
     dev_celltypist_model_path = os.path.join(os.environ['DATAPATH'], 'Developing_Human_Brain.pkl')
@@ -1489,8 +1490,7 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
     keep_group=[''], dev_group_key='Group', dev_stages=['FirstTrim', 'SecTrim', 'ThirdTrim', 'Inf', 'Adol']):
 
     datapath = os.path.join(os.environ['DATAPATH'], 'PFC_V1_Wang')
-    atac_datapath = os.path.join(datapath, 'atac')
-    rna_datapath = os.path.join(datapath, 'rna')
+    atac_datapath = rna_datapath = datapath
 
     EN_cell_type_branches = { # missing in data: "EN-L4-IT-V1"
         "RG-vRG": "0",
@@ -1715,7 +1715,7 @@ def pfc_v1_wang_setup(args, cell_group='type', batch_group='subject', hvg_only=T
 
 def dlpfc_anderson_setup(args, cell_group='predicted.id', batch_group='id', hvg_only=True, protein_coding_only=True, do_gas=False, return_type='loaders', return_raw_data=False, dataset='DLPFC_Anderson'):
         
-    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Anderson', 'snMultiome')
+    atac_datapath = rna_datapath = datapath = os.path.join(os.environ['DATAPATH'], 'DLPFC_Anderson')
 
     if args.genes_by_peaks_str is not None:
 
