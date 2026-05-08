@@ -4,6 +4,15 @@ This repository is dedicated to <ins>**E**</ins>nsemble knowledge distillation f
 
 The manuscript is currently available on [bioRxiv](https://doi.org/10.1101/2025.01.24.634799).
 
+Methodological overview of ECLARE
+
+<div style="display: flex; justify-content: center; margin: 20px;">
+  <div style="background: white; padding: 20px; border-radius: 8px;">
+    <img src="fig1_landscape_no_alpha.png" alt="ECLARE Framework"/>
+  </div>
+</div>
+</details>
+
 <details>
 <summary>Installation</summary>
 
@@ -107,15 +116,6 @@ The framework is particularly valuable because it:
 - Facilitates downstream analyses like gene regulatory network inference
 
 ---
-
-Figure 1 from manuscript: Overview of ECLARE
-
-<div style="display: flex; justify-content: center; margin: 20px;">
-  <div style="background: white; padding: 20px; border-radius: 8px;">
-    <img src="fig1_landscape_no_alpha.png" alt="ECLARE Framework"/>
-  </div>
-</div>
-</details>
 
 <details>
 <summary>Manuscript figure/code map</summary>
