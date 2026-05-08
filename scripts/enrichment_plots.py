@@ -965,7 +965,7 @@ with open(os.path.join(output_dir, 'broad_gene_series_dict.pkl'), 'rb') as f:
     pydeseq2_match_length_genes_series = gene_series_dict['pydeseq2_match_length_genes_series']
 
 ## enrichment of pooled gene sets, without filtering for p-value
-enrs_mdd_dn_genes_enrichr_all = do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, filter_var=None, outdir=output_dir, file_ext='svg', remove_from_dotplot=['ASTON_MAJOR_DEPRESSIVE_DISORDER_DN'])
+enrs_mdd_dn_genes_enrichr_all = do_enrichr(enrs_mdd_dn_genes_series, brain_gmt_cortical, filter_var=None, outdir=output_dir, file_ext='svg', remove_from_dotplot=[], broken_xaxis_limits=((-5, 50), (150, 220)), top_term=10+1)
 all_sccompreg_genes_enrichr_all = do_enrichr(all_sccompreg_genes_series, brain_gmt_cortical, filter_var=None, outdir=None, file_ext='png')
 pydeseq2_match_length_genes_enrichr_all = do_enrichr(pydeseq2_match_length_genes_series, brain_gmt_cortical, filter_var=None, outdir=None, file_ext='png')
 

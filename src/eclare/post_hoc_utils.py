@@ -2545,7 +2545,7 @@ def plot_pathway_ranks(pathway_ranks, stem=True, save_path=None):
         plt.savefig(save_path, bbox_inches='tight', dpi=150)
     plt.close()
 
-def do_enrichr(lr_filtered_type, pathways, filter_var='Adjusted P-value', remove_from_dotplot=[], outdir=None, file_ext='png', figsize=(3,6), top_term=10):
+def do_enrichr(lr_filtered_type, pathways, filter_var='Adjusted P-value', remove_from_dotplot=[], outdir=None, file_ext='png', figsize=(3,6), top_term=10, broken_xaxis_limits=None):
 
     enr = gp.enrichr(lr_filtered_type.index.to_list(), gene_sets=pathways, outdir=None)
     enr.res2d['-log10(fdr)'] = -np.log10(enr.res2d['Adjusted P-value'])
@@ -2554,34 +2554,167 @@ def do_enrichr(lr_filtered_type, pathways, filter_var='Adjusted P-value', remove
 
     if len(enr.res2d) > 0:
         # dotplot
-        ofname = None if outdir is None else os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs["type"]}.{file_ext}')
+        ofname = None if outdir is None else os.path.join(outdir, f'enrichr_dotplot_{lr_filtered_type.attrs.get("type", "unknown")}.{file_ext}')
 
         max_pval = enr.res2d['Adjusted P-value'].max()
 
         enr_res2d_plot = enr.res2d.copy()
         enr_res2d_plot = enr_res2d_plot[~enr_res2d_plot['Term'].isin(remove_from_dotplot)]
 
-        fig, ax = plt.subplots(figsize=figsize)
+        if broken_xaxis_limits is not None:
+            # Native broken axis
+            fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True, figsize=(figsize[0]*1.5, figsize[1]), gridspec_kw={'width_ratios': [3, 1]})
+            fig.subplots_adjust(wspace=0.005)
 
-        # Add vertical dotted gray line at -log10(0.05)
-        sig_threshold = -np.log10(0.05)
-        ax.axvline(x=sig_threshold, color='gray', linestyle=':', linewidth=1)
+            # Add vertical dotted gray line at -log10(0.05) on the left axis
+            sig_threshold = -np.log10(0.05)
+            ax1.axvline(x=sig_threshold, color='gray', linestyle=':', linewidth=1)
 
-        fig = gp.dotplot(enr_res2d_plot,
-                column='Combined Score',
-                x='-log10(fdr)',
-                title=lr_filtered_type.attrs["type"],#f'{lr_filtered_type.attrs["sex"]} - {lr_filtered_type.attrs["celltype"]} ({lr_filtered_type.attrs["type"]})',
-                cmap=plt.cm.winter,
-                size=12, # adjust dot size
-                cutoff=max_pval,
-                top_term=top_term,
-                show_ring=False,
-                ax=ax,
-                ofname=ofname)
+            title_str = lr_filtered_type.attrs.get("type", "")
+
+            # First dotplot on ax1; remember which axes existed before so we can
+            # later identify and prune the duplicate decoration axes (size legend +
+            # colorbar) added by gseapy on the second call.
+            axes_before_left = set(map(id, fig.axes))
+
+            _ = gp.dotplot(enr_res2d_plot,
+                    column='Combined Score',
+                    x='-log10(fdr)',
+                    title=title_str,
+                    cmap=plt.cm.winter,
+                    size=12,
+                    cutoff=max_pval,
+                    top_term=top_term,
+                    show_ring=False,
+                    ax=ax1,
+                    ofname=None)
+
+            axes_after_left = set(map(id, fig.axes))
+
+            _ = gp.dotplot(enr_res2d_plot,
+                    column='Combined Score',
+                    x='-log10(fdr)',
+                    title='',
+                    cmap=plt.cm.winter,
+                    size=12,
+                    cutoff=max_pval,
+                    top_term=top_term,
+                    show_ring=False,
+                    ax=ax2,
+                    ofname=None)
+
+            # Identify decoration axes added by the FIRST dotplot (size legend + colorbar)
+            # so we can later reposition them to sit cleanly to the right of ax2.
+            left_decoration_axes = [a for a in fig.axes if id(a) in axes_after_left and id(a) not in axes_before_left]
+
+            # Remove duplicate decoration axes added by the second dotplot call.
+            duplicate_axes = [a for a in fig.axes if id(a) not in axes_after_left and a is not ax2]
+            for a in duplicate_axes:
+                a.remove()
+
+            ax1.set_xlim(broken_xaxis_limits[0])
+            ax2.set_xlim(broken_xaxis_limits[1])
+
+            # Reposition the surviving size-legend and colorbar axes so they don't
+            # collide with ax2. We shift each one so its left edge sits just to the
+            # right of ax2 (preserving its original width and y placement).
+            ax2_pos = ax2.get_position()
+            shift_anchor_x = ax2_pos.x1 + 0.04
+            for deco_ax in left_decoration_axes:
+                deco_pos = deco_ax.get_position()
+                deco_ax.set_position([shift_anchor_x, deco_pos.y0,
+                                      deco_pos.width, deco_pos.height])
+                shift_anchor_x += deco_pos.width + 0.04
+
+            # gseapy attaches a size legend ("% Genes in set") to ax1 via ax1.legend(),
+            # which sits to the right of ax1 and would otherwise overlap ax2. Reanchor
+            # it past ax2 in figure coordinates.
+            ax1_legend = ax1.get_legend()
+            if ax1_legend is not None:
+                ax1_legend.set_bbox_to_anchor((shift_anchor_x, 0.95),
+                                              transform=fig.transFigure)
+
+            # Hide the spines + tick marks at the break.
+            ax1.spines['right'].set_visible(False)
+            ax2.spines['left'].set_visible(False)
+            ax2.tick_params(axis='y', which='both', left=False, labelleft=False)
+            ax2.set_ylabel('')
+
+            # The second dotplot also writes its own legend onto ax2 — clear it so
+            # we keep only the size legend and colorbar from the first (left) call.
+            if ax2.get_legend() is not None:
+                ax2.get_legend().remove()
+
+            # Consolidate x-axis labels into a single shared label below both panels.
+            shared_xlabel = ax1.get_xlabel() or ax2.get_xlabel() or '-log10(fdr)'
+            ax1.set_xlabel('')
+            ax2.set_xlabel('')
+            fig.supxlabel(shared_xlabel, y=0.02)
+
+            # Extend the top of the y-range to give the topmost marker breathing
+            # room (so the largest dot is not clipped by the panel border / title).
+            yticks_data = ax1.get_yticks()
+            if len(yticks_data) > 0:
+                top_y_data = max(yticks_data)
+                ymin_cur, ymax_cur = ax1.get_ylim()
+                # Reserve ~0.8 of one row-height of headroom above the top row.
+                new_ymax = top_y_data + 0.8
+                new_ymin = ymin_cur
+                ax1.set_ylim(new_ymin, new_ymax)
+                ax2.set_ylim(new_ymin, new_ymax)
+                # Top break-mark anchored on the data y of the topmost row.
+                top_axes_y = (top_y_data - new_ymin) / (new_ymax - new_ymin)
+            else:
+                top_axes_y = 1.0
+            # Bottom break-mark sits on the x-axis spine itself (axes-fraction 0).
+            bottom_axes_y = 0.0
+
+            # Diagonal "axis-break" tick marks. Use a small x extent (in axes
+            # fraction of each panel) and a small y extent (in axes fraction of
+            # the *figure*'s vertical span on each panel).
+            dx = .010   # half-width of each slash, in axes fraction (panel-local)
+            dy = .015   # half-height of each slash, in axes fraction (panel-local)
+            # The right panel is ~1/3 the width of the left, so its horizontal
+            # axes-fraction needs to be scaled up to render at the same visual size.
+            ax1_pos = ax1.get_position()
+            ax2_pos = ax2.get_position()
+            x_scale_ax2 = ax1_pos.width / ax2_pos.width if ax2_pos.width > 0 else 3.0
+
+            kwargs = dict(transform=ax1.transAxes, color='k', clip_on=False)
+            ax1.plot((1 - dx, 1 + dx), (top_axes_y - dy, top_axes_y + dy), **kwargs)
+            ax1.plot((1 - dx, 1 + dx), (bottom_axes_y - dy, bottom_axes_y + dy), **kwargs)
+
+            kwargs.update(transform=ax2.transAxes)
+            ax2.plot((-dx * x_scale_ax2, +dx * x_scale_ax2),
+                     (top_axes_y - dy, top_axes_y + dy), **kwargs)
+            ax2.plot((-dx * x_scale_ax2, +dx * x_scale_ax2),
+                     (bottom_axes_y - dy, bottom_axes_y + dy), **kwargs)
+
+            if ofname is not None:
+                fig.savefig(ofname, bbox_inches='tight')
+
+        else:
+            fig, ax = plt.subplots(figsize=figsize)
+
+            # Add vertical dotted gray line at -log10(0.05)
+            sig_threshold = -np.log10(0.05)
+            ax.axvline(x=sig_threshold, color='gray', linestyle=':', linewidth=1)
+
+            fig = gp.dotplot(enr_res2d_plot,
+                    column='Combined Score',
+                    x='-log10(fdr)',
+                    title=lr_filtered_type.attrs.get("type", ""),
+                    cmap=plt.cm.winter,
+                    size=12, # adjust dot size
+                    cutoff=max_pval,
+                    top_term=top_term,
+                    show_ring=False,
+                    ax=ax,
+                    ofname=ofname)
 
         # Remove plt.show() - it's not thread-safe
         if ofname is not None:
-            plt.close(fig)  # Close the figure to free memory
+            plt.close('all')  # Close the figure to free memory
         else:
             plt.show()
 
