@@ -6,9 +6,9 @@ The manuscript is currently available on [bioRxiv](https://doi.org/10.1101/2025.
 
 Methodological overview of ECLARE
 
-<div style="display: flex; justify-content: center; margin: 40px 0;">
-  <div style="background: white; padding: 40px; border-radius: 16px; box-shadow: 0 4px 16px rgba(0,0,0,0.08);">
-    <img src="fig1_landscape_no_alpha.png" alt="ECLARE Framework" style="display:block; margin: 40px;"/>
+<div style="display: flex; justify-content: center; margin: 36px 24px;">
+  <div style="background: white; padding: 20px; border-radius: 8px;">
+    <img src="fig1_landscape_no_alpha.png" alt="ECLARE Framework"/>
   </div>
 </div>
 </details>
