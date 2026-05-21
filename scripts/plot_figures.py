@@ -518,7 +518,7 @@ methods_id_dict = {
     'multiVI': '18175921',
     'glue': '18234131_19205223',
     'scDART': '22083939', #'19150754',
-    'scjoint': '19115016'
+    'scJoint': '19115016'
 }
 
 ## Get metrics
@@ -535,7 +535,7 @@ source_df_multiVI, target_df_multiVI, source_only_df_multiVI = get_metrics('mult
 source_df_glue, target_df_glue, source_only_df_glue = get_metrics('glue', methods_id_dict['glue'])
 
 source_df_scdart, target_df_scdart, source_only_df_scdart = get_metrics('scDART', methods_id_dict['scDART'])
-source_df_scjoint, target_df_scjoint, source_only_df_scjoint = get_metrics('scjoint', methods_id_dict['scjoint'])
+source_df_scjoint, target_df_scjoint, source_only_df_scjoint = get_metrics('scJoint', methods_id_dict['scJoint'])
 
 ## check length of dataframes
 if len(target_df_mojitoo) != 12*3:
@@ -547,7 +547,7 @@ if len(target_df_glue) != 12*3:
 if len(target_df_scdart) != 12*3:
     print(f'scDART: {len(target_df_scdart)}')
 if len(target_df_scjoint) != 12*3:
-    print(f'scjoint: {len(target_df_scjoint)}')
+    print(f'scJoint: {len(target_df_scjoint)}')
 
 if len(target_df_clip) != 12*3:
     print(f'clip: {len(target_df_clip)}')

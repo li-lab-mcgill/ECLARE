@@ -2,12 +2,16 @@ config/config.yaml
 *slurm.sh
 MCB_bash_scripts/
 build/
+mlruns/
 
 benchmark_*/**/*_env
 **/.git
 slurm-*.out
+__pycache__/
 
 *.zip
+scripts/**/*.ipynb
+scripts/*.ipynb
 
 *.npz
 *.npy
@@ -24,3 +28,5 @@ slurm-*.out
 *.svg
 *.eps
 *.sqlite
+
+magma_v1.10/
