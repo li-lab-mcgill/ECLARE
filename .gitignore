@@ -10,6 +10,7 @@ benchmark_*/**/*_env
 **/.git
 slurm-*.out
 ECLARE_v*.pdf
+REPO_POLISH_STATUS.md
 
 *.zip
 *.tmp
