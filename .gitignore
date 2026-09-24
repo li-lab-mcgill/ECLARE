@@ -31,3 +31,5 @@ REPO_POLISH_STATUS.md
 *.svg
 *.eps
 *.sqlite
+*.nbi
+*.nbc
